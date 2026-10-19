@@ -24,10 +24,10 @@ const { app, BrowserWindow, nativeTheme, session } = require('electron');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
-const { encodeFrame, extractRect, clampRect, frameOutcome, FRAME_SENT, FRAME_DEDUP, FRAME_EMPTY, FRAME_IDLE } = require('./isol_protocol');
+const { encodeFrame, extractRect, clampRect, isBlankBitmap, shouldHoldBlank, surfaceBlankAfterFrame, frameTimestampNs, frameOutcome, FRAME_SENT, FRAME_DEDUP, FRAME_EMPTY, FRAME_IDLE } = require('./isol_protocol');
 const { hardenCtrlSocket } = require('./ctrl_socket');
 const { applyChromeFlags } = require('./chrome_flags');
-const { shouldStopCaptureFallback, pruneEmptyCaptureTimes } = require('./capture_fallback');
+const { isEmptyCaptureExpected, shouldStopCaptureFallback, pruneEmptyCaptureTimes } = require('./capture_fallback');
 const { applyTorProxy, isTorEnabled } = require('./tor');
 const { isAllowedPageNavigation, resolveAddressBar } = require('./navigation_url');
 
@@ -60,6 +60,15 @@ let lastSentRect = null;
 // The streamer seeds its surface from full-refresh frames only, so it needs
 // at least one before partial damage makes sense.
 let hasSentFullFrame = false;
+// Whether the streamer has EVER been given a full frame. It owns one surface
+// for the whole session — a navigation does not replace it — so one seed is
+// enough. Deliberately NOT cleared by resetFrameState(): "this document has
+// been seeded" is exactly the state in which a blank must be withheld.
+let streamerSeeded = false;
+// How long after a navigation or load a blank full frame is withheld. Bounded
+// on purpose: a page that really is one flat colour must still appear.
+const BLANK_HOLD_MS = 3000;
+let blankHoldUntil = 0;
 let bgColor = { r: 255, g: 255, b: 255, a: 255 };
 // Whether anyone is watching. With no viewer attached, composing the surface
 // and shipping it over the UDS is pure waste — measured at ~0.4 cores for an
@@ -179,13 +188,13 @@ function ensureFrameBuffer() {
   return frameBuffer;
 }
 
+// The base of the compositing surface is the PAGE canvas, which is white — not
+// the theme colour. Only damaged rects are blitted over it, so a sparse page
+// (black UA text on an otherwise unpainted canvas, e.g. nginx's 403) would
+// otherwise leave the theme colour showing everywhere the page never painted.
+// bgColor stays for an EMPTY document only — see normaliseEmptyDocument.
 function fillBackground(buf) {
-  for (let i = 0; i < buf.length; i += 4) {
-    buf[i] = bgColor.b;
-    buf[i + 1] = bgColor.g;
-    buf[i + 2] = bgColor.r;
-    buf[i + 3] = bgColor.a;
-  }
+  buf.fill(255); // opaque white: r = g = b = a = 255
 }
 
 function blitBitmap(full, bitmap, bmpW, bmpH, ox, oy) {
@@ -248,6 +257,52 @@ function connectToUds(sockPath) {
 // still built locally (that is what ffmpeg needs), but the wire carries one
 // dirty rect plus just that rect's pixels — a blinking cursor or a caret
 // costs a few KB instead of a full surface (14.7 MB at 1440p).
+// nothingToPaint reports that the active tab's surface is blank and its document
+// has finished loading, so an empty capture means "there is nothing to show"
+// rather than "the compositor stopped". See writeFrame and startStallWatchdog.
+function nothingToPaint() {
+  const tab = activeTab();
+  if (!tab || !tab.win || tab.win.isDestroyed()) return Boolean(tab && tab.surfaceBlank);
+  return isEmptyCaptureExpected({
+    surfaceBlank: !!tab.surfaceBlank,
+    // While a load is in flight an empty image is still the old signal — the tab
+    // is about to paint — and the load grace window covers that.
+    loading: tab.win.webContents.isLoading(),
+  });
+}
+
+// isEmptyDocument reports that the active tab has no document of its own — a
+// fresh tab (about:blank). Only such a tab's blank is normalised below.
+function isEmptyDocument(tab) {
+  if (!tab || !tab.win || tab.win.isDestroyed()) return false;
+  const u = tab.win.webContents.getURL();
+  return u === '' || u === 'about:blank';
+}
+
+// A blank surface of an EMPTY document must be one stable colour.
+//
+// A new tab is the one surface whose colour is ours to choose: Chromium paints
+// an empty document on the browser canvas (white), while the dark theme must
+// open a dark tab — and if the compositor ever hands back a different blank, the
+// two variants alternate and the new tab FLICKERS between dark and white. That
+// alternation is the "blink" on every new tab.
+//
+// Normalising to the theme background gives it one stable colour. Real pages are
+// untouched: this only runs for about:blank, never for a document that paints
+// its own colour.
+function normaliseEmptyDocument(payload) {
+  if (payload[0] === bgColor.r && payload[1] === bgColor.g
+    && payload[2] === bgColor.b && payload[3] === bgColor.a) {
+    return; // already the theme background — steady state, no work to do
+  }
+  for (let i = 0; i < payload.length; i += 4) {
+    payload[i] = bgColor.r;
+    payload[i + 1] = bgColor.g;
+    payload[i + 2] = bgColor.b;
+    payload[i + 3] = bgColor.a;
+  }
+}
+
 function writeFrame(dirtyRects, nativeImage) {
   if (!captureActive) return FRAME_IDLE;
   if (!udsSocket || udsSocket.destroyed) return FRAME_IDLE;
@@ -260,6 +315,7 @@ function writeFrame(dirtyRects, nativeImage) {
   const bmpW = size.width;
   const bmpH = size.height;
   const bmpBytes = bmpW * bmpH * 4;
+  const activeWin = activeTab();
   let composited = false;
   // Must cover everything written into `full`: a full-size bitmap (or a
   // near-full one, whose edges get extrapolated) updates the whole surface
@@ -291,6 +347,25 @@ function writeFrame(dirtyRects, nativeImage) {
   }
 
   if (!composited || !rect || rect.w <= 0 || rect.h <= 0) {
+    // An empty paint image on a page that has nothing to paint is not a capture
+    // stall. Chromium's offscreen compositor hands back a zero-length
+    // copy-output for a blank, unchanging document — an about:blank tab after a
+    // keepalive nudge is the clearest case — and counting those made a fresh tab
+    // raise "capture stalled — recovering", start the screenshot fallback and
+    // (because capturePage() comes back empty for the same reason) recreate its
+    // renderer in a loop.
+    //
+    // The gate is deliberately narrow: only while the surface is blank AND the
+    // document has finished loading, a state where an empty image can only mean
+    // "nothing to show" and there is no picture to lose. Once the tab has
+    // content on screen an empty image is the real stall signal again.
+    // (capture_fallback.js warns that lastGoodPaintAt must not be used to leave
+    // the fallback because keepalive dedups refresh it; this is not that — it is
+    // a statement about what is on the surface.)
+    if (nothingToPaint()) {
+      dedupTotal++;
+      return FRAME_DEDUP;
+    }
     // Empty bitmap = the compositor had nothing to hand over. Rate-limited:
     // a wedged renderer produced ~14 of these before, one per capture, each
     // one a line of log. The count is kept for the stall watchdog.
@@ -309,6 +384,55 @@ function writeFrame(dirtyRects, nativeImage) {
   const isFull = rect.x === 0 && rect.y === 0 && rect.w === w && rect.h === h;
   const payload = isFull ? full : extractRect(full, rect, w);
 
+  // A full-surface frame that is one colour (modulo a few stray pixels) is a
+  // blank: the unpainted new document at a navigation commit, or a capturePage()
+  // that came back empty. Forwarding it is the white page the viewer shows before
+  // the new document paints, so hold the previous surface instead.
+  //
+  // Two independent signals, because each covers a case the other misses:
+  //   * isLoading() is polled off the webContents, and catches the commit-time
+  //     blank paint that reaches this handler *before* did-navigate delivers its
+  //     callback (measured: a uniform white full frame 86 ms after the commit,
+  //     while the hold window still held the previous load's expired deadline).
+  //   * blankHoldUntil carries the window past did-finish-load, where the
+  //     scheduled load captures can hand back an empty capturePage().
+  //
+  // Gated on surfaceEstablished (see shouldHoldBlank): a blank only needs hiding
+  // when it would replace a picture. The surface belongs to a tab, so the first
+  // frame after a tab becomes active always goes out — holding it would leave the
+  // previous tab on screen for the whole BLANK_HOLD_MS window, which is exactly
+  // the "new tab opens too slow" the hold caused.
+  //
+  // Never withheld: the frame that seeds the streamer's surface, so a blank first
+  // frame still goes out and the viewer is never left without one. Returned as a
+  // dedup because the compositor handed over a real image — it is simply empty —
+  // so this must not read as a capture stall.
+  const loading = !!(activeWin && activeWin.win && !activeWin.win.isDestroyed()
+    && activeWin.win.webContents.isLoading());
+  const blank = isFull && isBlankBitmap(payload);
+  // Both decisions read the surface's state BEFORE this frame: whether a blank is
+  // worth hiding depends on what is being replaced, not on what this frame is.
+  const established = !!(activeWin && activeWin.surfaceEstablished);
+  if (shouldHoldBlank({
+    isFull,
+    blank,
+    streamerSeeded,
+    surfaceEstablished: established,
+    loading,
+    withinHoldWindow: Date.now() < blankHoldUntil,
+  })) {
+    dedupTotal++;
+    return FRAME_DEDUP;
+  }
+  // This frame goes out, so record how the surface changed.
+  if (activeWin) {
+    activeWin.surfaceBlank = surfaceBlankAfterFrame({ isFull, blank });
+    activeWin.surfaceEstablished = true;
+  }
+  // An empty document's blank must be one stable colour, or the new tab flickers
+  // between the theme background and about:blank's white.
+  if (isFull && blank && isEmptyDocument(activeWin)) normaliseEmptyDocument(payload);
+
   // Dedup only against the same rect — a different rect means different
   // pixels and must always be sent. A dedup is not a capture stall: the
   // compositor handed over a usable image, it simply had nothing new in it,
@@ -326,8 +450,8 @@ function writeFrame(dirtyRects, nativeImage) {
     return outcome;
   }
 
-  const tsNs = process.hrtime.bigint();
-  const buf = encodeFrame(w, h, w * 4, [rect], payload, Number(tsNs));
+  const tsNs = frameTimestampNs();
+  const buf = encodeFrame(w, h, w * 4, [rect], payload, tsNs);
   udsSocket.write(buf);
   sentTotal++;
   lastSentAt = Date.now();
@@ -336,7 +460,10 @@ function writeFrame(dirtyRects, nativeImage) {
   }
   payload.copy(lastSentPayload);
   lastSentRect = rect;
-  if (isFull) hasSentFullFrame = true;
+  if (isFull) {
+    hasSentFullFrame = true;
+    streamerSeeded = true;
+  }
   frameSeq++;
   return FRAME_SENT;
 }
@@ -513,6 +640,14 @@ function startStallWatchdog() {
       stalledSince = 0;
       return;
     }
+    // A blank surface has nothing to compose, so silence here is not a stall.
+    // Without this the watchdog recreates the renderer of a fresh tab (or any
+    // all-white page) in a loop and the viewer keeps "recovering" up.
+    if (nothingToPaint()) {
+      stalledSince = 0;
+      clearStallReport();
+      return;
+    }
     const silentMs = Date.now() - lastComposedAt;
     const allowMs = Date.now() < stallGraceUntil ? STALL_LOAD_GRACE_MS : STALL_MS;
     if (silentMs < allowMs) {
@@ -569,19 +704,28 @@ function resetFrameState() {
   // A new document starts the stall clock over and earns a longer grace period.
   lastComposedAt = Date.now();
   stallGraceUntil = Date.now() + STALL_LOAD_GRACE_MS;
+  // A new document also opens the window in which a blank full frame is
+  // withheld instead of forwarded — see writeFrame.
+  blankHoldUntil = Date.now() + BLANK_HOLD_MS;
 }
 
+// Applies the theme and returns the WINDOW background. That backdrop is what
+// Electron composites a page without its own background over, so it must be
+// the browser canvas (white); handing Chromium the dark theme colour renders
+// black default text on #1a1a2e. The theme colour (bgColor) is applied to an
+// EMPTY document deliberately, by normaliseEmptyDocument.
 function themeBackgroundColor() {
   switch (BROWSER_THEME) {
     case 'dark':
       bgColor = { r: 26, g: 26, b: 46, a: 255 };
       nativeTheme.themeSource = 'dark';
-      return '#1a1a2e';
+      break;
     default:
       bgColor = { r: 255, g: 255, b: 255, a: 255 };
       nativeTheme.themeSource = 'light';
-      return '#ffffff';
+      break;
   }
+  return '#ffffff';
 }
 
 function loadResolved(win, input) {
@@ -663,6 +807,11 @@ function switchTab(id) {
   const prev = activeTab();
   if (prev && prev.id !== id) stopForwarding(prev);
   activeTabId = id;
+  // The surface still holds the tab we are leaving, so the first frame from this
+  // one must not be held back as a blank replacing a picture — it is the
+  // replacement.
+  target.surfaceEstablished = false;
+  target.surfaceBlank = true;
   resetFrameState();
   clearLoadCaptures();
   // A fresh tab starts with a clean renderer-health slate: the previous tab's
@@ -681,7 +830,23 @@ function switchTab(id) {
 
 function createTab(url, activate = true) {
   const id = nextTabId++;
-  const tab = { id, win: null, url, title: '', invalidateTimer: null, partialTimer: null };
+  const tab = {
+    id,
+    win: null,
+    url,
+    title: '',
+    invalidateTimer: null,
+    partialTimer: null,
+    // What the viewer's single surface currently holds. Used by the stall logic:
+    // an empty paint image on a loaded blank surface is "nothing to paint".
+    // Starts true: a new tab has no content yet.
+    surfaceBlank: true,
+    // Whether the surface holds something from THIS tab. Reset when the tab
+    // becomes active (the surface still shows the tab we came from), set by the
+    // first frame that goes out. This is what decides whether a blank would
+    // replace a picture — see shouldHoldBlank.
+    surfaceEstablished: false,
+  };
   tabs.push(tab);
   attachTabWindow(tab, url);
   if (activate || tabs.length === 1) {
@@ -767,21 +932,30 @@ function attachTabWindow(tab, url) {
     }
   });
 
-  const onNavigated = () => {
+  // `painted` distinguishes a moment when the document has actually rendered
+  // (a finished load, or an in-page navigation — both leave pixels on screen)
+  // from a bare navigation *commit*, where the new document has usually not
+  // painted yet. capturePage() at a commit returns a blank, background-coloured
+  // image, and scheduleLoadCaptures() pushes that as a FULL-viewport frame —
+  // one white flash per link click.
+  const onNavigated = (painted = false) => {
     tab.url = win.webContents.getURL();
     tab.title = win.webContents.getTitle();
     resetFrameState();
     win.webContents.focus();
     win.webContents.invalidate();
-    if (tab.id === activeTabId) scheduleLoadCaptures();
+    if (painted && tab.id === activeTabId) scheduleLoadCaptures();
     broadcastTabs();
   };
   win.webContents.on('did-finish-load', () => {
     console.log(`[electron] tab #${id} loaded: ${win.webContents.getURL()}`);
-    onNavigated();
+    onNavigated(true);
   });
-  win.webContents.on('did-navigate-in-page', onNavigated);
-  win.webContents.on('did-navigate', onNavigated);
+  // Wrapped rather than passed bare: a listener's first argument is the Event
+  // object, which is truthy, so binding onNavigated directly would read as
+  // `painted = true` and re-arm the pre-paint burst this guards against.
+  win.webContents.on('did-navigate-in-page', () => onNavigated(true));
+  win.webContents.on('did-navigate', () => onNavigated());
   win.webContents.on('page-title-updated', (e, title) => {
     tab.title = title || '';
     broadcastTabs();

@@ -13,6 +13,24 @@
 
 const FRAME_MAGIC = 0x4c4f5349; // 'ISOL'
 
+// frameTimestampNs is the wall-clock UTC nanoseconds for the header's ts_ns
+// field. The streamer decodes that field as time.Unix(0, ts)
+// (frame_reader.go), so it must be CLOCK_REALTIME — which is also what a CEF
+// producer sends.
+//
+// The monotonic clock is the trap: process.hrtime.bigint() yields a nanosecond
+// value that looks right on the wire, but it counts from boot, so decoding it as
+// Unix nanoseconds stamps every frame in 1970 and any buffer delay derived from
+// it is nonsense. Anchoring Date.now() to a monotonic reference gives real time
+// while keeping frame-to-frame deltas sub-millisecond and immune to an NTP step
+// mid-session.
+const WALL_REF_MS = Date.now();
+const MONO_REF_NS = process.hrtime.bigint();
+
+function frameTimestampNs() {
+  return BigInt(WALL_REF_MS) * 1_000_000n + (process.hrtime.bigint() - MONO_REF_NS);
+}
+
 function encodeFrame(width, height, stride, dirtyRects, pixels, timestampNs) {
   const numDirty = dirtyRects.length;
   const headerSize = 32;
@@ -79,6 +97,71 @@ function sameRect(a, b) {
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
+// isBlankBitmap reports whether all but a sliver of a BGRA bitmap is one
+// colour — which is how a *blank* frame actually arrives. Measured on Electron
+// 44 over a real page load: the unpainted document at a navigation commit comes
+// back as a full-surface white frame at ~100% one colour but with a handful of
+// stray pixels (3-22 distinct values, not one flat value), so an exact-uniformity
+// test lets it through. Real content sits far away — the least-uniform page
+// measured was 84.8% one colour — so `maxDifferingRatio` (2%) is an order of
+// magnitude above the blank case and well below any page with content on it.
+//
+// Counting beats building a histogram: a real frame exceeds the allowance within
+// its first few hundred pixels and exits at once, so only a blank pays the whole
+// scan (3.7 MB at 720p, ~1 ms).
+function isBlankBitmap(bitmap, maxDifferingRatio = 0.02) {
+  if (bitmap.length < 8) return true;
+  const allowed = Math.floor((bitmap.length / 4) * maxDifferingRatio);
+  const r = bitmap[0];
+  const g = bitmap[1];
+  const b = bitmap[2];
+  const a = bitmap[3];
+  let differing = 0;
+  for (let i = 4; i < bitmap.length; i += 4) {
+    if (bitmap[i] !== r || bitmap[i + 1] !== g || bitmap[i + 2] !== b || bitmap[i + 3] !== a) {
+      differing++;
+      if (differing > allowed) return false;
+    }
+  }
+  return true;
+}
+
+// shouldHoldBlank decides whether a full-surface blank frame must be kept off
+// the wire so the viewer keeps the picture it already has. This is the
+// anti-flash rule: a link click commits a blank document before the new page
+// paints, and forwarding that blank is the white flash the viewer shows.
+//
+// The gate is surfaceEstablished — the CURRENT TAB has already put a frame on
+// the viewer's single shared surface. The surface belongs to a tab, and only
+// once it holds something from this tab is a blank replacing it. The first frame
+// after a tab becomes active must always go out: that frame IS the tab (its
+// content, or its blank for an empty document), and holding it left the previous
+// tab on screen — "new tab opens too slow".
+//
+// Deliberately not "has this tab painted real content": content that arrived as
+// partial damage has put a picture on screen just as much as a full frame, and
+// treating such a page as unpainted forwarded its next commit blank.
+//
+// The seed frame is exempt (streamerSeeded): the streamer owns one surface and
+// must always get a full frame before damage-only updates mean anything.
+function shouldHoldBlank({ isFull, blank, streamerSeeded, surfaceEstablished, loading, withinHoldWindow }) {
+  return Boolean(
+    isFull && blank && streamerSeeded && surfaceEstablished && (loading || withinHoldWindow),
+  );
+}
+
+// surfaceBlankAfterFrame is what the viewer's single surface holds once a frame
+// has gone out. A blank full frame IS the whole surface, so the surface is
+// blank. Anything else leaves a picture: a partial patch sits on top of
+// whatever was already there, so it cannot make the surface blank.
+//
+// This is the state the stall gate reads back (isEmptyCaptureExpected, through
+// nothingToPaint): an empty paint image on a blank surface means there is nothing
+// to show, not that the compositor stopped.
+function surfaceBlankAfterFrame({ isFull, blank }) {
+  return Boolean(isFull && blank);
+}
+
 // What a composition attempt produced. The three non-idle outcomes all mean
 // "the compositor handed us an image", which is why the age metrics the runner
 // reports cannot distinguish them on their own:
@@ -112,6 +195,10 @@ module.exports = {
   extractRect,
   clampRect,
   sameRect,
+  isBlankBitmap,
+  shouldHoldBlank,
+  surfaceBlankAfterFrame,
+  frameTimestampNs,
   frameOutcome,
   FRAME_MAGIC,
   FRAME_SENT,

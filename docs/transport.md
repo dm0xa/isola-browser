@@ -47,7 +47,7 @@ Inside the container the capture never leaves the box: Electron writes damage re
 
 ### Capture (`ISOL`)
 
-The producer does not ship a full BGRA surface every tick. Each frame is a 32-byte header (`ISOL`, size, dirty-rect count, timestamp) plus the damaged rectangles and their pixels. A blinking caret is a few kilobytes; a 1440p full frame would be ~15 MB. A single rect that covers the whole surface is a full refresh and can seed the compositor from scratch.
+The producer does not ship a full BGRA surface every tick. Each frame is a 32-byte header (`ISOL` magic, surface size and stride, dirty-rect count, and a `ts_ns` timestamp) plus the damaged rectangles and their pixels. `ts_ns` is wall-clock UTC nanoseconds (`CLOCK_REALTIME`), so a consumer can subtract its own clock to get a buffer delay; the field is carried for that reason and is not yet read by the streamer. A blinking caret is a few kilobytes; a 1440p full frame would be ~15 MB. A single rect that covers the whole surface is a full refresh and can seed the compositor from scratch.
 
 The encode loop skips ticks while the surface is unchanged, but never for longer than `ISOLA_STATIC_KEEPALIVE_MS` (default 2 s, `0` disables). Idle pages stay cheap without looking like a stall. On the MSE path a quiet change also gets a 40 ms follow-up frame so the fMP4 muxer can close the fragment — otherwise a single edit would sit unflushed until keepalive.
 
