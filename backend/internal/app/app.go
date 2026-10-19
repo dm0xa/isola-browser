@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -250,15 +251,28 @@ func Run(opts Options) error {
 	// Embedded SPA (single-user build only).
 	if opts.FrontendFS != nil {
 		frontendHandler := http.FileServer(http.FS(opts.FrontendFS))
+		// http.FileServer over an embed.FS sends no validators (no Last-Modified,
+		// no ETag) and no Cache-Control, so the browser has no way to know the app
+		// shell changed and can keep running the previous bundle — a frontend fix
+		// then never reaches the user. Vite content-hashes everything under
+		// /assets, so those are safe to pin; the shell must be revalidated.
+		serveFrontend := func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache")
+			}
+			frontendHandler.ServeHTTP(w, r)
+		}
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 			// SPA fallback: serve index.html for non-API routes.
 			r.URL.Path = "/"
-			frontendHandler.ServeHTTP(w, r)
+			serveFrontend(w, r)
 		})
-		r.Get("/assets/*", frontendHandler.ServeHTTP)
-		r.Get("/fonts/*", frontendHandler.ServeHTTP)
-		r.Get("/favicon.svg", frontendHandler.ServeHTTP)
-		r.Get("/index.html", frontendHandler.ServeHTTP)
+		r.Get("/assets/*", serveFrontend)
+		r.Get("/fonts/*", serveFrontend)
+		r.Get("/favicon.svg", serveFrontend)
+		r.Get("/index.html", serveFrontend)
 	}
 
 	// Background jobs (ctx created at the top for module supervision).
