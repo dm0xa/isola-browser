@@ -11,7 +11,7 @@ import "fmt"
 // Build-time variables (set via ldflags). Do not edit directly.
 var (
 	// Version is the semantic version of the current build (e.g. "1.0.0").
-	Version = "1.0.1"
+	Version = "1.1.0"
 	// Commit is the git commit hash at build time.
 	Commit = "unknown"
 	// BuildTime is the UTC timestamp when the binary was built.
