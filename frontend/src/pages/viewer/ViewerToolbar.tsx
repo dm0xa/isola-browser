@@ -103,7 +103,7 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
         <div className="flex items-center px-4 py-1 bg-zinc-100 dark:bg-gray-900 shrink-0 relative z-50">
         <div className={`flex items-center gap-2 min-w-0 ${isFullscreen ? 'shrink-0' : 'flex-1'}`}>
         <Link to="/" className="text-zinc-500 dark:text-gray-400 hover:text-zinc-900 dark:hover:text-white transition-colors shrink-0" title="Home">
-          <IsolaLogo className="w-9 h-9 mt-1" />
+          <IsolaLogo className="w-9 h-9 mt-1" mini />
         </Link>
         <div className="flex items-center gap-2">
           <span className="text-xs text-zinc-600 dark:text-gray-500 font-mono">

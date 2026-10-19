@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useIsolaStream } from '../hooks/useIsolaStream';
-import { useTheme } from '../lib/ThemeContext';
 import { AudioToggleButton } from '../components/AudioToggleButton';
+import { IsolaLogo, ISOLA_LOGO_KEYFRAMES } from '../components/IsolaLogo';
 import { LoadingOverlay } from '../components/LoadingOverlay';
 
 function formatTime(totalSec: number): string {
@@ -17,7 +17,6 @@ export default function SharePage() {
   const navigate = useNavigate();
   const canvasRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<HTMLDivElement>(null);
-  const { theme } = useTheme();
 
   const [status, setStatus] = useState<string>('loading');
   const [expiresAt, setExpiresAt] = useState<number | null>(null);
@@ -144,19 +143,7 @@ export default function SharePage() {
     <div className="flex flex-col h-screen bg-zinc-200 dark:bg-gray-950 relative">
       <div className="flex items-center justify-between px-4 py-1 bg-zinc-100 dark:bg-gray-900 shrink-0 relative z-50">
         <Link to="/" className="text-zinc-500 dark:text-gray-400 hover:text-zinc-900 dark:hover:text-white transition-colors shrink-0" title="Home">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" className="w-9 h-9 mt-1" style={{ overflow: 'visible', animation: theme === 'dark' ? 'logo-glow 3s ease-in-out infinite' : 'logo-glow-light 3s ease-in-out infinite' }}>
-            <g transform="translate(256, 270)">
-              <path d="M 0 50 L 110 0 L 0 -50 L -110 0 Z" fill="#1a2024" />
-              <path d="M -110 0 L 0 50 L 0 85 L -110 35 Z" fill="#0f1418" />
-              <path d="M 110 0 L 0 50 L 0 85 L 110 35 Z" fill="#0a0e10" />
-              <path d="M 0 -20 L 100 -65 L 0 -110 L -100 -65 Z" fill="none" stroke="#00e5ff" strokeWidth="10" strokeLinejoin="miter"/>
-              <path d="M -100 -65 L 0 -20 L 0 5 L -100 -40 Z" fill="none" stroke="#00e5ff" strokeWidth="10" strokeLinejoin="miter"/>
-              <path d="M 100 -65 L 0 -20 L 0 5 L 100 -40 Z" fill="none" stroke="#00e5ff" strokeWidth="10" strokeLinejoin="miter"/>
-              <path d="M 0 -85 L 85 -125 L 0 -165 L -85 -125 Z" fill="#ffffff" />
-              <path d="M -85 -125 L 0 -85 L 0 -65 L -85 -105 Z" fill="#e0e0e0" />
-              <path d="M 85 -125 L 0 -85 L 0 -65 L 85 -105 Z" fill="#cccccc" />
-            </g>
-          </svg>
+          <IsolaLogo className="w-9 h-9 mt-1" mini />
         </Link>
         <div className="flex items-center gap-4">
           <span className={`text-xs font-mono ${timerColor}`}>
@@ -185,9 +172,7 @@ export default function SharePage() {
       <div ref={shellRef} className="flex-1 bg-zinc-100 dark:bg-gray-900 min-h-0 overflow-hidden flex items-center justify-center">
         <div id="vnc-container" ref={canvasRef} className="relative overflow-hidden bg-zinc-100 dark:bg-gray-900 shrink-0 w-full h-full" />
       </div>
-      <style>{`
-        @keyframes logo-glow { 0%, 100% { filter: drop-shadow(0 0 8px rgba(0,229,255,0.3)); } 50% { filter: drop-shadow(0 0 18px rgba(0,229,255,0.6)); } }
-        @keyframes logo-glow-light { 0%, 100% { filter: drop-shadow(0 0 4px rgba(0,0,0,0.15)); } 50% { filter: drop-shadow(0 0 10px rgba(0,0,0,0.25)); } }
+      <style>{ISOLA_LOGO_KEYFRAMES + `
         #vnc-container > div {
           width: 100% !important;
           height: 100% !important;

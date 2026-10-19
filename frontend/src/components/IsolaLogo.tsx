@@ -34,6 +34,33 @@ export const ISOLA_LOGO_KEYFRAMES = `
 .logo-float-base { animation: logo-float-base 6s ease-in-out infinite; }
 .logo-float-ring { animation: logo-float-ring 8s ease-in-out infinite; }
 .logo-float-top { animation: logo-float-top 7s ease-in-out infinite; }
+/* Compact variant for the 36px chrome logo. The hero offsets above are in SVG
+   user units, so at 36px they would be sub-pixel; these are the same drift
+   scaled up to read at that size. */
+@keyframes logo-mini-base {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(14px, 19px); }
+  50% { transform: translate(22px, 8px); }
+  75% { transform: translate(6px, -4px); }
+  100% { transform: translate(0, 0); }
+}
+@keyframes logo-mini-ring {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(-17px, -13px); }
+  50% { transform: translate(-24px, 4px); }
+  75% { transform: translate(-7px, 12px); }
+  100% { transform: translate(0, 0); }
+}
+@keyframes logo-mini-top {
+  0% { transform: translate(0, 0); }
+  30% { transform: translate(11px, -25px); }
+  55% { transform: translate(-7px, -32px); }
+  80% { transform: translate(4px, -12px); }
+  100% { transform: translate(0, 0); }
+}
+.logo-mini-base { animation: logo-mini-base 6s ease-in-out infinite; }
+.logo-mini-ring { animation: logo-mini-ring 8s ease-in-out infinite; }
+.logo-mini-top { animation: logo-mini-top 7s ease-in-out infinite; }
 `;
 
 interface IsolaLogoPath {
@@ -68,6 +95,11 @@ interface IsolaLogoProps {
   style?: CSSProperties;
   /** Float animation (ring/top/base drift) — on Landing/Share pages */
   float?: boolean;
+  /**
+   * Compact layered drift for the 36px chrome logo (viewer/share toolbars).
+   * The hero float is tuned for 96px and would be sub-pixel this small.
+   */
+  mini?: boolean;
   /** Neon glow pulse — on by default; set false for loaders with custom stroke animations */
   glow?: boolean;
   /** Passed through to the <svg> element — set to false to prevent HTML5 drag-ghost */
@@ -89,6 +121,7 @@ export function IsolaLogo({
   className = '',
   style,
   float = false,
+  mini = false,
   glow = true,
   draggable,
   renderFaces,
@@ -113,6 +146,14 @@ export function IsolaLogo({
     ...style,
   };
 
+  // One class per layer group: the hero float, the compact drift, or nothing.
+  const layer = (name: 'base' | 'ring' | 'top') => {
+    if (float) return `logo-float-${name}`;
+    if (mini) return `logo-mini-${name}`;
+    return undefined;
+  };
+  const animate = float || mini;
+
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -122,22 +163,22 @@ export function IsolaLogo({
       {...(draggable !== undefined ? { draggable } : {})}
     >
       <g transform={ISOLA_LOGO_CENTER}>
-        {float || renderFaces ? (
-          <g className={float ? 'logo-float-base' : undefined}>
+        {animate || renderFaces ? (
+          <g className={layer('base')}>
             {renderFaces ? renderFaces(faces) : faces}
           </g>
         ) : (
           faces
         )}
-        {float || renderRing ? (
-          <g className={float ? 'logo-float-ring' : undefined}>
+        {animate || renderRing ? (
+          <g className={layer('ring')}>
             {renderRing ? renderRing(ring) : ring}
           </g>
         ) : (
           ring
         )}
-        {float || renderTop ? (
-          <g className={float ? 'logo-float-top' : undefined}>
+        {animate || renderTop ? (
+          <g className={layer('top')}>
             {renderTop ? renderTop(top) : top}
           </g>
         ) : (
