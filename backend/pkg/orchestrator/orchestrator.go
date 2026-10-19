@@ -515,6 +515,20 @@ func (o *Orchestrator) SetSessionCleanup(fn SessionCleanupFunc) {
 	o.onSessionCleanup = fn
 }
 
+// sessionCacheKeys lists every per-session cache entry. FinalizeRunningSession
+// and CleanupOrphanContainers both clear this set: a key added to only one of
+// them survives the other teardown path and leaks for the life of the cache.
+func sessionCacheKeys(sid string) []string {
+	return []string{
+		"session:" + sid,
+		"session:" + sid + ":transport",
+		"session:" + sid + ":cdp",
+		"session:" + sid + ":control_token",
+		"session:" + sid + ":view_password",
+		"viewer_count:" + sid,
+	}
+}
+
 // FinalizeRunningSession stops the container, clears cache keys, runs hooks, and marks terminated.
 func (o *Orchestrator) FinalizeRunningSession(ctx context.Context, st *store.Store, cache *store.MemCache, sess *models.Session) {
 	if sess == nil {
@@ -529,14 +543,7 @@ func (o *Orchestrator) FinalizeRunningSession(ctx context.Context, st *store.Sto
 		}
 	}
 
-	cache.Del(ctx,
-		"session:"+sid,
-		"session:"+sid+":transport",
-		"session:"+sid+":cdp",
-		"session:"+sid+":control_token",
-		"session:"+sid+":view_password",
-		"viewer_count:"+sid,
-	)
+	cache.Del(ctx, sessionCacheKeys(sid)...)
 
 	if o.onSessionCleanup != nil {
 		o.onSessionCleanup(ctx, sess)
@@ -1019,12 +1026,7 @@ func (o *Orchestrator) CleanupOrphanContainers(ctx context.Context, st *store.St
 		if c.SessionID != "" {
 			if id, err := uuid.Parse(c.SessionID); err == nil {
 				_ = st.Sessions.TerminateSession(ctx, id)
-				cache.Del(ctx, "session:"+c.SessionID,
-					"session:"+c.SessionID+":transport",
-					"session:"+c.SessionID+":cdp",
-					"session:"+c.SessionID+":control_token",
-					"viewer_count:"+c.SessionID,
-				)
+				cache.Del(ctx, sessionCacheKeys(c.SessionID)...)
 			}
 		}
 	}

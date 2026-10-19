@@ -30,6 +30,7 @@ const { applyChromeFlags } = require('./chrome_flags');
 const { isEmptyCaptureExpected, shouldStopCaptureFallback, pruneEmptyCaptureTimes } = require('./capture_fallback');
 const { applyTorProxy, isTorEnabled } = require('./tor');
 const { isAllowedPageNavigation, resolveAddressBar } = require('./navigation_url');
+const { themeColours, fillPageCanvas } = require('./theme');
 
 const START_URL = process.env.START_URL || 'https://example.com';
 const RESOLUTION = process.env.RESOLUTION || '1280x720';
@@ -183,18 +184,10 @@ function ensureFrameBuffer() {
   const bytes = w * h * 4;
   if (!frameBuffer || frameBuffer.length !== bytes) {
     frameBuffer = Buffer.alloc(bytes);
-    fillBackground(frameBuffer);
+    // The surface is the page canvas, not the app theme — see theme.js.
+    fillPageCanvas(frameBuffer);
   }
   return frameBuffer;
-}
-
-// The base of the compositing surface is the PAGE canvas, which is white — not
-// the theme colour. Only damaged rects are blitted over it, so a sparse page
-// (black UA text on an otherwise unpainted canvas, e.g. nginx's 403) would
-// otherwise leave the theme colour showing everywhere the page never painted.
-// bgColor stays for an EMPTY document only — see normaliseEmptyDocument.
-function fillBackground(buf) {
-  buf.fill(255); // opaque white: r = g = b = a = 255
 }
 
 function blitBitmap(full, bitmap, bmpW, bmpH, ox, oy) {
@@ -709,23 +702,14 @@ function resetFrameState() {
   blankHoldUntil = Date.now() + BLANK_HOLD_MS;
 }
 
-// Applies the theme and returns the WINDOW background. That backdrop is what
-// Electron composites a page without its own background over, so it must be
-// the browser canvas (white); handing Chromium the dark theme colour renders
-// black default text on #1a1a2e. The theme colour (bgColor) is applied to an
-// EMPTY document deliberately, by normaliseEmptyDocument.
+// Applies the theme and returns the WINDOW backdrop. The two colours are
+// deliberately different — see theme.js for why the backdrop is never the
+// theme colour.
 function themeBackgroundColor() {
-  switch (BROWSER_THEME) {
-    case 'dark':
-      bgColor = { r: 26, g: 26, b: 46, a: 255 };
-      nativeTheme.themeSource = 'dark';
-      break;
-    default:
-      bgColor = { r: 255, g: 255, b: 255, a: 255 };
-      nativeTheme.themeSource = 'light';
-      break;
-  }
-  return '#ffffff';
+  const colours = themeColours(BROWSER_THEME);
+  bgColor = colours.emptyDocument;
+  nativeTheme.themeSource = colours.themeSource;
+  return colours.window;
 }
 
 function loadResolved(win, input) {

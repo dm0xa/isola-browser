@@ -1,8 +1,27 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { shouldStopCaptureFallback, pruneEmptyCaptureTimes } = require('../src/capture_fallback');
+const { isEmptyCaptureExpected, shouldStopCaptureFallback, pruneEmptyCaptureTimes } = require('../src/capture_fallback');
 
 const RECOVER_MS = 1500;
+
+// A blank surface that has finished loading has nothing to paint, so Chromium's
+// zero-length copy-output for it is expected — not the compositor stopping. This
+// is the regression guard for a fresh about:blank tab reporting "capture stalled
+// — recovering" and recreating its renderer in a loop.
+test('an empty capture on a loaded blank surface is expected, not a stall', () => {
+  assert.equal(isEmptyCaptureExpected({ surfaceBlank: true, loading: false }), true);
+});
+
+test('an empty capture is a stall signal once there is content on the surface', () => {
+  assert.equal(isEmptyCaptureExpected({ surfaceBlank: false, loading: false }), false);
+});
+
+test('an empty capture during a load is still the real signal', () => {
+  // The tab is about to paint; the load grace window covers this, so the empty
+  // is not waved away just because the surface is blank.
+  assert.equal(isEmptyCaptureExpected({ surfaceBlank: true, loading: true }), false);
+  assert.equal(isEmptyCaptureExpected({ surfaceBlank: false, loading: true }), false);
+});
 
 test('stays on fallback while empty captures keep arriving', () => {
   const now = 10_000;

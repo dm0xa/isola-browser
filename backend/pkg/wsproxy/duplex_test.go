@@ -93,6 +93,77 @@ func TestProxyDuplexKeepalivePingDoesNotRaceRelay(t *testing.T) {
 	}
 }
 
+// TestProxyDuplexKeepaliveRefreshesActivity guards the idle-reaper decision: a
+// viewer watching a static page receives no frames at all (the encoder omits
+// frames identical to the last one), so payload-driven activity stalls and the
+// idle reaper would tear down a sandbox that still has a viewer attached.
+// Activity therefore has to come from the keepalive ping.
+func TestProxyDuplexKeepaliveRefreshesActivity(t *testing.T) {
+	originalInterval := keepalivePingInterval
+	keepalivePingInterval = time.Millisecond
+	defer func() { keepalivePingInterval = originalInterval }()
+
+	clientConn, browserConn, cleanupClient := newWebSocketPair(t)
+	defer cleanupClient()
+
+	containerConn, containerPeer, cleanupContainer := newWebSocketPair(t)
+	defer cleanupContainer()
+
+	done := make(chan struct{})
+	var closeOnce sync.Once
+	closeAll := func() {
+		closeOnce.Do(func() {
+			close(done)
+			_ = browserConn.Close()
+			_ = containerPeer.Close()
+		})
+	}
+
+	var mu sync.Mutex
+	var tracked []string
+	track := func(sid string) {
+		mu.Lock()
+		tracked = append(tracked, sid)
+		mu.Unlock()
+	}
+
+	proxyDone := make(chan struct{})
+	go func() {
+		defer close(proxyDone)
+		proxyDuplex(clientConn, containerConn, "sess-idle", closeAll, done, track, new(int64), new(int64), nil, false)
+	}()
+
+	// No relayed messages at all: the pings alone must keep activity fresh.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mu.Lock()
+		n := len(tracked)
+		mu.Unlock()
+		if n >= 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("activity refreshed only %d times with no payload; the keepalive must refresh it", n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	mu.Lock()
+	for _, sid := range tracked {
+		if sid != "sess-idle" {
+			t.Errorf("tracked %q, want the session id", sid)
+		}
+	}
+	mu.Unlock()
+
+	closeAll()
+	select {
+	case <-proxyDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("proxyDuplex did not return")
+	}
+}
+
 func TestViewOnlyControlAllowed(t *testing.T) {
 	cases := []struct {
 		in   string

@@ -24,6 +24,30 @@ func stubDocker(t *testing.T, body string) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
+// stubDockerCounting is stubDocker plus an invocation counter: the stub appends
+// one byte to a file per call, so a test can wait for a known number of probes
+// instead of guessing at wall-clock time. Each probe forks a shell, which is
+// slow enough under load that a fixed sleep can come up short — and the health
+// checker's ticker coalesces the ticks it misses, so "sleep long enough" is not
+// a reliable way to guarantee N probes ran.
+func stubDockerCounting(t *testing.T, body string) (probes func() int) {
+	t.Helper()
+	dir := t.TempDir()
+	countFile := filepath.Join(dir, "count")
+	script := "#!/bin/sh\nprintf x >> '" + countFile + "'\n" + body
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() int {
+		b, err := os.ReadFile(countFile)
+		if err != nil {
+			return 0
+		}
+		return len(b)
+	}
+}
+
 // runtimeAnswers is a runtime that reports container "alive123" as running and
 // answers "no such object" for anything else — the shape the health checker
 // treats as "the runtime answered; the container is not there".

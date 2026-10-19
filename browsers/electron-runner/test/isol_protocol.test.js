@@ -11,6 +11,10 @@ const {
   extractRect,
   clampRect,
   sameRect,
+  isBlankBitmap,
+  shouldHoldBlank,
+  surfaceBlankAfterFrame,
+  frameTimestampNs,
   frameOutcome,
   FRAME_MAGIC,
   FRAME_SENT,
@@ -186,6 +190,57 @@ test('sameRect matches only identical geometry', () => {
   assert.ok(!sameRect({ x: 0, y: 0, w: 3, h: 4 }, { x: 1, y: 0, w: 3, h: 4 }));
 });
 
+// A blank full-surface frame is one the runner must withhold rather than forward:
+// the unpainted document at a navigation commit, or a capturePage() that came
+// back empty. Measured over a real page load, such a frame is ~100% one colour
+// but not *exactly* — a few stray pixels survive — so the test is a ratio, not
+// an equality.
+function flat(pixels, bgra = [255, 255, 255, 255]) {
+  const buf = Buffer.alloc(pixels * 4);
+  for (let i = 0; i < pixels; i++) {
+    buf[i * 4 + 0] = bgra[0];
+    buf[i * 4 + 1] = bgra[1];
+    buf[i * 4 + 2] = bgra[2];
+    buf[i * 4 + 3] = bgra[3];
+  }
+  return buf;
+}
+
+test('isBlankBitmap accepts a flat white image', () => {
+  assert.equal(isBlankBitmap(flat(64 * 64)), true);
+});
+
+test('isBlankBitmap accepts a flat dark fill', () => {
+  // #1a1a2e, the runner's dark-theme background: a blank is not always white.
+  assert.equal(isBlankBitmap(flat(64 * 64, [0x2e, 0x1a, 0x1a, 0xff])), true);
+});
+
+test('isBlankBitmap accepts a blank with a few stray pixels', () => {
+  // The measured case: the white frames carried 3-22 distinct values but were
+  // otherwise uniform, which an equality test let through.
+  const buf = flat(100 * 100);
+  for (const px of [7, 1234, 5678, 9999]) buf[px * 4 + 1] = 0xfe;
+  assert.equal(isBlankBitmap(buf), true);
+});
+
+test('isBlankBitmap rejects a frame with real content', () => {
+  // Every pixel unique — the opposite extreme from a blank.
+  assert.equal(isBlankBitmap(makeSurface(64, 64)), false);
+});
+
+test('isBlankBitmap rejects a page that is mostly one colour', () => {
+  // The least-uniform real frame measured was 84.8% one colour, so 85% must
+  // still count as content: the 2% allowance cannot swallow a real page.
+  const buf = flat(100 * 100);
+  for (let px = 1500; px < 10000; px++) buf[px * 4 + 1] = 0x00;
+  assert.equal(isBlankBitmap(buf), false);
+});
+
+test('isBlankBitmap tolerates a degenerate buffer', () => {
+  assert.equal(isBlankBitmap(Buffer.alloc(0)), true);
+  assert.equal(isBlankBitmap(Buffer.alloc(4)), true);
+});
+
 test('encodeFrame writes the header, rect table and damage payload the streamer decodes', () => {
   const surface = makeSurface(W, H);
   const rect = { x: 2, y: 1, w: 3, h: 2 };
@@ -239,4 +294,89 @@ test('a small damage update costs a fraction of a full frame', () => {
     damage.length < full.length / 1000,
     `damage frame ${damage.length}B should be far smaller than full ${full.length}B`,
   );
+});
+
+// shouldHoldBlank is the anti-flash rule for full-surface blanks. It lives here
+// so the branch that used to delay a brand-new tab is covered: the runner
+// withholds a blank only when the surface it would replace holds a picture.
+test('a blank is withheld once the tab has established the surface', () => {
+  const base = {
+    isFull: true,
+    blank: true,
+    streamerSeeded: true,
+    surfaceEstablished: true,
+    loading: false,
+    withinHoldWindow: false,
+  };
+  // The commit-time blank of a link click: still loading the new document.
+  assert.strictEqual(shouldHoldBlank({ ...base, loading: true }), true);
+  // Past did-finish-load, the scheduled load captures can still return an
+  // empty frame, so the time window holds the blank too.
+  assert.strictEqual(shouldHoldBlank({ ...base, withinHoldWindow: true }), true);
+});
+
+test('the first frame of an active tab is never held (new tab opens at once)', () => {
+  // The regression: a tab that has not put anything on the surface yet must show
+  // its first frame. Holding it left the previous tab's picture up for the whole
+  // hold window — "new tab opens too slow".
+  assert.strictEqual(
+    shouldHoldBlank({
+      isFull: true,
+      blank: true,
+      streamerSeeded: true,
+      surfaceEstablished: false,
+      loading: true,
+      withinHoldWindow: true,
+    }),
+    false,
+  );
+});
+
+test('a blank is only withheld when it would replace a picture', () => {
+  const pictured = {
+    isFull: true,
+    blank: true,
+    streamerSeeded: true,
+    surfaceEstablished: true,
+    loading: true,
+    withinHoldWindow: true,
+  };
+  // Real content is never withheld — it is the picture.
+  assert.strictEqual(shouldHoldBlank({ ...pictured, blank: false }), false);
+  // Nothing is withheld before the streamer has a surface at all (the seed).
+  assert.strictEqual(shouldHoldBlank({ ...pictured, streamerSeeded: false }), false);
+  // Partial damage is not a full surface and never goes through this rule.
+  assert.strictEqual(shouldHoldBlank({ ...pictured, isFull: false }), false);
+  // The hold is bounded: once the window closes, a page that really is one
+  // flat colour still appears.
+  assert.strictEqual(
+    shouldHoldBlank({ ...pictured, loading: false, withinHoldWindow: false }),
+    false,
+  );
+});
+
+// frameTimestampNs feeds the header's ts_ns, which frame_reader.go decodes as
+// time.Unix(0, ts). The regression it guards is process.hrtime.bigint(): a
+// nanosecond-looking value counting from boot, which decodes as 1970.
+test('a partial damage frame leaves a picture on the surface', () => {
+  // Content that arrived as partial damage still means there is a picture to
+  // protect. Treating such a page as "never painted" forwarded its next commit
+  // blank — the white flash that came back after the new-tab fix.
+  assert.strictEqual(surfaceBlankAfterFrame({ isFull: false, blank: false }), false);
+  // A blank full frame is the whole surface.
+  assert.strictEqual(surfaceBlankAfterFrame({ isFull: true, blank: true }), true);
+  assert.strictEqual(surfaceBlankAfterFrame({ isFull: true, blank: false }), false);
+});
+
+test('frame ts_ns is wall-clock UTC nanoseconds, not the monotonic clock', () => {
+  const ns = frameTimestampNs();
+  assert.strictEqual(typeof ns, 'bigint');
+  const wall = BigInt(Date.now()) * 1_000_000n;
+  const drift = ns > wall ? ns - wall : wall - ns;
+  assert.ok(
+    drift < 60n * 1_000_000_000n,
+    `ts_ns ${ns} drifted ${drift}ns from the wall clock ${wall}`,
+  );
+  // Sub-millisecond and monotonic within a session.
+  assert.ok(frameTimestampNs() >= ns);
 });
