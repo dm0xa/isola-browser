@@ -1200,7 +1200,11 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     }
     isolaInsets = { right: 0, bottom: 0 };
     setError(null);
-    setReconnecting(true);
+    // The first connection is not a reconnect: showing "Reconnecting" while a
+    // fresh session is still being established made the launch look like it
+    // had already failed once. Only retries after a dropped/failed attempt
+    // (reconnectAttemptRef > 0) count as reconnecting.
+    setReconnecting(reconnectAttemptRef.current > 0);
     connectStartedAtRef.current = performance.now();
     firstFrameRecordedRef.current = false;
     appendCountRef.current = 0;

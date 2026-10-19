@@ -8,6 +8,7 @@ import { useTheme } from '../lib/ThemeContext';
 import { api } from '../lib/api';
 import { getCommit, getVersion, isTimerEnabled } from '../lib/config';
 import { clearSessionToken, getSessionToken, storeSessionToken } from '../lib/sessionToken';
+import { endLaunch, setLaunchStatus, useLaunchProgress } from '../lib/launchProgress';
 import { useSessionTimer } from './viewer/useSessionTimer';
 import { useIsolaMonitorEvents } from './viewer/useIsolaMonitorEvents';
 import { ViewerToolbar } from './viewer/ViewerToolbar';
@@ -55,6 +56,11 @@ export default function ViewerPage() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<string>('provisioning');
+  // The launch overlay lives above the router (see lib/launchProgress), so a
+  // session started from RunPage keeps the same overlay and only advances its
+  // phases from here. For direct deep links the flow is inactive and the
+  // page-local overlay below handles connecting.
+  const launch = useLaunchProgress();
   // Network monitor (isola): entries stream in as 'isola-net' DOM events
   // from the transport hook. Capped so long sessions don't grow unbounded.
   //
@@ -276,6 +282,7 @@ export default function ViewerPage() {
         );
         const data = res.data;
         setStatus(data.status);
+        setLaunchStatus(data.status);
         handlePollData(data);
 
         if (data.session_token) {
@@ -344,6 +351,7 @@ export default function ViewerPage() {
         }
 
         if (data.status === 'error' || data.status === 'terminated') {
+          endLaunch();
           setStatus(data.status);
           // Don't flash the error page if we're in the middle of a restart —
           // the old session is being torn down on purpose; navigation to the
@@ -355,6 +363,7 @@ export default function ViewerPage() {
         }
       } catch (err: any) {
         if (err.response?.status === 404) {
+          endLaunch();
           setStatus('error');
           if (!restartingRef.current) {
             setSessionError('Session not found');
@@ -666,6 +675,18 @@ export default function ViewerPage() {
     return undefined;
   }, [isFirstFrame, isConnected, streamError]);
 
+  // Hand the launch overlay over to the live canvas at the same moment the
+  // page-local loading overlay would have disappeared (after the paint hold).
+  useEffect(() => {
+    if (launch.active && loaderHeld) endLaunch();
+  }, [launch.active, loaderHeld]);
+
+  // Terminal stream errors must uncover the error screen instead of leaving
+  // the launch overlay up forever.
+  useEffect(() => {
+    if (streamError) endLaunch();
+  }, [streamError]);
+
   // Keep the loading overlay visible until the first frame is actually on
   // screen — not just until ICE connects.
   const showOverlay =
@@ -891,11 +912,11 @@ export default function ViewerPage() {
         <LoadingOverlay status="restarting" isReconnecting={false} isRestarting={true} />
       )}
 
-      {!restarting && showOverlay && (
+      {!launch.active && !restarting && showOverlay && (
         <LoadingOverlay status={status} isReconnecting={false} />
       )}
 
-      {!restarting && isReconnecting && (
+      {!launch.active && !restarting && isReconnecting && (
         <LoadingOverlay status="reconnecting" isReconnecting={true} />
       )}
 

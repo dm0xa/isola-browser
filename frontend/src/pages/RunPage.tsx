@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTheme } from '../lib/ThemeContext';
-import { LoadingOverlay } from '../components/LoadingOverlay';
 import { IsolaLogo } from '../components/IsolaLogo';
+import { beginLaunch, endLaunch, setLaunchStatus } from '../lib/launchProgress';
 import { apiErrorMessage } from '../lib/apiError';
 import { storeSessionToken } from '../lib/sessionToken';
 import { getIsolaTabs, getMaxSessions } from '../lib/config';
@@ -60,11 +60,15 @@ export default function RunPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { theme } = useTheme();
-  const [status, setStatus] = useState<string>('provisioning');
   const [error, setError] = useState<string>('');
+  // True once this page has handed the session over to the viewer. The overlay
+  // lives above the router (.lib/launchProgress), so it must NOT be ended by
+  // this page's unmount at that hand-off.
+  const handedOffRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
+    beginLaunch();
 
     const body: LaunchConfig = {};
     try {
@@ -79,6 +83,7 @@ export default function RunPage() {
     // Minimal backward-compat fallback: deep link like /run?url=...
     let url = body.url || searchParams.get('url') || '';
     if (!url) {
+      endLaunch();
       navigate('/', { replace: true });
       return;
     }
@@ -113,6 +118,7 @@ export default function RunPage() {
 
     const launch = async () => {
       for (let attempt = 0; ; attempt++) {
+        setLaunchStatus('provisioning');
         controller = new AbortController();
         let res: Response;
         try {
@@ -152,7 +158,10 @@ export default function RunPage() {
           } catch {
             /* sessionStorage unavailable — nothing to consume */
           }
-          setStatus('running');
+          handedOffRef.current = true;
+          // Backend status stays 'provisioning' until the container and
+          // streamer are ready; ViewerPage polls it from here.
+          setLaunchStatus('provisioning');
           const tokenSuffix = data.session_token ? `?token=${encodeURIComponent(data.session_token)}` : '';
           navigate(`/session/${data.id}${tokenSuffix}`, { replace: true });
           return;
@@ -168,7 +177,7 @@ export default function RunPage() {
         if (isCapacityLimit(res.status, data)) {
           if (attempt < MAX_CAPACITY_RETRIES) {
             const retryAfter = Number(res.headers.get('Retry-After'));
-            setStatus('queued');
+            setLaunchStatus('queued', 'AT CAPACITY — WAITING FOR A FREE SESSION');
             await sleep(capacityRetryDelayMs(attempt + 1, Number.isFinite(retryAfter) ? retryAfter : null));
             if (cancelled) return;
             continue;
@@ -188,8 +197,8 @@ export default function RunPage() {
     void launch().catch((err: unknown) => {
       if (cancelled) return;
       if ((err as { name?: string })?.name === 'AbortError') return;
+      endLaunch();
       setError((err as Error)?.message || 'Failed to launch. Is the backend running?');
-      setStatus('error');
     });
 
     return () => {
@@ -205,15 +214,16 @@ export default function RunPage() {
     };
   }, [navigate, searchParams, theme]);
 
+  // Unmount-only: left the launch page without a session (back button, etc.),
+  // so don't leave the app-level overlay covering whatever page comes next.
+  // Kept out of the launch effect's cleanup so re-running it (theme change)
+  // cannot reset the overlay mid-launch.
+  useEffect(() => () => {
+    if (!handedOffRef.current) endLaunch();
+  }, []);
+
   return (
     <div className="relative min-h-screen bg-zinc-200 dark:bg-gray-950">
-      {!error && (
-        <LoadingOverlay
-          status={status}
-          isReconnecting={false}
-          caption={status === 'queued' ? 'AT CAPACITY — WAITING FOR A FREE SESSION' : undefined}
-        />
-      )}
       {error && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-zinc-100 dark:bg-[#030712] px-6">
           <div className="mb-8 opacity-60">

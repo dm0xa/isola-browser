@@ -32,10 +32,11 @@ type LoadingOverlayProps = {
   caption?: string;
   /**
    * - 'launch' (default): full 4-phase flow (Provisioning → Launching → Connecting → Ready).
-   *     Used on RunPage when a new session is being spun up from scratch.
-   * - 'connect': reduced 2-phase flow (Connecting → Ready). Used on ViewerPage /
-   *     SharePage join flows where the container already exists and the viewer
-   *     only needs to establish the stream.
+   *     Used by the app-level launch overlay (App.tsx) while a new session is
+   *     spun up from scratch, and by a directly opened ViewerPage.
+   * - 'connect': reduced 2-phase flow (Connecting → Ready). Used on SharePage
+   *     join flows where the container already exists and the viewer only
+   *     needs to establish the stream.
    */
   phases?: 'launch' | 'connect';
 };

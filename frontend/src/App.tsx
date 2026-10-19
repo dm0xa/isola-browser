@@ -6,10 +6,24 @@ import NetworkPage from './pages/NetworkPage';
 import RunPage from './pages/RunPage';
 import SharePage from './pages/SharePage';
 import { ThemeProvider } from './lib/ThemeContext';
+import { LoadingOverlay } from './components/LoadingOverlay';
+import { useLaunchProgress } from './lib/launchProgress';
 import { getPluginRoutes, usePlugins } from './plugins/registry';
 
 function LazyFallback() {
   return <div className="flex items-center justify-center min-h-screen bg-zinc-200 dark:bg-gray-950" />;
+}
+
+// Lives above the router so the launch overlay is never remounted when
+// RunPage hands the freshly created session over to ViewerPage.
+function LaunchOverlayHost() {
+  const launch = useLaunchProgress();
+  if (!launch.active) return null;
+  return (
+    <div className="fixed inset-0 z-[60]">
+      <LoadingOverlay status={launch.status} isReconnecting={false} caption={launch.caption} />
+    </div>
+  );
 }
 
 export default function App() {
@@ -33,6 +47,7 @@ export default function App() {
           <Route path="/share/:token" element={<SharePage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        <LaunchOverlayHost />
       </React.Suspense>
     </ThemeProvider>
   );
