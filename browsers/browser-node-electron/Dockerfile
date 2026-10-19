@@ -21,6 +21,15 @@ WORKDIR /app
 # Electron needs a build context to resolve prebuilt binaries
 COPY electron-runner/package.json ./
 RUN npm install --production
+
+# Electron 44 no longer downloads the platform binary from a package
+# `postinstall` hook — its manifest ships no `scripts` at all. The fetch is now
+# lazy (on the first `require('electron')`, or explicitly via the exported
+# `install-electron` bin). Do it eagerly here: the prune below needs dist/ to
+# exist, and the runtime image has no Node.js to trigger the lazy path, so
+# without this the sandbox has no Electron binary at all.
+RUN node node_modules/electron/install.js
+
 COPY electron-runner/src/ ./src/
 
 # Prune the Electron distribution down to what this container actually loads,
