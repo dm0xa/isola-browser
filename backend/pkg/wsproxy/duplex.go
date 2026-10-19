@@ -146,7 +146,7 @@ func proxyDuplex(
 	// keepalive stops. Adding it to the WaitGroup makes wg.Wait() block until
 	// it exits (no early return, no deadlock).
 	wg.Add(1)
-	go keepalivePing(client, &wg, closeAll, done)
+	go keepalivePing(client, &wg, closeAll, done, trackActivity, sessionID)
 
 	wg.Wait()
 }

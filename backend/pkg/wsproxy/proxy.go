@@ -285,7 +285,14 @@ func (p *Proxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 var keepalivePingInterval = 30 * time.Second
 
 // keepalivePing sends WebSocket pings every keepalivePingInterval to detect silently dropped connections.
-func keepalivePing(clientConn *websocket.Conn, wg *sync.WaitGroup, closeAll func(), done chan struct{}) {
+//
+// It also refreshes the session's activity clock. Payload-driven activity alone
+// is not enough: a viewer watching a static page receives no messages (the
+// encoder omits frames identical to the last one), so last_activity would stall
+// and the idle reaper would tear down a sandbox that still has a viewer attached.
+// A ping is proof the viewer is still there, and a ping write that fails stops
+// the refresh so the reaper can collect an abandoned session.
+func keepalivePing(clientConn *websocket.Conn, wg *sync.WaitGroup, closeAll func(), done chan struct{}, trackActivity func(string), sessionID string) {
 	defer wg.Done()
 	defer closeAll()
 	ticker := time.NewTicker(keepalivePingInterval)
@@ -297,6 +304,9 @@ func keepalivePing(clientConn *websocket.Conn, wg *sync.WaitGroup, closeAll func
 		case <-ticker.C:
 			if err := clientConn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
 				return
+			}
+			if trackActivity != nil && sessionID != "" {
+				trackActivity(sessionID)
 			}
 		}
 	}

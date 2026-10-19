@@ -53,6 +53,14 @@ type Orchestrator struct {
 // as not running before the session is finalized.
 const containerMissLimit = 3
 
+// healthProbeTimeout bounds one `docker inspect` health probe. The probe runs on
+// the app context, which lives for the whole process, so without a deadline of
+// its own a wedged daemon (or a paused VM) leaves the probe blocked inside
+// CombinedOutput and the health-checker goroutine never checks another session.
+// On expiry the probe returns an inconclusive failure — empty output plus a
+// non-nil error — which the loop deliberately skips rather than counting.
+const healthProbeTimeout = 10 * time.Second
+
 // runtimeUnreachable reports whether the output of a failed `docker inspect`
 // describes a runtime the CLI could not reach, as opposed to the runtime
 // answering that the container is not there.
@@ -73,6 +81,37 @@ func runtimeUnreachable(output string) bool {
 		"connection reset",
 		"context deadline exceeded",
 		"i/o timeout",
+	} {
+		if strings.Contains(s, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// containerAbsent reports whether the output of a failed `docker inspect`
+// positively says *this container is not there*, as opposed to a failure that
+// says nothing about it at all.
+//
+// This is the inverse of runtimeUnreachable and it exists because a miss is
+// destructive: containerMissLimit consecutive ones finalize the session. Only
+// an answer that names the container's absence may be allowed to count, so a
+// probe that failed for an unmodelled reason — empty output, a message we do
+// not recognise, a CLI killed by a timeout — is treated as inconclusive and
+// skipped instead of being read as "the container is gone".
+//
+// Both runtimes' real removal messages live here: podman's `Error: no such
+// object`, the daemon's `No such container`, and the podman-compat API's
+// image-name normalization error (it reads the bare hex ID as an image name).
+// Dropping that last one would make a genuinely removed container look
+// inconclusive and leak its session on that runtime.
+func containerAbsent(output string) bool {
+	s := strings.ToLower(output)
+	for _, sig := range []string{
+		"no such container",
+		"no such object",
+		"normalizing image",
+		"64-byte hexadecimal",
 	} {
 		if strings.Contains(s, sig) {
 			return true
@@ -740,9 +779,12 @@ func (o *Orchestrator) StartHealthChecker(ctx context.Context, st *store.Store, 
 					continue
 				}
 
-				// Check if container is still running via docker inspect
-				cmd := o.dockerCmd(ctx, "inspect", "--format", "{{.State.Running}}", sess.ContainerID)
+				// Check if container is still running via docker inspect, with its own
+				// deadline so a hung daemon cannot stall the whole checker.
+				probeCtx, cancelProbe := context.WithTimeout(ctx, healthProbeTimeout)
+				cmd := o.dockerCmd(probeCtx, "inspect", "--format", "{{.State.Running}}", sess.ContainerID)
 				out, inspectErr := cmd.CombinedOutput()
+				cancelProbe()
 				running := inspectErr == nil && strings.TrimSpace(string(out)) == "true"
 
 				if !running && runtimeUnreachable(string(out)) {
@@ -757,6 +799,26 @@ func (o *Orchestrator) StartHealthChecker(ctx context.Context, st *store.Store, 
 				}
 				if running {
 					o.containerMisses.Delete(sess.ID.String())
+					continue
+				}
+				// Everything below is a *failed* probe, and a miss is destructive:
+				// containerMissLimit consecutive ones finalize the session. So a miss
+				// may only be counted on a positive answer about this container — the
+				// runtime said it is stopped (the CLI succeeded and printed false), or
+				// it said the container is not there (containerAbsent). Any other
+				// failure has told us nothing about the container, and counting it
+				// finalizes sessions whose container the daemon still reports as Up.
+				//
+				// The trade is deliberate: an unrecognised failure leaves a genuinely
+				// dead session's row to the expiry and idle reapers, which is bounded
+				// by the session TTL, instead of destroying a live sandbox. A row that
+				// outlives its container for a few minutes costs a slot; a false
+				// finalize costs the user their work.
+				if inspectErr != nil && !containerAbsent(string(out)) {
+					log.Warn().Err(inspectErr).Str("session_id", sess.ID.String()).
+						Str("container_id", sess.ContainerID).
+						Str("output", strings.TrimSpace(string(out))).
+						Msg("health checker: inconclusive probe, skipping")
 					continue
 				}
 				// The runtime answered, and not with "running": the container is

@@ -47,7 +47,7 @@ Pinning is strict (`StrictNodes`): if no reachable exit exists in the chosen cou
 | `session.default_min` | `10` | `SESSION_DEFAULT_MIN` | Starting session length in minutes (`0` = unlimited). |
 | `session.max_min` | `30` | `SESSION_MAX_MIN` | Maximum length a session can be extended to. |
 | `session.extend_min` | `5` | `SESSION_EXTEND_MIN` | Minutes added by each extend. |
-| `session.inactivity_min` | `5` | `INACTIVITY_MIN` | Idle minutes before auto-termination. |
+| `session.inactivity_min` | `5` | `INACTIVITY_MIN` | Idle minutes before auto-termination. A viewer attached to the session counts as activity even while the page is static, so this reclaims sandboxes nobody is watching rather than ones merely sitting still. |
 | `session.timer` | `true` | `SESSION_TIMER` | When `false`, no countdown and no extend — the sandbox closes when the owner leaves. |
 | `session.resolution` | `"1920x1080"` | `RESOLUTION` | Default capture resolution. |
 | `session.max_resolution` | `"1920x1080"` | `MAX_RESOLUTION` | Hard cap applied to any requested resolution (aspect ratio preserved); larger requests are scaled down before the container starts. |
