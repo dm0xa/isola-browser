@@ -26,6 +26,7 @@ import {
   type PlayoutMetrics,
 } from './isola/msePlayout';
 import { createWcDecoder as buildWcDecoder, setupWebCodecsVideoPath } from './isola/webCodecsVideoPath';
+import { isPlaceholderUrl, seedForActiveTab, shouldCarryUrlEdit } from './isola/addressBar';
 import type { IsolaStreamMetrics } from './isola/streamMetrics';
 import {
   wcHost,
@@ -371,6 +372,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
   // page). Used when the runner hasn't emitted a real tabs broadcast yet or
   // the active tab still reports empty/about:blank during cold start.
   const seedTargetUrlRef = useRef(defaultTargetUrl || '');
+  // The id of the tab the session started with. The seed above describes THAT
+  // tab only — see seedForActiveTab.
+  const initialTabIdRef = useRef<number | null>(null);
   // Pending user-initiated navigation URL. When the user presses Enter in the
   // URL field, the blur handler runs immediately after but the runner hasn't
   // yet broadcast the updated tabs array — without this, the blur handler
@@ -832,9 +836,19 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     const structureChanged = prevTabs.length !== tabs.length
       || prevTabs.some((t, i) => t.id !== tabs[i].id || t.active !== tabs[i].active);
     if (urlFocused && !structureChanged && !hostChanged) return;
+    // The field belongs to the ACTIVE tab. When that changes (a new tab, a tab
+    // switch) whatever is in the box describes the tab we just left, so it must
+    // not be carried over — otherwise opening a tab from the address bar leaves
+    // the previous URL sitting there instead of the new tab's blank address.
+    const activeTabChanged = (prevTabs.find((t) => t.active)?.id ?? null)
+      !== (tabs.find((t) => t.active)?.id ?? null);
+    if (activeTabChanged) {
+      // The pending navigation also belonged to the tab we left.
+      pendingNavRef.current = '';
+    }
     // Carry an in-progress edit across the rebuild below (the input element is
     // replaced, taking its value and caret with it).
-    const keepEdit = urlFocused && prevUrl
+    const keepEdit = shouldCarryUrlEdit({ urlFocused, activeTabChanged }) && prevUrl
       ? { value: prevUrl.value, start: prevUrl.selectionStart, end: prevUrl.selectionEnd }
       : null;
     lastTabsRef.current = tabs;
@@ -900,21 +914,28 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     setIsolaTopOffset(external ? 0 : 36);
     bar.innerHTML = '';
 
-    // Fallback URL: use the seed (from session config, the URL the user
-    // typed on the landing page) when the active tab still reports a
-    // meaningless placeholder (browser cold start, first tabs broadcast
-    // before the runner has actually navigated anywhere).
-    const seed = seedTargetUrlRef.current;
+    // Fallback URL: use the seed (from session config, the URL the user typed on
+    // the landing page) for the tab the session STARTED with, while that tab
+    // still reports a meaningless placeholder (browser cold start, first tabs
+    // broadcast before the runner has navigated anywhere). A tab opened later is
+    // blank on purpose and must not inherit it.
     const activeRaw = tabs.find((t) => t.active);
-    const needsSeed = (u: string) => !u || u === 'about:blank' || u === 'chrome://newtab/' || u === 'edge://newtab/';
+    if (initialTabIdRef.current === null && tabs.length > 0) {
+      initialTabIdRef.current = tabs.reduce((min, t) => (t.id < min ? t.id : min), tabs[0].id);
+    }
+    const seed = seedForActiveTab({
+      activeTabId: activeRaw ? activeRaw.id : null,
+      initialTabId: initialTabIdRef.current,
+      seed: seedTargetUrlRef.current,
+    });
     const active = activeRaw && (activeRaw.url !== '' || !seed)
       ? activeRaw
       : (activeRaw
-          ? { ...activeRaw, url: needsSeed(activeRaw.url) && seed ? seed : activeRaw.url }
+          ? { ...activeRaw, url: isPlaceholderUrl(activeRaw.url) && seed ? seed : activeRaw.url }
           : (seed ? { id: 1, url: seed, title: '', active: true } : undefined));
     const tabsDisplay = tabs.length > 0
       ? (seed
-          ? tabs.map((t) => t.active && needsSeed(t.url) ? { ...t, url: seed } : t)
+          ? tabs.map((t) => t.active && isPlaceholderUrl(t.url) ? { ...t, url: seed } : t)
           : tabs)
       : (seed ? [active!] : []);
     for (const t of tabsDisplay) {
@@ -1106,6 +1127,10 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         const end = keepEdit.end ?? url.value.length;
         url.setSelectionRange(keepEdit.start ?? end, end);
       } catch { /* selection unsupported on this input type */ }
+    } else if (urlFocused) {
+      // The active tab changed but the field had focus: keep it there (and out of
+      // the remote page) while it shows the NEW tab's address.
+      url.focus();
     }
 
     // Autofocus ONCE — on the very first render of the viewer page, when
@@ -1276,8 +1301,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
           const arr = msg.tabs as Array<{ id: number; url: string; title: string; active: boolean }>;
           setBrowserTabs(arr);
           const activeT = arr.find((t) => t.active);
-          const placeholder = (u: string) => !u || u === 'about:blank' || u === 'chrome://newtab/' || u === 'edge://newtab/';
-          if (pendingNavRef.current && activeT && (!placeholder(activeT.url) || activeT.url === pendingNavRef.current)) {
+          if (pendingNavRef.current && activeT && (!isPlaceholderUrl(activeT.url) || activeT.url === pendingNavRef.current)) {
             pendingNavRef.current = '';
           }
           rebuildTabBar(arr);
