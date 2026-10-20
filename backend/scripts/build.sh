@@ -10,6 +10,7 @@ OUTPUT_PATH=${1:-"$BUILD_DIR/isola"}
 PACKAGE_PATH=${2:-./cmd/server}
 GO_BUILD_TAGS=${GO_BUILD_TAGS:-}
 VERSION_VALUE=${VERSION:-$(git -C "$REPO_DIR" describe --tags --always --dirty 2>/dev/null || echo dev)}
+VERSION_VALUE=${VERSION_VALUE#v}
 COMMIT_VALUE=${COMMIT:-$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)}
 BUILD_TIME_VALUE=${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 

@@ -63,4 +63,13 @@ That local file is gitignored. Session containers use the copy built in [`browse
 
 ## Version Stamps
 
-`backend/scripts/build.sh` sets `pkg/version` via `-ldflags` (`VERSION`, `COMMIT`, `BUILD_TIME`). `GET /api/config` returns those fields. Docker builds pass the same script, so `isola` is stamped the same way.
+Git tags are the source of truth. The release workflow strips the leading `v`
+from the pushed tag and stamps `pkg/version` via `-ldflags`; Docker and
+`backend/scripts/build.sh` derive the same fields from `git describe --tags`
+(which returns the nearest tag, plus commits since it when `HEAD` is untagged).
+`GET /api/config` returns `version`, `commit`, and `build_time`, and the embedded
+UI displays those backend values.
+
+There is no per-release version bump in the source tree: `pkg/version` defaults
+to `dev` for a bare `go build`, and `frontend/package.json` keeps an inert
+`0.0.0` (it is not the product version and is not shipped in the bundle).

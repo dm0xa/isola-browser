@@ -26,6 +26,13 @@ cd frontend && npm test
 `just test-unit` also runs tests for private trees when those are present; on
 this clone they are skipped.
 
+## Releasing
+
+Push a `vX.Y.Z` tag. The `release` workflow derives the binary version from the
+tag (no source-file bump is needed) and builds the platform archives plus
+`checksums.txt`; `publish-browser-image` tags the sandbox image with the pushed
+tag.
+
 ## What not to commit
 
 - `.env` and tokens (copy `.env.example`)

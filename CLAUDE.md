@@ -135,9 +135,11 @@ tree.
 - **After changing dependencies**, regenerate `NOTICE` with
   `scripts/generate-notices.mjs`.
 - **Do not rename** `cmd/single-user`, the `pkg/version` ldflags target, or the
-  `v*` tag shape — `.github/workflows/release.yml` keys off all three. Only
-  `backend/scripts/build.sh` stamps version metadata; a bare `go build` reports
-  the `1.0.0`/`unknown` defaults.
+  `v*` tag shape — `.github/workflows/release.yml` keys off all three. Git tags
+  are the version source: release builds stamp `GITHUB_REF_NAME` (minus the
+  leading `v`), Docker and `backend/scripts/build.sh` use `git describe`, and a
+  bare `go build` reports the `dev`/`unknown` defaults. Do not bump
+  `pkg/version` or `frontend/package.json` per release.
 - **Update the docs with the code.** Behavior, config, API, security, and
   deployment changes should update the matching `docs/*.md`, keeping `README.md`
   consistent with them.
