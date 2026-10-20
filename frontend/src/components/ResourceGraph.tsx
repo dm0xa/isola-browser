@@ -231,7 +231,7 @@ export function buildGraph(
   }
 
   // Pinned host is the page the user opened (the tab URL). The first document
-  // in `entries` is not that page once the 400-request window has dropped it:
+  // in `entries` is not that page once the capture window has dropped it:
   // a polling host then becomes the origin and the node swaps while idle.
   const finalRootHost = (pinnedHost || '').trim() || rootDocHost || rootHost;
 

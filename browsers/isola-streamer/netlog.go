@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -69,7 +71,36 @@ var (
 	netSeenSeq  int
 )
 
-const netMaxEntries = 400
+const (
+	// netMaxEntriesDefault is the capture window used when NET_LOG_MAX_ENTRIES
+	// is unset. It mirrors config.NetworkLogMaxEntriesDefault in the backend;
+	// the two modules are separate and cannot share the constant.
+	netMaxEntriesDefault = 1000
+	// netMaxEntriesCap bounds an operator-configured window. Entries are
+	// metadata only, but an absurd value would still let one session pin
+	// memory for its whole lifetime.
+	netMaxEntriesCap = 10000
+)
+
+// netMaxEntries reports how many network entries the capture keeps. The
+// orchestrator passes NET_LOG_MAX_ENTRIES per container from
+// session.network_log_max_entries (ISOLA_NETWORK_LOG_MAX_ENTRIES on the
+// backend). An unset or invalid value keeps the default so a session never
+// starts with an unbounded or zero window.
+func netMaxEntries() int {
+	v := os.Getenv("NET_LOG_MAX_ENTRIES")
+	if v == "" {
+		return netMaxEntriesDefault
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return netMaxEntriesDefault
+	}
+	if n > netMaxEntriesCap {
+		return netMaxEntriesCap
+	}
+	return n
+}
 
 func netMonitorTap(scope, sessionID, method string, params json.RawMessage, tab int) {
 	var p netEvent
@@ -272,7 +303,7 @@ func rememberOrder(key string) {
 		}
 	}
 	netOrder = append(netOrder, key)
-	if len(netOrder) > netMaxEntries {
+	if len(netOrder) > netMaxEntries() {
 		old := netOrder[0]
 		netOrder = netOrder[1:]
 		delete(netRequests, old)

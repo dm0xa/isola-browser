@@ -53,6 +53,13 @@ session:
   # Bigger captures OOM-kill the sandbox on a 2 GB host, so requests above
   # this box are scaled down before the container is created.
   max_resolution: "1920x1080"
+  # How many CDP network requests one session's capture window keeps. The
+  # streamer drops the oldest entries past this count, the viewer trims its
+  # buffers to the same number, and MCP get_network sees the same window.
+  # Metadata only (no bodies or headers). Values <= 0 fall back to the default;
+  # the maximum is 10000.
+  # Env: ISOLA_NETWORK_LOG_MAX_ENTRIES
+  network_log_max_entries: 1000
 
 # Concurrency: isola is multisession — each POST /api/sessions adds a session and
 # does not terminate the caller's others, and each session is a container, so RAM

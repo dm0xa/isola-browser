@@ -579,3 +579,67 @@ func TestLoadFromBrowserImage(t *testing.T) {
 		}
 	})
 }
+
+// loadDefaultConfig parses a missing YAML file, so only built-in defaults and
+// env overrides apply.
+func loadDefaultConfig(t *testing.T) *Config {
+	t.Helper()
+	cfg, err := LoadFrom(filepath.Join(t.TempDir(), "config.yaml"))
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	return cfg
+}
+
+func TestNetworkLogMaxEntriesDefaults(t *testing.T) {
+	t.Setenv("ISOLA_NETWORK_LOG_MAX_ENTRIES", "")
+	t.Setenv("NETWORK_LOG_MAX_ENTRIES", "")
+
+	cfg := loadDefaultConfig(t)
+	if cfg.NetworkLogMaxEntries != NetworkLogMaxEntriesDefault {
+		t.Fatalf("NetworkLogMaxEntries = %d, want %d", cfg.NetworkLogMaxEntries, NetworkLogMaxEntriesDefault)
+	}
+}
+
+func TestNetworkLogMaxEntriesEnv(t *testing.T) {
+	t.Setenv("ISOLA_NETWORK_LOG_MAX_ENTRIES", "2500")
+	t.Setenv("NETWORK_LOG_MAX_ENTRIES", "")
+
+	cfg := loadDefaultConfig(t)
+	if cfg.NetworkLogMaxEntries != 2500 {
+		t.Fatalf("NetworkLogMaxEntries = %d, want 2500", cfg.NetworkLogMaxEntries)
+	}
+}
+
+func TestNetworkLogMaxEntriesLegacyEnv(t *testing.T) {
+	t.Setenv("ISOLA_NETWORK_LOG_MAX_ENTRIES", "")
+	t.Setenv("NETWORK_LOG_MAX_ENTRIES", "320")
+
+	cfg := loadDefaultConfig(t)
+	if cfg.NetworkLogMaxEntries != 320 {
+		t.Fatalf("NetworkLogMaxEntries = %d, want 320", cfg.NetworkLogMaxEntries)
+	}
+}
+
+func TestNetworkLogMaxEntriesNormalized(t *testing.T) {
+	cases := []struct {
+		env  string
+		want int
+	}{
+		{"0", NetworkLogMaxEntriesDefault},
+		{"-5", NetworkLogMaxEntriesDefault},
+		{"not-a-number", NetworkLogMaxEntriesDefault},
+		{"999999", NetworkLogMaxEntriesMax},
+	}
+	for _, tc := range cases {
+		t.Run(tc.env, func(t *testing.T) {
+			t.Setenv("ISOLA_NETWORK_LOG_MAX_ENTRIES", tc.env)
+			t.Setenv("NETWORK_LOG_MAX_ENTRIES", "")
+
+			cfg := loadDefaultConfig(t)
+			if cfg.NetworkLogMaxEntries != tc.want {
+				t.Fatalf("NetworkLogMaxEntries = %d, want %d", cfg.NetworkLogMaxEntries, tc.want)
+			}
+		})
+	}
+}

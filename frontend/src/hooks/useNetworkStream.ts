@@ -2,9 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { BrowserTab, ConsoleEntry, CookieEntry, NetEntry } from '../components/IsolaNetworkPanel';
 import { cookieFromWire, mergeCookieEntry } from '../lib/cookieEntries';
+import { getNetworkLogMaxEntries } from '../lib/config';
 
-// Caps mirror the in-viewer panel so a long-lived tab cannot grow unbounded.
-const MAX_NET = 400;
+// Console and cookie caps mirror the in-viewer panel so a long-lived tab cannot
+// grow unbounded. The network cap is configurable (session.network_log_max_entries)
+// and shared with the streamer's capture window.
 const MAX_CONSOLE = 300;
 const MAX_COOKIE = 200;
 // Give up after this many consecutive failed attaches and surface a manual
@@ -122,16 +124,20 @@ export function useNetworkStream(wsUrl: string | null) {
         switch (msg.type) {
           case 'net': {
             if (!msg.e) return;
+            const max = getNetworkLogMaxEntries();
             const next = [...netRef.current, msg.e];
-            if (next.length > MAX_NET) next.splice(0, next.length - MAX_NET);
+            if (next.length > max) next.splice(0, next.length - max);
             netRef.current = next;
             setSnapshot((p) => ({ ...p, entries: next }));
             break;
           }
           case 'net_init': {
             if (!Array.isArray(msg.entries) || msg.entries.length === 0) return;
-            netRef.current = msg.entries;
-            setSnapshot((p) => ({ ...p, entries: msg.entries as NetEntry[] }));
+            const max = getNetworkLogMaxEntries();
+            const entries =
+              msg.entries.length > max ? msg.entries.slice(msg.entries.length - max) : msg.entries;
+            netRef.current = entries;
+            setSnapshot((p) => ({ ...p, entries }));
             break;
           }
           case 'console': {

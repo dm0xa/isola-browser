@@ -55,7 +55,7 @@ Every request must send `Authorization: Bearer <token>`. Session ownership is ke
 
 A `tor` session always cold-starts — the SOCKS proxy is wired at container creation, so it is never served from the [warm pool](configuration.md#warm_pool). Pinning an exit country (`tor_country`) is a strict guarantee: if no reachable exit exists in the country, the session fails to start rather than egressing elsewhere.
 
-Network data comes from the same capture as the in-viewer Network panel, but `get_network` returns the streamer's full in-memory window (up to 400 entries) with fields the UI omits or clips.
+Network data comes from the same capture as the in-viewer Network panel, but `get_network` returns the streamer's full in-memory window with fields the UI omits or clips. The window holds the most recent `session.network_log_max_entries` requests (default 1000; see [Configuration → `session`](configuration.md#session)).
 
 ### Snapshot vs screenshot
 
@@ -257,7 +257,7 @@ The socket is not only a request channel — the sandbox reports state on it as 
 | `{"type":"renderer_stall","stalled":true,"ms":...,"recoveries":...}` | The sandbox replaced a wedged renderer, or recovered from one. |
 | `{"type":"clipboard_sync","text":"..."}` | The sandbox clipboard changed (a copy happened inside the page). |
 
-The `net` / `net_init` / `console` / `cookie` pushes exist only for a session created with `network_monitor`, and on a long-lived session they cover the most recent 400 requests and 300 console lines.
+The `net` / `net_init` / `console` / `cookie` pushes exist only for a session created with `network_monitor`, and on a long-lived session they cover the most recent `session.network_log_max_entries` requests (default 1000) and 300 console lines.
 
 ### Example: headless controller (input only)
 

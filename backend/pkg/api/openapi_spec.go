@@ -200,6 +200,7 @@ func getOpenAPISpec() []byte {
           "transports": { "type": "array", "items": { "type": "object", "properties": { "value": { "type": "string" }, "label": { "type": "string" } } } },
           "default_transport": { "type": "string" },
           "tor_exit_country": { "type": "string", "description": "Default Tor exit country/countries (ISO 3166-1 alpha-2, comma-separated) applied to tor-enabled sessions; omitted when unset." },
+          "network_log_max_entries": { "type": "integer", "description": "Number of network requests retained by the session capture window; omitted when unset (default 1000)." },
           "plugins": { "type": "array" }
         }
       }

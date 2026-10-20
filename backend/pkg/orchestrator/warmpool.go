@@ -47,6 +47,10 @@ type WarmPool struct {
 	streamMode string
 	dnsServers []string
 	dnsMode    string
+	// networkLogMaxEntries is baked into every warm container: the capture
+	// window cannot be changed after launch, and a claimed container must
+	// match a cold one.
+	networkLogMaxEntries int
 
 	// injectable for tests
 	provisioner func(ctx context.Context, p WarmPoolParams) (*SessionInfo, error)
@@ -152,16 +156,17 @@ func NewWarmPool(orch *Orchestrator, cfg *config.Config) *WarmPool {
 		theme = "dark"
 	}
 	p := &WarmPool{
-		orch:       orch,
-		size:       cfg.WarmPoolSize,
-		image:      cfg.SessionImage(),
-		resolution: cfg.Resolution,
-		theme:      theme,
-		fps:        30, // handler's isola default; entrypoint caps at 25
-		streamMode: "isola",
-		dnsServers: cfg.DNSServers,
-		dnsMode:    cfg.DNSMode,
-		nower:      time.Now,
+		orch:                 orch,
+		size:                 cfg.WarmPoolSize,
+		image:                cfg.SessionImage(),
+		resolution:           cfg.Resolution,
+		theme:                theme,
+		fps:                  30, // handler's isola default; entrypoint caps at 25
+		streamMode:           "isola",
+		dnsServers:           cfg.DNSServers,
+		dnsMode:              cfg.DNSMode,
+		networkLogMaxEntries: cfg.NetworkLogMaxEntries,
+		nower:                time.Now,
 	}
 	p.provisioner = p.provisionWarm
 	p.prober = p.probeWarm
@@ -630,10 +635,11 @@ func (p *WarmPool) provisionWarm(ctx context.Context, params WarmPoolParams) (*S
 		FrameRate:    params.FPS,
 		// isola sessions always run with CDP capture on (the handler forces
 		// this for the transport); baking it in keeps claims identical.
-		NetworkMonitor: true,
-		DockerImage:    params.Image,
-		DNSMode:        p.dnsMode,
-		DNSServers:     p.dnsServers,
+		NetworkMonitor:       true,
+		NetworkLogMaxEntries: p.networkLogMaxEntries,
+		DockerImage:          params.Image,
+		DNSMode:              p.dnsMode,
+		DNSServers:           p.dnsServers,
 		// Label swap: CreateSession stamps isola.session_id; warm containers
 		// must carry isola.warm instead so the orphan sweep ignores them.
 		warmLabel: true,

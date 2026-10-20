@@ -17,7 +17,7 @@ Base URL for a local deployment: `http://localhost:8080`.
 
 | Method | Path | Auth | Description |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/api/config` | none | Client-visible feature flags and settings (resolutions, transports, version, `create_auth_required` when API token is set, `tor_exit_country` when a Tor exit-country default is configured). |
+| `GET` | `/api/config` | none | Client-visible feature flags and settings (resolutions, transports, version, `create_auth_required` when API token is set, `tor_exit_country` when a Tor exit-country default is configured, `network_log_max_entries` when a capture window is configured). |
 | `POST` | `/api/sessions` | optional bearer | Create a session. |
 | `GET` | `/api/sessions/{id}` | session | Session details, including `cdp_url`. |
 | `PATCH` | `/api/sessions/{id}` | session | Extend the session TTL. |

@@ -5,6 +5,53 @@ import (
 	"testing"
 )
 
+func TestNetMaxEntriesFromEnv(t *testing.T) {
+	cases := []struct {
+		env  string
+		want int
+	}{
+		{"", netMaxEntriesDefault},
+		{"250", 250},
+		{"1000", 1000},
+		{"0", netMaxEntriesDefault},
+		{"-5", netMaxEntriesDefault},
+		{"nope", netMaxEntriesDefault},
+		{"999999", netMaxEntriesCap},
+	}
+	for _, tc := range cases {
+		t.Setenv("NET_LOG_MAX_ENTRIES", tc.env)
+		if got := netMaxEntries(); got != tc.want {
+			t.Errorf("NET_LOG_MAX_ENTRIES=%q: netMaxEntries() = %d, want %d", tc.env, got, tc.want)
+		}
+	}
+}
+
+// TestRememberOrderEvictsAtConfiguredCap: the capture window is a rolling one —
+// the oldest key leaves both the replay order and the request map.
+func TestRememberOrderEvictsAtConfiguredCap(t *testing.T) {
+	t.Setenv("NET_LOG_MAX_ENTRIES", "2")
+
+	netMu.Lock()
+	prevRequests, prevOrder := netRequests, netOrder
+	netRequests = map[string]*netRequest{}
+	netOrder = nil
+	for _, key := range []string{"a", "b", "c"} {
+		rememberOrder(key)
+	}
+	gotOrder := append([]string(nil), netOrder...)
+	netMu.Unlock()
+
+	defer func() {
+		netMu.Lock()
+		netRequests, netOrder = prevRequests, prevOrder
+		netMu.Unlock()
+	}()
+
+	if len(gotOrder) != 2 || gotOrder[0] != "b" || gotOrder[1] != "c" {
+		t.Fatalf("netOrder = %v, want [b c]", gotOrder)
+	}
+}
+
 func TestNetMonitorStoresProtocolAndConnectionID(t *testing.T) {
 	netMu.Lock()
 	netRequests = map[string]*netRequest{}

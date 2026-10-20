@@ -98,6 +98,17 @@ const unusableCORSOrigin = "https://cors.invalid"
 // higher; this only rejects absurd input before it reaches a container.
 const maxTorExitCountries = 10
 
+// NetworkLogMaxEntriesDefault is the network capture window used when none is
+// configured. The streamer (browsers/isola-streamer/netlog.go) keeps the same
+// default independently, so the two modules stay in agreement without an
+// import between them.
+const NetworkLogMaxEntriesDefault = 1000
+
+// NetworkLogMaxEntriesMax bounds a configured window. Entries are metadata
+// only, so a high cap is cheap, but an unbounded value would still let one
+// long-lived session pin arbitrarily much memory.
+const NetworkLogMaxEntriesMax = 10000
+
 // NormalizeTorCountry validates and canonicalizes a Tor exit-country selection:
 // a comma-separated list of ISO 3166-1 alpha-2 codes ("se" or "se,no"). The
 // result is lowercased and de-duplicated so the container env and the `tor`
@@ -192,7 +203,12 @@ type Config struct {
 	// running) across the whole instance. 0 (default) = unlimited. Container RAM
 	// is the real cost, so size it against ISOLA_SESSION_MEMORY_MB and the
 	// host's memory.
-	MaxSessions          int                     `yaml:"-"`
+	MaxSessions int `yaml:"-"`
+	// NetworkLogMaxEntries is how many CDP network requests one session keeps
+	// in its capture window. The streamer drops the oldest entries past this
+	// count, the viewer trims its buffers to the same number, and MCP
+	// get_network sees the same window. Metadata only; no bodies or headers.
+	NetworkLogMaxEntries int                     `yaml:"-"`
 	Resolution           string                  `yaml:"-"`
 	ResolutionMax        string                  `yaml:"-"` // hard cap for requested resolutions (WxH)
 	WarmPoolEnabled      bool                    `yaml:"-"` // keep pre-started containers so sessions start instantly
@@ -317,6 +333,9 @@ type configFile struct {
 		InactivityMin int    `yaml:"inactivity_min"`
 		Resolution    string `yaml:"resolution"`
 		MaxResolution string `yaml:"max_resolution"` // hard cap applied to every requested resolution
+		// NetworkLogMaxEntries is the number of network requests a session's
+		// capture window retains (default 1000).
+		NetworkLogMaxEntries int `yaml:"network_log_max_entries"`
 	} `yaml:"session"`
 	WarmPool struct {
 		Enabled bool `yaml:"enabled"`
@@ -418,6 +437,7 @@ func LoadFrom(path string) (*Config, error) {
 	cfg.Session.Timer = true
 	cfg.Session.InactivityMin = 5
 	cfg.Session.Resolution = "1280x720"
+	cfg.Session.NetworkLogMaxEntries = NetworkLogMaxEntriesDefault
 	// Hard cap for launch resolutions. Bigger framebuffers are what kill the
 	// sandbox: a BGRA frame is w*h*4 bytes, and on a 2 GB host (Podman VM,
 	// small CI box) a 3456x2234 capture (30 MB/frame) OOM-kills the container
@@ -489,9 +509,12 @@ func LoadFrom(path string) (*Config, error) {
 		SessionTimer:      envOrDefaultBool("SESSION_TIMER", cfg.Session.Timer),
 		InactivityMin:     envOrDefaultInt("INACTIVITY_MIN", cfg.Session.InactivityMin),
 		MaxSessions:       envOrDefaultInt("MAX_SESSIONS", 0),
-		Resolution:        envOrDefault("RESOLUTION", cfg.Session.Resolution),
-		ResolutionMax:     envOrDefault("MAX_RESOLUTION", cfg.Session.MaxResolution),
-		WarmPoolEnabled:   envOrDefaultBool("WARM_POOL_ENABLED", cfg.WarmPool.Enabled),
+		NetworkLogMaxEntries: normalizeNetworkLogMaxEntries(
+			envOrDefaultInt("NETWORK_LOG_MAX_ENTRIES", cfg.Session.NetworkLogMaxEntries),
+		),
+		Resolution:      envOrDefault("RESOLUTION", cfg.Session.Resolution),
+		ResolutionMax:   envOrDefault("MAX_RESOLUTION", cfg.Session.MaxResolution),
+		WarmPoolEnabled: envOrDefaultBool("WARM_POOL_ENABLED", cfg.WarmPool.Enabled),
 		WarmPoolSize: func() int {
 			sz := envOrDefaultInt("WARM_POOL_SIZE", cfg.WarmPool.Size)
 			if sz < 1 {
@@ -567,6 +590,19 @@ func LoadFrom(path string) (*Config, error) {
 	cfg2.TorExitCountry = torCountry
 
 	return cfg2, nil
+}
+
+// normalizeNetworkLogMaxEntries keeps the capture window in a usable range:
+// a missing or non-positive value falls back to the default, and an absurd
+// value is capped instead of letting one session pin unbounded memory.
+func normalizeNetworkLogMaxEntries(n int) int {
+	if n <= 0 {
+		return NetworkLogMaxEntriesDefault
+	}
+	if n > NetworkLogMaxEntriesMax {
+		return NetworkLogMaxEntriesMax
+	}
+	return n
 }
 
 func envOrDefault(key, defaultVal string) string {

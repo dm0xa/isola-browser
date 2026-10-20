@@ -199,7 +199,10 @@ type CreateSessionParams struct {
 	DNSMode        string   // "plain" | "tls" | "https" — how containers resolve names
 	DNSServers     []string // plaintext resolvers passed via `docker run --dns` (empty = runtime embedded resolver)
 	NetworkMonitor bool     // isola: stream CDP network events to the viewer
-	DockerImage    string   // Docker image name (e.g. isola-browser:electron)
+	// NetworkLogMaxEntries is the capture window handed to the streamer
+	// (NET_LOG_MAX_ENTRIES). 0 leaves the streamer's own default in place.
+	NetworkLogMaxEntries int    // isola: CDP network entries retained per session
+	DockerImage          string // Docker image name (e.g. isola-browser:electron)
 	// warmLabel stamps the container with isola.warm=1 instead of a session
 	// label. Warm-pool containers are the pool's property: the orphan sweep
 	// filters on isola.session_id and must never see them. No code path may
@@ -405,6 +408,9 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 
 	if params.NetworkMonitor {
 		cmdArgs = append(cmdArgs, "-e", "NET_MONITOR=1")
+	}
+	if params.NetworkLogMaxEntries > 0 {
+		cmdArgs = append(cmdArgs, "-e", fmt.Sprintf("NET_LOG_MAX_ENTRIES=%d", params.NetworkLogMaxEntries))
 	}
 
 	// Route traffic through Tor if enabled, optionally pinned to exit

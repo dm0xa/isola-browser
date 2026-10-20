@@ -163,6 +163,12 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	// Concurrent-session cap (ISOLA_MAX_SESSIONS). 0 = unlimited. Lets the client
 	// explain a 429 instead of showing a bare error.
 	resp["max_sessions"] = h.cfg.MaxSessions
+	// Network capture window (session.network_log_max_entries), so the viewer
+	// trims its buffers to the same number the streamer keeps. Omitted when
+	// unset; the client falls back to the default.
+	if h.cfg.NetworkLogMaxEntries > 0 {
+		resp["network_log_max_entries"] = h.cfg.NetworkLogMaxEntries
+	}
 	// Tor exit-country default (tor.exit_country), so a UI can prefill it. Omitted
 	// when unset; a per-session tor_country still overrides it.
 	if h.cfg.TorExitCountry != "" {
@@ -384,9 +390,13 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 				// later and still see the full traffic history (container env can't
 				// be changed after launch).
 				NetworkMonitor: true,
-				DockerImage:    h.cfg.SessionImage(),
-				DNSMode:        h.cfg.DNSMode,
-				DNSServers:     h.cfg.DNSServers,
+				// Capture window: the streamer drops the oldest entries past this
+				// count and the viewer trims to the same number. Baked in at launch
+				// because container env cannot change afterwards.
+				NetworkLogMaxEntries: h.cfg.NetworkLogMaxEntries,
+				DockerImage:          h.cfg.SessionImage(),
+				DNSMode:              h.cfg.DNSMode,
+				DNSServers:           h.cfg.DNSServers,
 			})
 			if err != nil {
 				log.Printf("create session: orchestrator error: %v", err)

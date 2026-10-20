@@ -1,6 +1,7 @@
 import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import type { ConsoleEntry, CookieEntry, NetEntry } from '../../components/IsolaNetworkPanel';
 import { cookieFromWire, mergeCookieEntry } from '../../lib/cookieEntries';
+import { getNetworkLogMaxEntries } from '../../lib/config';
 
 export function useIsolaMonitorEvents(
   netEntriesRef: MutableRefObject<NetEntry[]>,
@@ -14,8 +15,9 @@ export function useIsolaMonitorEvents(
     const onNet = (e: Event) => {
       const entry = (e as CustomEvent<NetEntry>).detail;
       if (!entry) return;
+      const max = getNetworkLogMaxEntries();
       const next = [...netEntriesRef.current, entry];
-      if (next.length > 400) next.splice(0, next.length - 400);
+      if (next.length > max) next.splice(0, next.length - max);
       netEntriesRef.current = next;
       setNetEntries(next);
     };
@@ -41,8 +43,10 @@ export function useIsolaMonitorEvents(
     const onNetInit = (e: Event) => {
       const entries = (e as CustomEvent<NetEntry[]>).detail;
       if (!Array.isArray(entries) || entries.length === 0) return;
-      netEntriesRef.current = entries;
-      setNetEntries(entries);
+      const max = getNetworkLogMaxEntries();
+      const trimmed = entries.length > max ? entries.slice(entries.length - max) : entries;
+      netEntriesRef.current = trimmed;
+      setNetEntries(trimmed);
     };
     const onNetClear = () => {
       netEntriesRef.current = [];
