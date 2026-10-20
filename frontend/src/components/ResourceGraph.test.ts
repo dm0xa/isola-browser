@@ -1,7 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createElement } from 'react';
 
 import { graphOriginHost, type BrowserTab, type NetEntry } from './IsolaNetworkPanel';
-import { buildGraph, focusEmphasis, layoutGraph, type LayoutNode } from './ResourceGraph';
+import {
+  applyExpansion,
+  buildGraph,
+  EMPTY_EXPANSION,
+  focusEmphasis,
+  GROUP_PREVIEW,
+  layoutGraph,
+  ResourceGraph,
+  type LayoutNode,
+} from './ResourceGraph';
 
 const tab = (id: number, url: string, active = false): BrowserTab => ({ id, url, title: '', active });
 const entry = (url: string, t = 'XHR'): NetEntry => ({ id: url, url, m: 'GET', s: 200, t });
@@ -59,6 +70,21 @@ describe('focusEmphasis', () => {
     // A sibling resource is not on the path back to the entry.
     expect(emphasis.edges.has('cdn->other-img')).toBe(false);
     expect(emphasis.nodes.has('res:other.jpg')).toBe(false);
+  });
+
+  it('keeps a host → type group → resource path lit', () => {
+    const edges = [
+      { id: 'root', from: 'root:request', to: 'host:example.com' },
+      { id: 'host-group', from: 'host:example.com', to: 'grp:host:example.com:script' },
+      { id: 'group-res', from: 'grp:host:example.com:script', to: 'res:https://example.com/app.js' },
+    ];
+
+    const emphasis = focusEmphasis('res:https://example.com/app.js', edges);
+
+    expect(emphasis.edges.has('host-group')).toBe(true);
+    expect(emphasis.edges.has('group-res')).toBe(true);
+    expect(emphasis.nodes.has('grp:host:example.com:script')).toBe(true);
+    expect(emphasis.nodes.has('host:example.com')).toBe(true);
   });
 });
 
@@ -132,6 +158,129 @@ function resourceClassesFor(g: ReturnType<typeof buildGraph>): string[] {
   return g.nodes.filter((n) => n.kind === 'resource').map((n) => n.resourceClass as string).sort();
 }
 
+describe('applyExpansion', () => {
+  const entries = [
+    entry('https://example.com/', 'Document'),
+    entry('https://example.com/app.js', 'Script'),
+    entry('https://example.com/vendor.js', 'Script'),
+    entry('https://cdn.example.com/logo.png', 'Image'),
+  ];
+  const full = buildGraph(entries, 'example.com');
+
+  it('shows only host cards until a host is opened', () => {
+    const g = applyExpansion(full, EMPTY_EXPANSION);
+    expect(g.nodes.some((n) => n.kind === 'resource')).toBe(false);
+    expect(g.nodes.find((n) => n.id === 'host:example.com')?.resourceCount).toBe(3);
+  });
+
+  it('opens a host into one row per resource class', () => {
+    const g = applyExpansion(full, {
+      hosts: new Set(['host:example.com']),
+      groups: new Set(),
+      all: new Set(),
+    });
+    const groups = g.nodes.filter((n) => n.kind === 'group');
+    expect(groups.map((n) => [n.resourceClass, n.count])).toEqual([
+      ['document', 1],
+      ['script', 2],
+    ]);
+    expect(g.edges.filter((e) => e.to.startsWith('grp:')).length).toBe(2);
+    // The class rows are still closed: no resource leaves are drawn yet.
+    expect(g.nodes.some((n) => n.kind === 'resource')).toBe(false);
+  });
+
+  it('opens a class into a bounded preview plus a more row', () => {
+    const many = Array.from({ length: GROUP_PREVIEW + 8 }, (_, i) =>
+      entry(`https://example.com/app-${i}.js`, 'Script'));
+    const origin = buildGraph(many, 'example.com');
+    const hostId = 'host:example.com';
+    const gid = 'grp:host:example.com:script';
+
+    const preview = applyExpansion(origin, {
+      hosts: new Set([hostId]),
+      groups: new Set([gid]),
+      all: new Set(),
+    });
+    expect(preview.nodes.filter((n) => n.kind === 'resource')).toHaveLength(GROUP_PREVIEW);
+    const more = preview.nodes.find((n) => n.kind === 'more');
+    expect(more?.count).toBe(8);
+    expect(more?.moreAction).toBe('expand');
+
+    const all = applyExpansion(origin, {
+      hosts: new Set([hostId]),
+      groups: new Set([gid]),
+      all: new Set([gid]),
+    });
+    expect(all.nodes.filter((n) => n.kind === 'resource')).toHaveLength(GROUP_PREVIEW + 8);
+    expect(all.nodes.find((n) => n.kind === 'more')?.moreAction).toBe('collapse');
+  });
+
+  it('lifts failed resources to the front and counts them on the group', () => {
+    const failed = [
+      { ...entry('https://example.com/a.js', 'Script'), f: true },
+      entry('https://example.com/b.js', 'Script'),
+    ];
+    const origin = buildGraph(failed, 'example.com');
+    const g = applyExpansion(origin, {
+      hosts: new Set(['host:example.com']),
+      groups: new Set(['grp:host:example.com:script']),
+      all: new Set(),
+    });
+    expect(g.nodes.find((n) => n.id === 'grp:host:example.com:script')?.failedCount).toBe(1);
+    expect(g.nodes.filter((n) => n.kind === 'resource')[0].id)
+      .toBe('res:https://example.com/a.js');
+  });
+
+  it('orders equal-count resources by most recent', () => {
+    const timed = [
+      { ...entry('https://example.com/old.js', 'Script'), ts: 100 },
+      { ...entry('https://example.com/new.js', 'Script'), ts: 200 },
+    ];
+    const origin = buildGraph(timed, 'example.com');
+    const g = applyExpansion(origin, {
+      hosts: new Set(['host:example.com']),
+      groups: new Set(['grp:host:example.com:script']),
+      all: new Set(),
+    });
+    expect(g.nodes.filter((n) => n.kind === 'resource')[0].id)
+      .toBe('res:https://example.com/new.js');
+  });
+});
+
+describe('layoutGraph wrapping', () => {
+  const many = Array.from({ length: 60 }, (_, i) => entry(`https://example.com/f-${i}.js`, 'Script'));
+  const full = buildGraph(many, 'example.com');
+  const expanded = applyExpansion(full, {
+    hosts: new Set(['host:example.com']),
+    groups: new Set(['grp:host:example.com:script']),
+    all: new Set(['grp:host:example.com:script']),
+  });
+
+  it('wraps a long sibling run into sub-columns and bounds the cross axis', () => {
+    const { columns, totalH } = layoutGraph(expanded, 800, 400);
+    expect(columns.filter((c) => c.depth === 3).length).toBeGreaterThan(1);
+    expect(totalH).toBeLessThan(800);
+  });
+
+  it('keeps the entry point at the top instead of centring it', () => {
+    const { nodes } = layoutGraph(expanded, 800, 400);
+    const root = nodes.find((n) => n.id === 'root:request')!;
+    expect(root.y).toBeLessThan(60);
+  });
+
+  it('does not overlap nodes inside a wrapped sub-column', () => {
+    const { nodes, columns } = layoutGraph(expanded, 800, 400);
+    for (const col of columns.filter((c) => c.depth === 3)) {
+      const inside = nodes
+        .filter((n) => n.depth === 3 && n.x >= col.x && n.x < col.x + col.w)
+        .sort((a, b) => a.y - b.y);
+      for (let i = 1; i < inside.length; i++) {
+        expect(inside[i].y).toBeGreaterThanOrEqual(inside[i - 1].y + inside[i - 1].h);
+      }
+    }
+  });
+});
+
 describe('graphOriginHost', () => {
   it('uses the active tab, not a background one', () => {
     const host = graphOriginHost(
@@ -151,5 +300,77 @@ describe('graphOriginHost', () => {
 
   it('ignores a blank tab', () => {
     expect(graphOriginHost([tab(1, 'about:blank', true)], '')).toBe('');
+  });
+});
+
+// The tooltip's copy buttons used to lose their click to the canvas' pointer
+// capture, and a hover-only card vanished before the pointer could reach them.
+// Pinning the node keeps the card open here; the pointerdown assertion covers
+// the capture path.
+describe('tooltip copy buttons', () => {
+  const sha = 'abcdef0123456789abcdef0123456789abcdef01';
+  const url = 'https://example.com/assets/app.js';
+
+  beforeEach(() => {
+    // The graph measures its container; jsdom has no ResizeObserver.
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+  });
+
+  afterEach(() => {
+    // Renders are not auto-cleaned (vitest runs without `globals`).
+    cleanup();
+    vi.unstubAllGlobals();
+    delete (HTMLElement.prototype as unknown as Record<string, unknown>).setPointerCapture;
+    delete (navigator as unknown as Record<string, unknown>).clipboard;
+  });
+
+  const renderPinned = () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const capture = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'setPointerCapture', { value: capture, configurable: true });
+
+    const view = render(createElement(ResourceGraph, {
+      entries: [{ id: 'r1', url, m: 'GET', s: 200, t: 'Script', h: sha }],
+      originHost: 'example.com',
+    }));
+
+    // A single type facet bypasses the summary grouping, so the resource card
+    // itself is on screen and can be pinned.
+    fireEvent.click(screen.getByTitle('Show only Script'));
+    const node = [...view.container.querySelectorAll('g[data-node]')]
+      .find((g) => g.textContent?.includes('app.js'));
+    expect(node).toBeTruthy();
+    fireEvent.click(node!);
+
+    return { writeText, capture };
+  };
+
+  it('copies the full URL', async () => {
+    const { writeText, capture } = renderPinned();
+    const button = screen.getByTitle('Copy URL');
+
+    fireEvent.pointerDown(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(url));
+    expect(capture).not.toHaveBeenCalled();
+    expect(button).toHaveTextContent('✓');
+  });
+
+  it('copies the full SHA-1', async () => {
+    const { writeText, capture } = renderPinned();
+    const button = screen.getByTitle('Copy SHA-1');
+
+    fireEvent.pointerDown(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(sha));
+    expect(capture).not.toHaveBeenCalled();
+    expect(button).toHaveTextContent('✓');
   });
 });

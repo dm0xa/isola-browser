@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { NetEntry } from './IsolaNetworkPanel';
 import { analyze } from './IsolaNetworkPanel';
 import { copyToClipboard } from '../lib/clipboard';
@@ -23,7 +23,7 @@ import {
 
 export type { ResourceClass };
 
-export type GraphNodeKind = 'root' | 'host' | 'resource';
+export type GraphNodeKind = 'root' | 'host' | 'group' | 'resource' | 'more';
 
 export interface GraphNode {
   id: string;
@@ -33,8 +33,17 @@ export interface GraphNode {
   resourceClass?: ResourceClass;
   fullUrl?: string;
   count: number;
+  /** Distinct resources under a host (or inside a type group). */
+  resourceCount?: number;
+  /** Distinct failed / flagged resources under a host or group. */
+  failedCount?: number;
+  flaggedCount?: number;
   flagged: boolean;
   failed: boolean;
+  /** The action a `more` row performs. */
+  moreAction?: 'expand' | 'collapse';
+  /** Latest capture timestamp for a resource; orders the preview by recency. */
+  lastTs?: number;
   /** Hex SHA-1 of the file's content, once the streamer has hashed it. */
   sha1?: string;
 }
@@ -197,31 +206,50 @@ export function buildGraph(
   for (const e of included) {
     const { host, flags } = analyze(e.url);
     const rClass = classifyResource(e.t || '', e.url);
+    const entryFlagged = Object.values(flags).some(Boolean);
+    const entryFailed = !!e.f;
 
     const hid = hostId(host);
     if (!nodes.has(hid)) {
       nodes.set(hid, {
         id: hid, kind: 'host', label: host, host,
-        count: 0, flagged: false, failed: false,
+        count: 0, resourceCount: 0, failedCount: 0, flaggedCount: 0,
+        flagged: false, failed: false,
       });
     }
     const hNode = nodes.get(hid)!;
     hNode.count++;
-    if (Object.values(flags).some(Boolean)) hNode.flagged = true;
+    if (entryFlagged) hNode.flagged = true;
+    if (entryFailed) hNode.failed = true;
 
     const rid = resourceId(e.url);
     if (!nodes.has(rid)) {
       const path = (() => { try { const u = new URL(e.url); const parts = u.pathname.split('/').filter(Boolean); return parts.pop() || u.hostname; } catch { return e.url.slice(0, 60); } })();
-      nodes.set(rid, {
+      const resource: GraphNode = {
         id: rid, kind: 'resource', label: path, host, fullUrl: e.url, resourceClass: rClass,
-        count: 1, flagged: Object.values(flags).some(Boolean), failed: !!e.f,
+        count: 1, flagged: entryFlagged, failed: entryFailed,
+        lastTs: e.ts,
         sha1: e.h,
-      });
+      };
+      nodes.set(rid, resource);
+      hNode.resourceCount = (hNode.resourceCount || 0) + 1;
+      if (resource.flagged) hNode.flaggedCount = (hNode.flaggedCount || 0) + 1;
+      if (resource.failed) hNode.failedCount = (hNode.failedCount || 0) + 1;
     } else {
       const r = nodes.get(rid)!;
       r.count++;
-      if (e.f) r.failed = true;
+      if (entryFailed && !r.failed) {
+        r.failed = true;
+        hNode.failed = true;
+        hNode.failedCount = (hNode.failedCount || 0) + 1;
+      }
+      if (entryFlagged && !r.flagged) {
+        r.flagged = true;
+        hNode.flagged = true;
+        hNode.flaggedCount = (hNode.flaggedCount || 0) + 1;
+      }
       if (!r.sha1 && e.h) r.sha1 = e.h;
+      if (e.ts && (!r.lastTs || e.ts > r.lastTs)) r.lastTs = e.ts;
     }
 
     const edgeIdH = `${hid}->${rid}`;
@@ -242,14 +270,18 @@ export function buildGraph(
   if (finalRootHost && !nodes.has(hostId(finalRootHost))) {
     nodes.set(hostId(finalRootHost), {
       id: hostId(finalRootHost), kind: 'host', label: finalRootHost, host: finalRootHost,
-      count: 0, flagged: false, failed: false,
+      count: 0, resourceCount: 0, failedCount: 0, flaggedCount: 0, flagged: false, failed: false,
     });
   }
 
   if (finalRootHost) {
+    const resources = [...nodes.values()].filter((n) => n.kind === 'resource');
+    const failedCount = resources.filter((n) => n.failed).length;
+    const flaggedCount = resources.filter((n) => n.flagged).length;
     nodes.set(ROOT_NODE_ID, {
       id: ROOT_NODE_ID, kind: 'root', label: '[request]', host: '',
-      count: included.length, flagged: false, failed: false,
+      count: included.length, resourceCount: resources.length, failedCount, flaggedCount,
+      flagged: flaggedCount > 0, failed: failedCount > 0,
     });
     const rootEdgeId = `${ROOT_NODE_ID}->${hostId(finalRootHost)}`;
     edges.set(rootEdgeId, { id: rootEdgeId, from: ROOT_NODE_ID, to: hostId(finalRootHost), direct: false });
@@ -289,6 +321,146 @@ export function buildGraph(
     edges: Array.from(edges.values()),
     rootId,
     originId,
+  };
+}
+
+/** Resource rows shown before a type group offers “show all”. */
+export const GROUP_PREVIEW = 12;
+
+export interface GraphExpansion {
+  /** Host node ids expanded into type groups. */
+  hosts: ReadonlySet<string>;
+  /** Group node ids expanded into resource rows. */
+  groups: ReadonlySet<string>;
+  /** Group node ids whose full resource list is shown instead of the preview. */
+  all: ReadonlySet<string>;
+}
+
+export const EMPTY_EXPANSION: GraphExpansion = {
+  hosts: new Set(),
+  groups: new Set(),
+  all: new Set(),
+};
+
+const groupNodeId = (hostId: string, cls: ResourceClass) => `grp:${hostId}:${cls}`;
+const moreNodeId = (hostId: string, cls: ResourceClass) => `more:${hostId}:${cls}`;
+
+function compareResources(a: GraphNode, b: GraphNode): number {
+  if (a.failed !== b.failed) return a.failed ? -1 : 1;
+  if (a.flagged !== b.flagged) return a.flagged ? -1 : 1;
+  if (a.count !== b.count) return b.count - a.count;
+  if ((a.lastTs || 0) !== (b.lastTs || 0)) return (b.lastTs || 0) - (a.lastTs || 0);
+  return a.label.localeCompare(b.label);
+}
+
+/**
+ * Summary-first view of the full graph.
+ *
+ * Every host is reduced to its card until the user opens it; an open host
+ * reveals one row per resource class, and an open class reveals a bounded
+ * preview of its resources plus an explicit “more” row. This keeps the
+ * cross-axis of the layered layout proportional to what the user asked to
+ * see, not to the request count of a polling site.
+ */
+export function applyExpansion(full: GraphData, expansion: GraphExpansion): GraphData {
+  if (full.nodes.length === 0) return full;
+
+  const hosts = full.nodes.filter((n) => n.kind === 'host');
+  const resourcesByHost = new Map<string, GraphNode[]>();
+  for (const n of full.nodes) {
+    if (n.kind !== 'resource') continue;
+    const list = resourcesByHost.get(n.host);
+    if (list) list.push(n);
+    else resourcesByHost.set(n.host, [n]);
+  }
+
+  const nodes = new Map<string, GraphNode>();
+  const edges = new Map<string, GraphEdge>();
+
+  // Root and host cards are always present. Host→host trigger edges survive
+  // because they describe the chain, not the leaves.
+  for (const n of full.nodes) {
+    if (n.kind === 'root' || n.kind === 'host') nodes.set(n.id, n);
+  }
+  for (const e of full.edges) {
+    if (nodes.has(e.from) && nodes.has(e.to)) edges.set(e.id, e);
+  }
+
+  for (const host of hosts) {
+    if (!expansion.hosts.has(host.id)) continue;
+    const resources = resourcesByHost.get(host.host) || [];
+    if (resources.length === 0) continue;
+
+    const byClass = new Map<ResourceClass, GraphNode[]>();
+    for (const r of resources) {
+      const cls = r.resourceClass || 'other';
+      const list = byClass.get(cls);
+      if (list) list.push(r);
+      else byClass.set(cls, [r]);
+    }
+
+    for (const cls of CLASS_ORDER) {
+      const list = byClass.get(cls);
+      if (!list || list.length === 0) continue;
+      const sorted = [...list].sort(compareResources);
+      const gid = groupNodeId(host.id, cls);
+      const open = expansion.groups.has(gid);
+      const showAll = expansion.all.has(gid);
+      const failedCount = sorted.filter((r) => r.failed).length;
+      const flaggedCount = sorted.filter((r) => r.flagged).length;
+
+      nodes.set(gid, {
+        id: gid,
+        kind: 'group',
+        label: CLASS_NAME[cls],
+        host: host.host,
+        resourceClass: cls,
+        count: sorted.length,
+        resourceCount: sorted.length,
+        failedCount,
+        flaggedCount,
+        flagged: flaggedCount > 0,
+        failed: failedCount > 0,
+      });
+      const groupEdgeId = `${host.id}->${gid}`;
+      edges.set(groupEdgeId, { id: groupEdgeId, from: host.id, to: gid, direct: true });
+      if (!open) continue;
+
+      const shown = showAll ? sorted : sorted.slice(0, GROUP_PREVIEW);
+      for (const r of shown) {
+        nodes.set(r.id, r);
+        const edgeId = `${gid}->${r.id}`;
+        edges.set(edgeId, { id: edgeId, from: gid, to: r.id, direct: true });
+      }
+
+      if (sorted.length > GROUP_PREVIEW) {
+        const mid = moreNodeId(host.id, cls);
+        const rest = sorted.slice(GROUP_PREVIEW);
+        nodes.set(mid, showAll
+          ? {
+            id: mid, kind: 'more', label: `show top ${GROUP_PREVIEW}`, host: host.host,
+            resourceClass: cls, count: GROUP_PREVIEW, moreAction: 'collapse',
+            failedCount: 0, flaggedCount: 0, flagged: false, failed: false,
+          }
+          : {
+            id: mid, kind: 'more', label: `+${rest.length} more`, host: host.host,
+            resourceClass: cls, count: rest.length, moreAction: 'expand',
+            failedCount: rest.filter((r) => r.failed).length,
+            flaggedCount: rest.filter((r) => r.flagged).length,
+            flagged: rest.some((r) => r.flagged),
+            failed: rest.some((r) => r.failed),
+          });
+        const moreEdgeId = `${gid}->${mid}`;
+        edges.set(moreEdgeId, { id: moreEdgeId, from: gid, to: mid, direct: false });
+      }
+    }
+  }
+
+  return {
+    nodes: [...nodes.values()],
+    edges: [...edges.values()],
+    rootId: full.rootId,
+    originId: full.originId,
   };
 }
 
@@ -356,41 +528,66 @@ export interface LayoutColumn {
   w: number;
   top: number;
   bottom: number;
+  /** Only the first sub-column of a wrapped band carries the depth label. */
+  label: boolean;
 }
 
 const HOST_H = 40;
 const RES_H = 30;
+const GROUP_H = 30;
+const MORE_H = 26;
 const HOST_BASE_W = 180;
 const RES_BASE_W = 200;
+const GROUP_BASE_W = 160;
 const ROOT_W = 148;
 const COL_GAP = 92;
+const SUB_COL_GAP = 30;
 const ROW_GAP = 10;
 const CH_PX = 6.8;
 const PAD_X = 28;
 
-function estimateHostWidth(label: string, count: number, flagged: boolean, failed: boolean): number {
-  const badge = 16 + 8;
-  const cnt = (count > 1 ? 28 : 0) + (flagged ? 18 : 0) + (failed ? 18 : 0);
-  const textW = Math.min(28, label.length) * CH_PX + PAD_X + badge + cnt;
+function estimateHostWidth(n: GraphNode): number {
+  // Label starts at x=45. From the right edge: count badge 38, chevron 16,
+  // failure / flag badges 22 each, plus breathing room.
+  const controls = 38
+    + (n.resourceCount ? 16 : 0)
+    + (n.failedCount ? 22 : 0)
+    + (n.flaggedCount ? 22 : 0)
+    + 8;
+  const textW = 45 + Math.min(30, n.label.length) * CH_PX + controls;
   return Math.max(HOST_BASE_W, Math.round(textW));
 }
 
-function estimateResWidth(label: string, _cls: ResourceClass, count: number, flagged: boolean, failed: boolean): number {
+function estimateResWidth(n: GraphNode): number {
   const badge = 40;
-  const cnt = (count > 1 ? 28 : 0) + (flagged ? 16 : 0) + (failed ? 16 : 0);
-  const textW = Math.min(26, label.length) * CH_PX + PAD_X + badge + cnt;
+  const cnt = (n.count > 1 ? 28 : 0) + (n.flagged ? 16 : 0) + (n.failed ? 16 : 0);
+  const textW = Math.min(26, n.label.length) * CH_PX + PAD_X + badge + cnt;
   return Math.max(RES_BASE_W, Math.round(textW));
+}
+
+function estimateGroupWidth(n: GraphNode): number {
+  // Label starts at x=29. The right side holds the count, chevron and badges.
+  const controls = 38 + 16 + (n.failedCount ? 25 : 0) + (n.flaggedCount ? 25 : 0) + 8;
+  const textW = 29 + Math.min(18, n.label.length) * CH_PX + controls;
+  return Math.max(GROUP_BASE_W, Math.round(textW));
+}
+
+function estimateMoreWidth(n: GraphNode): number {
+  const textW = 12 + Math.min(24, n.label.length) * CH_PX + 20 + (n.failed ? 16 : 0) + 8;
+  return Math.max(132, Math.round(textW));
 }
 
 /** Box size for a node — the synthetic root uses its own fixed chip size. */
 function nodeSize(n: GraphNode): { w: number; h: number } {
   if (n.kind === 'root') return { w: ROOT_W, h: HOST_H };
-  if (n.kind === 'host') return { w: estimateHostWidth(n.label, n.count, n.flagged, n.failed), h: HOST_H };
-  return { w: estimateResWidth(n.label, n.resourceClass || 'other', n.count, n.flagged, n.failed), h: RES_H };
+  if (n.kind === 'host') return { w: estimateHostWidth(n), h: HOST_H };
+  if (n.kind === 'group') return { w: estimateGroupWidth(n), h: GROUP_H };
+  if (n.kind === 'more') return { w: estimateMoreWidth(n), h: MORE_H };
+  return { w: estimateResWidth(n), h: RES_H };
 }
 
-/** Column order within a depth: root first, then hosts, then resources. */
-const KIND_RANK: Record<GraphNodeKind, number> = { root: 0, host: 1, resource: 2 };
+/** Column order within a depth: root, hosts, type groups, resources, “more”. */
+const KIND_RANK: Record<GraphNodeKind, number> = { root: 0, host: 1, group: 2, resource: 3, more: 4 };
 
 function computeDepths(data: GraphData): Map<string, number> {
   const depths = new Map<string, number>();
@@ -436,8 +633,8 @@ export type LayoutDirection = 'horizontal' | 'vertical';
 
 export function layoutGraph(
   data: GraphData,
-  _width: number,
-  _height: number,
+  width: number,
+  height: number,
   direction: LayoutDirection = 'horizontal',
 ): { nodes: LayoutNode[]; edges: LayoutEdge[]; columns: LayoutColumn[]; totalW: number; totalH: number } {
   const layoutNodes: LayoutNode[] = [];
@@ -448,6 +645,12 @@ export function layoutGraph(
   // The two modes are transposes of each other: `depth` always advances along
   // the flow axis, and a depth's siblings always spread across the other one.
   const vertical = direction === 'vertical';
+
+  // A depth's siblings used to form one unbounded column. A host with 165
+  // resources produced a 6 600 px rail that no zoom level could fit, so long
+  // sibling runs now wrap into sub-columns at about two viewports of cross-axis
+  // length. Both axes carry the graph and “fit” becomes meaningful again.
+  const crossLimit = Math.max(300, (vertical ? width * 1.35 : height * 1.7));
 
   const depths = computeDepths(data);
   const byDepth = new Map<number, GraphNode[]>();
@@ -462,8 +665,8 @@ export function layoutGraph(
 
   const nodeMap = new Map<string, LayoutNode>();
 
-  // Each depth is a band. `thickness` is measured along the flow axis (its
-  // biggest node), `cross` is the room its siblings need across it.
+  // Each depth is a band. `thickness` is its biggest node along the flow axis;
+  // `chunks` hold the siblings that fit across the cross axis.
   const bands = depthKeys.map((d) => {
     const list = byDepth.get(d) || [];
     list.sort((a, b) => {
@@ -471,53 +674,74 @@ export function layoutGraph(
       if (a.host !== b.host) return a.host.localeCompare(b.host);
       return b.count - a.count;
     });
-    let thickness = 0;
-    let cross = -ROW_GAP;
-    for (const n of list) {
-      const { w, h } = nodeSize(n);
-      thickness = Math.max(thickness, vertical ? h : w);
-      cross += (vertical ? w : h) + ROW_GAP;
+    const measured = list.map((n) => ({ n, ...nodeSize(n) }));
+    const thickness = Math.max(0, ...measured.map((m) => (vertical ? m.h : m.w)));
+
+    const chunks: Array<typeof measured> = [];
+    let current: typeof measured = [];
+    let currentCross = -ROW_GAP;
+    for (const m of measured) {
+      const crossSize = vertical ? m.w : m.h;
+      if (current.length > 0 && currentCross + ROW_GAP + crossSize > crossLimit) {
+        chunks.push(current);
+        current = [];
+        currentCross = -ROW_GAP;
+      }
+      current.push(m);
+      currentCross += ROW_GAP + crossSize;
     }
-    return { depth: d, list, thickness, cross };
+    if (current.length > 0) chunks.push(current);
+    const chunkCross = chunks.map((chunk) => chunk.reduce(
+      (sum, m, i) => sum + (vertical ? m.w : m.h) + (i > 0 ? ROW_GAP : 0),
+      0,
+    ));
+
+    return { depth: d, chunks, chunkCross, thickness };
   });
 
-  // Every band is centred on the widest/tallest of them.
-  const crossTotal = Math.max(...bands.map((b) => b.cross), 60);
+  // Bands are anchored to the top/left, not centred on the longest band: the
+  // entry point must stay in view when one band is thousands of pixels long.
+  const maxNodeCross = Math.max(60, ...bands.flatMap((b) => b.chunkCross));
+  const crossTotal = maxNodeCross + 60;
+
   let cursor = 24;
   const offsets: number[] = [];
   for (const b of bands) {
     offsets.push(cursor);
-    cursor += b.thickness + COL_GAP;
+    const subColumns = Math.max(1, b.chunks.length);
+    cursor += b.thickness * subColumns + SUB_COL_GAP * (subColumns - 1) + COL_GAP;
   }
   const spanTotal = cursor - COL_GAP + 24;
 
   const columns: LayoutColumn[] = [];
 
   bands.forEach((b, di) => {
-    let crossPos = Math.max(30, (crossTotal - b.cross) / 2);
-    let left = Infinity;
-    let top = Infinity;
-    let right = -Infinity;
-    let bottom = -Infinity;
-    for (const n of b.list) {
-      const { w, h } = nodeSize(n);
-      const along = offsets[di] + (b.thickness - (vertical ? h : w)) / 2;
-      const x = vertical ? crossPos : along;
-      const y = vertical ? along : crossPos;
-      const ln: LayoutNode = { id: n.id, x, y, w, h, node: n, depth: b.depth };
-      nodeMap.set(n.id, ln);
-      layoutNodes.push(ln);
-      left = Math.min(left, x);
-      top = Math.min(top, y);
-      right = Math.max(right, x + w);
-      bottom = Math.max(bottom, y + h);
-      crossPos += (vertical ? w : h) + ROW_GAP;
-    }
-    columns.push(
-      vertical
-        ? { depth: b.depth, x: left, w: right - left, top: offsets[di], bottom: offsets[di] + b.thickness }
-        : { depth: b.depth, x: offsets[di], w: b.thickness, top, bottom },
-    );
+    b.chunks.forEach((chunk, ci) => {
+      const chunkOffset = offsets[di] + ci * (b.thickness + SUB_COL_GAP);
+      let crossPos = 30;
+      let left = Infinity;
+      let top = Infinity;
+      let right = -Infinity;
+      let bottom = -Infinity;
+      for (const m of chunk) {
+        const along = chunkOffset + (b.thickness - (vertical ? m.h : m.w)) / 2;
+        const x = vertical ? crossPos : along;
+        const y = vertical ? along : crossPos;
+        const ln: LayoutNode = { id: m.n.id, x, y, w: m.w, h: m.h, node: m.n, depth: b.depth };
+        nodeMap.set(m.n.id, ln);
+        layoutNodes.push(ln);
+        left = Math.min(left, x);
+        top = Math.min(top, y);
+        right = Math.max(right, x + m.w);
+        bottom = Math.max(bottom, y + m.h);
+        crossPos += (vertical ? m.w : m.h) + ROW_GAP;
+      }
+      columns.push(
+        vertical
+          ? { depth: b.depth, x: left, w: right - left, top: chunkOffset, bottom: chunkOffset + b.thickness, label: ci === 0 }
+          : { depth: b.depth, x: chunkOffset, w: b.thickness, top, bottom, label: ci === 0 },
+      );
+    });
   });
 
   for (const e of data.edges) {
@@ -528,7 +752,7 @@ export function layoutGraph(
   }
 
   return vertical
-    ? { nodes: layoutNodes, edges: layoutEdges, columns, totalW: crossTotal + 48, totalH: spanTotal }
+    ? { nodes: layoutNodes, edges: layoutEdges, columns, totalW: crossTotal, totalH: spanTotal }
     : { nodes: layoutNodes, edges: layoutEdges, columns, totalW: spanTotal, totalH: crossTotal };
 }
 
@@ -537,6 +761,37 @@ const Z_MAX = 4;
 const clampZ = (z: number) => Math.max(Z_MIN, Math.min(Z_MAX, z));
 
 const LS_GRAPH_DIRECTION = 'isola-graph-direction';
+const LS_GRAPH_EXPANSION = 'isola-graph-expansion';
+const LOD_ZOOM = 0.55;
+const READABLE_ZOOM = 0.75;
+
+function readGraphExpansion(): GraphExpansion {
+  try {
+    const raw = localStorage.getItem(LS_GRAPH_EXPANSION);
+    if (!raw) return { hosts: new Set(), groups: new Set(), all: new Set() };
+    const parsed = JSON.parse(raw) as { hosts?: unknown; groups?: unknown };
+    const toSet = (v: unknown): ReadonlySet<string> => new Set(
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [],
+    );
+    return { hosts: toSet(parsed.hosts), groups: toSet(parsed.groups), all: new Set() };
+  } catch {
+    return { hosts: new Set(), groups: new Set(), all: new Set() };
+  }
+}
+
+function toggled(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
+  const next = new Set(set);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  return next;
+}
+
+function removed(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
+  if (!set.has(id)) return set;
+  const next = new Set(set);
+  next.delete(id);
+  return next;
+}
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -599,7 +854,9 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [size, setSize] = useState({ w: 800, h: 500 });
+  const [measured, setMeasured] = useState(false);
   const [hoverId, setHoverId] = useState<string | null>(null);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // A hover tooltip must outlive the pointer leaving the node by enough to
   // cross the gap into the card, or its copy buttons vanish before the
@@ -626,6 +883,13 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   const [direction, setDirection] = useState<LayoutDirection>(() => {
     try { return localStorage.getItem(LS_GRAPH_DIRECTION) === 'vertical' ? 'vertical' : 'horizontal'; } catch { return 'horizontal'; }
   });
+  const [expansion, setExpansion] = useState<GraphExpansion>(readGraphExpansion);
+  const [onlyFailed, setOnlyFailed] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [frameNonce, setFrameNonce] = useState(0);
+  const autoExpandedOriginRef = useRef<string | null>(null);
+  const minimapRef = useRef<HTMLDivElement>(null);
+  const minimapDragRef = useRef(false);
 
   const viewRef = useRef<View>(view);
   const setV = useCallback((v: View) => {
@@ -639,6 +903,16 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   const pinchRef = useRef<{ dist: number; mx: number; my: number; px: number; py: number; z: number } | null>(null);
   const userAdjustedRef = useRef(false);
   const lastFitKeyRef = useRef('');
+  const frameTargetRef = useRef<string | null>(null);
+  const lastFrameNonceRef = useRef(0);
+
+  // An explicit disclosure action should land on the branch it opened, at a
+  // readable zoom — not on the far edge of the whole chain.
+  const frameReadable = useCallback((targetId?: string) => {
+    frameTargetRef.current = targetId ?? null;
+    userAdjustedRef.current = true;
+    setFrameNonce((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -647,6 +921,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
       for (const e of entries) {
         const cr = e.contentRect;
         setSize({ w: cr.width, h: cr.height });
+        setMeasured(true);
       }
     });
     ro.observe(el);
@@ -657,13 +932,55 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     try { localStorage.setItem(LS_GRAPH_DIRECTION, direction); } catch {}
   }, [direction]);
 
-  const { layout, graph, fullGraph } = useMemo(() => {
+  const groupByType = !onlyFailed && typeFilter.size !== 1;
+
+  const { layout, graph, viewGraph, fullGraph } = useMemo(() => {
     // `fullGraph` keeps every captured type so the legend's counts stay stable
-    // while `graph` is what the filter actually draws.
+    // while `graph` is what the current filter / failed spotlight draws.
     const full = buildGraph(entries, originHost);
-    const g = typeFilter.size > 0 ? buildGraph(entries, originHost, typeFilter) : full;
-    return { graph: g, fullGraph: full, layout: layoutGraph(g, size.w, size.h, direction) };
-  }, [entries, originHost, size.w, size.h, direction, typeFilter]);
+    const source = onlyFailed ? entries.filter((e) => e.f) : entries;
+    const g = buildGraph(source, originHost, typeFilter);
+    // A single-type facet is already an explicit “show only this kind” drill
+    // down, and a failed spotlight is a filtered leaf view: both bypass the
+    // summary grouping. Every other view is summary-first.
+    const shaped = !onlyFailed && typeFilter.size !== 1 ? applyExpansion(g, expansion) : g;
+    return {
+      graph: g,
+      viewGraph: shaped,
+      fullGraph: full,
+      layout: layoutGraph(shaped, size.w, size.h, direction),
+    };
+  }, [entries, originHost, size.w, size.h, direction, typeFilter, onlyFailed, expansion]);
+
+  // The page the user opened is the one branch worth opening automatically.
+  useEffect(() => {
+    const originId = fullGraph.originId;
+    if (!originId || autoExpandedOriginRef.current === originId) return;
+    autoExpandedOriginRef.current = originId;
+    setExpansion((prev) => (prev.hosts.has(originId)
+      ? prev
+      : { ...prev, hosts: new Set(prev.hosts).add(originId) }));
+    // First view is the opened page, not a tiny whole-chain overview; Fit is
+    // right there when the user wants the entire chain.
+    frameReadable(originId);
+  }, [fullGraph.originId, frameReadable]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_GRAPH_EXPANSION, JSON.stringify({
+        hosts: [...expansion.hosts],
+        groups: [...expansion.groups],
+      }));
+    } catch {}
+  }, [expansion.hosts, expansion.groups]);
+
+  const failedAvailable = useMemo(
+    () => fullGraph.nodes.some((n) => n.kind === 'resource' && n.failed),
+    [fullGraph],
+  );
+  useEffect(() => {
+    if (onlyFailed && !failedAvailable) setOnlyFailed(false);
+  }, [onlyFailed, failedAvailable]);
 
   const vertical = direction === 'vertical';
 
@@ -676,12 +993,63 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
       else next.add(cls);
       return next;
     });
-    userAdjustedRef.current = false;
-  }, []);
+    frameReadable();
+  }, [frameReadable]);
 
   const clearTypes = useCallback(() => {
     setTypeFilter(new Set());
+    frameReadable();
+  }, [frameReadable]);
+
+  const toggleHost = useCallback((id: string) => {
+    setExpansion((prev) => ({ ...prev, hosts: toggled(prev.hosts, id) }));
+    setSelectedId(id);
+    frameReadable(id);
+  }, [frameReadable]);
+
+  const toggleGroup = useCallback((id: string) => {
+    setExpansion((prev) => {
+      if (prev.groups.has(id)) {
+        return { ...prev, groups: removed(prev.groups, id), all: removed(prev.all, id) };
+      }
+      return { ...prev, groups: new Set(prev.groups).add(id) };
+    });
+    setSelectedId(id);
+    frameReadable(id);
+  }, [frameReadable]);
+
+  const expandGroup = useCallback((id: string) => {
+    setExpansion((prev) => ({
+      ...prev,
+      groups: new Set(prev.groups).add(id),
+      all: new Set(prev.all).add(id),
+    }));
+    setSelectedId(id);
+    frameReadable(id);
+  }, [frameReadable]);
+
+  const previewGroup = useCallback((id: string) => {
+    setExpansion((prev) => ({ ...prev, all: removed(prev.all, id) }));
+    setSelectedId(id);
+    frameReadable(id);
+  }, [frameReadable]);
+
+  const collapseAll = useCallback(() => {
+    setExpansion({ hosts: new Set(), groups: new Set(), all: new Set() });
+    setSelectedId(null);
     userAdjustedRef.current = false;
+    lastFitKeyRef.current = '';
+  }, []);
+
+  const toggleFailed = useCallback(() => {
+    setOnlyFailed((v) => !v);
+    frameReadable();
+    lastFitKeyRef.current = '';
+  }, [frameReadable]);
+
+  const flashNotice = useCallback((message: string) => {
+    setNotice(message);
+    window.setTimeout(() => setNotice((n) => (n === message ? '' : n)), 3200);
   }, []);
 
   // Switching axis re-frames the graph even if the user had zoomed manually.
@@ -694,15 +1062,24 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   const contentW = layout.totalW + 64;
   const contentH = layout.totalH + 64;
 
-  const fit = useCallback(() => {
+  const fit = useCallback((collapseToFit = false) => {
     if (contentW <= 0 || contentH <= 0 || size.w <= 0 || size.h <= 0) return;
-    const z = clampZ(Math.min(size.w / contentW, size.h / contentH, 1.15));
+    const raw = Math.min(size.w / contentW, size.h / contentH, 1.15);
+    const canCollapse = groupByType && (expansion.hosts.size > 0 || expansion.groups.size > 0);
+    // Fit is the “make this readable” affordance: if the only way to fit is an
+    // unreadable overview, shed the disclosure state first and say so.
+    if (collapseToFit && raw < 0.5 && canCollapse) {
+      setExpansion({ hosts: new Set(), groups: new Set(), all: new Set() });
+      flashNotice('Collapsed groups to fit');
+      return;
+    }
+    const z = clampZ(raw);
     setV({
       z,
       x: Math.max(12, (size.w - contentW * z) / 2),
       y: Math.max(12, (size.h - contentH * z) / 2),
     });
-  }, [contentW, contentH, size.w, size.h, setV]);
+  }, [contentW, contentH, size.w, size.h, setV, expansion.hosts, expansion.groups, groupByType, flashNotice]);
 
   // Fit only until the user sets a zoom. New requests change the graph size
   // constantly; refitting on that was snapping the percentage back.
@@ -713,6 +1090,71 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     if (userAdjustedRef.current) return;
     fit();
   }, [fit, layout.nodes.length, layout.totalW, layout.totalH, size.w, size.h]);
+
+  // Disclosure actions set the flag above; frame the branch that changed at a
+  // readable zoom. Centring the target's subtree is what keeps a click near
+  // the right edge of a long host chain from leaving the new rows off-screen.
+  useEffect(() => {
+    if (!measured) return;
+    if (frameNonce === lastFrameNonceRef.current) return;
+    lastFrameNonceRef.current = frameNonce;
+    const targetId = frameTargetRef.current;
+    frameTargetRef.current = null;
+    if (contentW <= 0 || contentH <= 0 || size.w <= 0 || size.h <= 0) return;
+
+    const raw = Math.min(size.w / contentW, size.h / contentH, 1.15);
+    let z = clampZ(Math.max(raw, READABLE_ZOOM));
+    let x = Math.max(12, (size.w - contentW * z) / 2);
+    let y = Math.max(12, (size.h - contentH * z) / 2);
+
+    const target = targetId ? layout.nodes.find((n) => n.id === targetId) : null;
+    if (target) {
+      const outgoing = new Map<string, LayoutNode[]>();
+      for (const e of layout.edges) {
+        // Host→host trigger edges belong to the chain, not to the branch the
+        // user opened; including them would frame half the graph again.
+        if (e.to.node.kind === 'host' || e.to.node.kind === 'root') continue;
+        const list = outgoing.get(e.from.id);
+        if (list) list.push(e.to);
+        else outgoing.set(e.from.id, [e.to]);
+      }
+
+      let minX = target.x;
+      let minY = target.y;
+      let maxX = target.x + target.w;
+      let maxY = target.y + target.h;
+      const stack: LayoutNode[] = [target];
+      const seen = new Set<string>([target.id]);
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        for (const child of outgoing.get(current.id) || []) {
+          if (seen.has(child.id)) continue;
+          seen.add(child.id);
+          stack.push(child);
+          minX = Math.min(minX, child.x);
+          minY = Math.min(minY, child.y);
+          maxX = Math.max(maxX, child.x + child.w);
+          maxY = Math.max(maxY, child.y + child.h);
+        }
+      }
+
+      const boxW = Math.max(1, maxX - minX);
+      const boxH = Math.max(1, maxY - minY);
+      const pad = 32;
+      const branchFit = Math.min((size.w - pad * 2) / boxW, (size.h - pad * 2) / boxH, 1.15);
+      z = clampZ(Math.max(branchFit, READABLE_ZOOM));
+
+      // Centre a branch that fits. A branch taller/wider than the viewport is
+      // anchored at the clicked node instead, so its first rows stay visible
+      // and panning reveals the rest.
+      const fitsW = boxW * z <= size.w - pad * 2;
+      const fitsH = boxH * z <= size.h - pad * 2;
+      x = fitsW ? (size.w - boxW * z) / 2 - minX * z : pad - target.x * z;
+      y = fitsH ? (size.h - boxH * z) / 2 - minY * z : pad - target.y * z;
+    }
+
+    setV({ z, x, y });
+  }, [frameNonce, measured, layout, contentW, contentH, size.w, size.h, setV]);
 
   const setZoom = useCallback((z: number) => {
     const v = viewRef.current;
@@ -745,10 +1187,14 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   // the pan/zoom transform, resize the frame to the full content box, and
   // rasterise it at a multiple of the logical size.
   const downloadPng = useCallback(async (scale = 3) => {
-    const live = svgRef.current;
-    if (!live || layout.nodes.length === 0 || exporting) return;
+    if (layout.nodes.length === 0 || exporting) return;
     setExporting(true);
     try {
+      // Overview zoom hides resource labels; force one detailed frame before
+      // cloning so an export never inherits the semantic-zoom shorthand.
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const live = svgRef.current;
+      if (!live) return;
       // Clone the live SVG as it is, including a pinned node's fade. Clearing
       // the selection first exported every node at full strength.
       const pad = 48;
@@ -834,6 +1280,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
       setHoverId(null);
       setSelectedId(null);
       setTypeFilter(new Set());
+      setOnlyFailed(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -844,12 +1291,40 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   };
 
+  const panBy = useCallback((dx: number, dy: number) => {
+    const v = viewRef.current;
+    userAdjustedRef.current = true;
+    setV({ z: v.z, x: v.x + dx, y: v.y + dy });
+  }, [setV]);
+
+  // Keyboard access to the canvas: arrows pan, f/0 fit, +/- zoom. The
+  // container is focusable and gains focus on the first pointer press.
+  const onCanvasKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 220 : 80;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); panBy(step, 0); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); panBy(-step, 0); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); panBy(0, step); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); panBy(0, -step); }
+    else if (e.key === 'f' || e.key === 'F' || e.key === '0') {
+      e.preventDefault();
+      userAdjustedRef.current = false;
+      fit();
+    } else if (e.key === '+' || e.key === '=') {
+      e.preventDefault();
+      zoomAt(1.2, size.w / 2, size.h / 2);
+    } else if (e.key === '-' || e.key === '_') {
+      e.preventDefault();
+      zoomAt(0.83, size.w / 2, size.h / 2);
+    }
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
     // The tooltip's own controls must not be swallowed by canvas panning:
     // capturing the pointer here would retarget the click away from them.
     if ((e.target as Element).closest('[data-graph-tooltip]')) return;
     if ((e.target as Element).closest('[data-node]') && e.pointerType === 'mouse') return;
     const el = containerRef.current!;
+    el.focus({ preventScroll: true });
     el.setPointerCapture(e.pointerId);
     const p = localPos(e);
     pointersRef.current.set(e.pointerId, p);
@@ -944,9 +1419,16 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     if (selectedId && !layout.nodes.some((n) => n.id === selectedId)) setSelectedId(null);
   }, [selectedId, layout.nodes]);
 
+  useEffect(() => {
+    if (focusedId && !layout.nodes.some((n) => n.id === focusedId)) setFocusedId(null);
+  }, [focusedId, layout.nodes]);
+
   const compact = size.w < 640;
   const tiny = size.w < 430;
   const focusNode = focusId ? layout.nodes.find((n) => n.id === focusId) : null;
+  // Below the LOD threshold resource cards lose their labels and badges; the
+  // tooltip and a hover still expose the full detail.
+  const overview = view.z < LOD_ZOOM && !exporting;
 
   const nodeDim = (n: LayoutNode): number => {
     if (focusId && !emphasis.nodes.has(n.id)) return 0.14;
@@ -955,20 +1437,23 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
 
   const edgeStyle = (e: LayoutEdge) => {
     const related = emphasis.edges.has(e.id);
-    const failedTarget = e.to.node.failed;
+    const failedTarget = e.to.node.kind === 'resource' && e.to.node.failed;
     // The `[request]` → origin link is the spine of the graph: solid cyan so
     // the eye follows it from the entry block into the site.
     const isEntry = e.from.node.kind === 'root';
-    const color = failedTarget ? pal.error : isEntry ? pal.edgeEntry : e.direct ? pal.edgeDirect : pal.edgeCross;
+    const isMoreEdge = e.to.node.kind === 'more';
+    const color = failedTarget ? pal.error : isEntry ? pal.edgeEntry : isMoreEdge ? pal.neutral : e.direct ? pal.edgeDirect : pal.edgeCross;
     const dim = focusId && !related;
     const solid = isEntry || e.direct;
-    const opacity = dim ? 0.05 : related ? 0.95 : isEntry ? 0.75 : e.direct ? 0.5 : 0.45;
+    const opacity = dim ? 0.05 : related ? 0.95 : isMoreEdge ? 0.3 : isEntry ? 0.75 : e.direct ? 0.5 : 0.28;
     return {
       color,
       opacity,
       width: (isEntry ? 1.8 : e.direct ? 1.2 : 1) + (related ? 0.7 : 0),
       dash: solid ? undefined : '6 5',
-      animate: (!solid && !dim) || related,
+      // Trigger lines are structure, not activity: animate them only while the
+      // hovered/focused path is actually being read.
+      animate: !isMoreEdge && related && !solid,
       fast: related,
     };
   };
@@ -1062,9 +1547,12 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
 
   const renderHostNode = (n: LayoutNode) => {
     const { node } = n;
-    const isOrigin = n.id === graph.originId;
+    const isOrigin = n.id === viewGraph.originId;
     const dim = nodeDim(n);
     const selected = selectedId === n.id;
+    const focused = focusedId === n.id;
+    const expandable = groupByType && (node.resourceCount ?? 0) > 0;
+    const open = expansion.hosts.has(n.id);
     const accent = node.failed ? pal.error : node.flagged ? pal.warn : isOrigin ? pal.edgeEntry : pal.neutral;
     const bg = isOrigin
       ? pal.cardRoot
@@ -1085,12 +1573,24 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     return (
       <g key={n.id} data-node transform={`translate(${n.x}, ${n.y})`} opacity={dim}
         style={{ cursor: 'pointer', transition: 'opacity 150ms ease' }}
+        role={expandable ? 'button' : undefined}
+        tabIndex={expandable ? 0 : undefined}
+        aria-expanded={expandable ? open : undefined}
+        aria-label={`${node.host}: ${node.count} requests, ${node.resourceCount || 0} resources, ${open ? 'expanded' : 'collapsed'}`}
         onMouseEnter={() => { cancelHoverClear(); setHoverId(n.id); }}
         onMouseLeave={() => scheduleHoverClear(n.id)}
-        onClick={() => { setSelectedId((s) => (s === n.id ? null : n.id)); onSelect?.(node.host); }}
+        onFocus={() => { cancelHoverClear(); setFocusedId(n.id); setHoverId(n.id); }}
+        onBlur={() => { setFocusedId(null); scheduleHoverClear(n.id); }}
+        onKeyDown={expandable ? (ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggleHost(n.id); }
+        } : undefined}
+        onClick={() => {
+          if (expandable) toggleHost(n.id);
+          else setSelectedId((s) => (s === n.id ? null : n.id));
+        }}
       >
         <g className="rg-node" style={{ filter: glow }}>
-          {selected && (
+          {(selected || focused) && (
             <rect x={-7.5} y={-7.5} width={n.w + 15} height={n.h + 15} rx={15} fill="none" stroke={accent} strokeOpacity={0.65} strokeWidth={1.2} strokeDasharray="5 4" />
           )}
           {isOrigin && (
@@ -1113,19 +1613,143 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
               {node.count}
             </text>
           </g>
+          {expandable && (
+            <g transform={`translate(${n.w - 58}, ${n.h / 2 - 5})`}>
+              <path
+                d={open ? 'M0 1 L5 5.5 L10 1' : 'M1 0 L6 5 L1 10'}
+                fill="none" stroke={pal.labelHost} strokeOpacity={0.65} strokeWidth={1.5}
+                strokeLinecap="round" strokeLinejoin="round"
+              />
+            </g>
+          )}
           {node.flagged && (
-            <g transform={`translate(${n.w - 62}, ${n.h / 2 - 9})`}>
+            <g transform={`translate(${n.w - 104}, ${n.h / 2 - 9})`}>
               <rect width={20} height={18} rx={5} fill="rgba(245, 158, 11, 0.14)" />
               <text x={10} y={12.5} textAnchor="middle" fontSize={10} fill={pal.warn} fontFamily="ui-monospace, monospace">⚑</text>
             </g>
           )}
           {node.failed && (
-            <g transform={`translate(${n.w - (node.flagged ? 84 : 62)}, ${n.h / 2 - 9})`}>
+            <g transform={`translate(${n.w - 82}, ${n.h / 2 - 9})`}>
               <rect width={20} height={18} rx={5} fill="rgba(239, 68, 68, 0.14)" />
               <text x={10} y={12.5} textAnchor="middle" fontSize={10} fill={pal.error} fontFamily="ui-monospace, monospace">✕</text>
             </g>
           )}
         </g>
+      </g>
+    );
+  };
+
+  const renderGroupNode = (n: LayoutNode) => {
+    const { node } = n;
+    const cls = node.resourceClass || 'other';
+    const accent = accentOf(cls);
+    const dim = nodeDim(n);
+    const selected = selectedId === n.id;
+    const open = expansion.groups.has(n.id);
+    const focused = focusedId === n.id;
+    const failedCount = node.failedCount || 0;
+    const flaggedCount = node.flaggedCount || 0;
+    return (
+      <g
+        key={n.id}
+        data-node
+        transform={`translate(${n.x}, ${n.y})`}
+        opacity={dim}
+        style={{ cursor: 'pointer', transition: 'opacity 150ms ease' }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label={`${node.label} on ${node.host}: ${node.count} resources, ${open ? 'expanded' : 'collapsed'}`}
+        onMouseEnter={() => { cancelHoverClear(); setHoverId(n.id); }}
+        onMouseLeave={() => scheduleHoverClear(n.id)}
+        onFocus={() => { cancelHoverClear(); setFocusedId(n.id); setHoverId(n.id); }}
+        onBlur={() => { setFocusedId(null); scheduleHoverClear(n.id); }}
+        onKeyDown={(ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggleGroup(n.id); }
+        }}
+        onClick={() => toggleGroup(n.id)}
+      >
+        <g className="rg-node" style={{ filter: node.failed ? 'drop-shadow(0 0 5px rgba(239, 68, 68, 0.25))' : undefined }}>
+          {(selected || focused) && (
+            <rect x={-6.5} y={-6.5} width={n.w + 13} height={n.h + 13} rx={11} fill="none" stroke={accent} strokeOpacity={0.65} strokeWidth={1.2} strokeDasharray="5 4" />
+          )}
+          <rect width={n.w} height={n.h} rx={8} fill={classBgOf(cls)} stroke={node.failed ? pal.error : accent} strokeOpacity={0.55} strokeWidth={1} />
+          <rect x={0.5} y={5} width={3} height={n.h - 10} rx={1.5} fill={accent} opacity={0.9} />
+          <circle cx={18} cy={n.h / 2} r={3.5} fill={accent} />
+          <text x={29} y={n.h / 2 + 3.5} fontSize={11.5} fontWeight={600} fill={pal.labelRes} fontFamily="ui-sans-serif, system-ui">
+            {node.label}
+          </text>
+          <g transform={`translate(${n.w - 38}, ${n.h / 2 - 8})`}>
+            <rect width={26} height={16} rx={4} fill={pal.badgeBg} />
+            <text x={13} y={11.5} textAnchor="middle" fontSize={10} fontWeight={600} fill={pal.badgeText} fontFamily="ui-monospace, monospace">
+              {node.count}
+            </text>
+          </g>
+          <g transform={`translate(${n.w - 56}, ${n.h / 2 - 5})`}>
+            <path
+              d={open ? 'M0 1 L5 5.5 L10 1' : 'M1 0 L6 5 L1 10'}
+              fill="none" stroke={pal.neutral} strokeOpacity={0.7} strokeWidth={1.4}
+              strokeLinecap="round" strokeLinejoin="round"
+            />
+          </g>
+          {flaggedCount > 0 && (
+            <g transform={`translate(${n.w - 106}, ${n.h / 2 - 8})`}>
+              <rect width={22} height={16} rx={4} fill="rgba(245, 158, 11, 0.14)" />
+              <text x={11} y={11.5} textAnchor="middle" fontSize={9} fill={pal.warn} fontFamily="ui-monospace, monospace">{flaggedCount}</text>
+            </g>
+          )}
+          {failedCount > 0 && (
+            <g transform={`translate(${n.w - 81}, ${n.h / 2 - 8})`}>
+              <rect width={22} height={16} rx={4} fill="rgba(239, 68, 68, 0.14)" />
+              <text x={11} y={11.5} textAnchor="middle" fontSize={9} fill={pal.error} fontFamily="ui-monospace, monospace">{failedCount}</text>
+            </g>
+          )}
+        </g>
+      </g>
+    );
+  };
+
+  const renderMoreNode = (n: LayoutNode) => {
+    const { node } = n;
+    const cls = node.resourceClass || 'other';
+    const accent = accentOf(cls);
+    const dim = nodeDim(n);
+    const expand = node.moreAction === 'expand';
+    const focused = focusedId === n.id;
+    const gid = n.id.replace(/^more:/, 'grp:');
+    return (
+      <g
+        key={n.id}
+        data-node
+        transform={`translate(${n.x}, ${n.y})`}
+        opacity={dim}
+        style={{ cursor: 'pointer', transition: 'opacity 150ms ease' }}
+        role="button"
+        tabIndex={0}
+        aria-label={expand ? `Show all ${node.count} more ${CLASS_NAME[cls]} resources` : `Show the ${GROUP_PREVIEW}-row preview`}
+        onMouseEnter={() => { cancelHoverClear(); setHoverId(n.id); }}
+        onMouseLeave={() => scheduleHoverClear(n.id)}
+        onFocus={() => { cancelHoverClear(); setFocusedId(n.id); setHoverId(n.id); }}
+        onBlur={() => { setFocusedId(null); scheduleHoverClear(n.id); }}
+        onKeyDown={(ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault();
+            if (expand) expandGroup(gid); else previewGroup(gid);
+          }
+        }}
+        onClick={() => { if (expand) expandGroup(gid); else previewGroup(gid); }}
+      >
+        {focused && (
+          <rect x={-6.5} y={-6.5} width={n.w + 13} height={n.h + 13} rx={11} fill="none" stroke={accent} strokeOpacity={0.7} strokeWidth={1.2} strokeDasharray="5 4" />
+        )}
+        <rect width={n.w} height={n.h} rx={8} fill="transparent" stroke={accent} strokeOpacity={0.4} strokeWidth={1} strokeDasharray="4 4" />
+        <text x={12} y={n.h / 2 + 3.5} fontSize={10.5} fontWeight={500} fill={pal.neutral} fontFamily="ui-sans-serif, system-ui">
+          {node.label}
+        </text>
+        {node.failed && <circle cx={n.w - 30} cy={n.h / 2} r={3} fill={pal.error} />}
+        <text x={n.w - 12} y={n.h / 2 + 3.5} textAnchor="end" fontSize={9} fill={pal.neutral} fontFamily="ui-monospace, monospace">
+          {expand ? '▾' : '▴'}
+        </text>
       </g>
     );
   };
@@ -1139,6 +1763,9 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     const stroke = node.failed ? pal.error : node.flagged ? pal.warn : selected ? accent : `${accent}44`;
     const label = node.label.length > 26 ? node.label.slice(0, 24) + '…' : node.label;
     const glow = node.failed ? 'drop-shadow(0 0 5px rgba(239, 68, 68, 0.3))' : undefined;
+    // Overview zoom reduces resources to class-coloured bars; the tooltip and
+    // a hover restore the full card, so labels are never gone, only deferred.
+    const detailed = !overview || selected || hoverId === n.id;
 
     return (
       <g key={n.id} data-node transform={`translate(${n.x}, ${n.y})`} opacity={dim}
@@ -1147,29 +1774,38 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
         onMouseLeave={() => scheduleHoverClear(n.id)}
         onClick={() => { setSelectedId((s) => (s === n.id ? null : n.id)); onSelect?.(node.host); }}
       >
-        <g className="rg-node" style={{ filter: glow }}>
-          {selected && (
-            <rect x={-6.5} y={-6.5} width={n.w + 13} height={n.h + 13} rx={11} fill="none" stroke={accent} strokeOpacity={0.65} strokeWidth={1.2} strokeDasharray="5 4" />
-          )}
-          <rect width={n.w} height={n.h} rx={8} fill={classBgOf(cls)} stroke={stroke} strokeWidth={node.failed || node.flagged ? 1.3 : 1} />
-          <g transform={`translate(9, ${n.h / 2 - 9})`}>
-            <rect width={34} height={18} rx={5} fill={`${accent}1a`} stroke={accent} strokeOpacity={0.45} strokeWidth={0.8} />
-            <text x={17} y={12.5} textAnchor="middle" fontSize={9} fontWeight={700} fill={accent} fontFamily="ui-monospace, monospace" letterSpacing={0.5}>
-              {CLASS_LABEL[cls]}
-            </text>
-          </g>
-          <text x={53} y={n.h / 2 + 3.5} fontSize={11.5} fontWeight={500} fill={pal.labelRes} fontFamily="ui-sans-serif, system-ui">
-            {label}
-          </text>
-          {node.count > 1 && (
-            <g transform={`translate(${n.w - 36}, ${n.h / 2 - 8})`}>
-              <rect width={26} height={16} rx={4} fill={pal.badgeBg} />
-              <text x={13} y={11.5} textAnchor="middle" fontSize={10} fontWeight={600} fill={pal.badgeText} fontFamily="ui-monospace, monospace">
-                ×{node.count}
+        {!detailed ? (
+          <rect
+            width={n.w} height={n.h} rx={8}
+            fill={node.failed ? 'rgba(239, 68, 68, 0.34)' : `${accent}38`}
+            stroke={node.failed ? pal.error : `${accent}99`}
+            strokeWidth={1}
+          />
+        ) : (
+          <g className="rg-node" style={{ filter: glow }}>
+            {selected && (
+              <rect x={-6.5} y={-6.5} width={n.w + 13} height={n.h + 13} rx={11} fill="none" stroke={accent} strokeOpacity={0.65} strokeWidth={1.2} strokeDasharray="5 4" />
+            )}
+            <rect width={n.w} height={n.h} rx={8} fill={classBgOf(cls)} stroke={stroke} strokeWidth={node.failed || node.flagged ? 1.3 : 1} />
+            <g transform={`translate(9, ${n.h / 2 - 9})`}>
+              <rect width={34} height={18} rx={5} fill={`${accent}1a`} stroke={accent} strokeOpacity={0.45} strokeWidth={0.8} />
+              <text x={17} y={12.5} textAnchor="middle" fontSize={9} fontWeight={700} fill={accent} fontFamily="ui-monospace, monospace" letterSpacing={0.5}>
+                {CLASS_LABEL[cls]}
               </text>
             </g>
-          )}
-        </g>
+            <text x={53} y={n.h / 2 + 3.5} fontSize={11.5} fontWeight={500} fill={pal.labelRes} fontFamily="ui-sans-serif, system-ui">
+              {label}
+            </text>
+            {node.count > 1 && (
+              <g transform={`translate(${n.w - 36}, ${n.h / 2 - 8})`}>
+                <rect width={26} height={16} rx={4} fill={pal.badgeBg} />
+                <text x={13} y={11.5} textAnchor="middle" fontSize={10} fontWeight={600} fill={pal.badgeText} fontFamily="ui-monospace, monospace">
+                  ×{node.count}
+                </text>
+              </g>
+            )}
+          </g>
+        )}
       </g>
     );
   };
@@ -1179,11 +1815,14 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     const { node } = focusNode;
     const isRootNode = node.kind === 'root';
     const isHost = node.kind === 'host';
+    const isGroup = node.kind === 'group';
+    const isMore = node.kind === 'more';
+    const isResource = node.kind === 'resource';
     const cls = node.resourceClass;
     const accent = isRootNode || isHost ? pal.edgeEntry : cls ? accentOf(cls) : pal.neutral;
     const left = Math.min(size.w - 250, Math.max(8, focusNode.x * view.z + view.x + focusNode.w * view.z + 12));
     const top = Math.min(size.h - 90, Math.max(8, focusNode.y * view.z + view.y - 8));
-    const url = node.fullUrl || node.host;
+    const url = isResource ? node.fullUrl || '' : isHost ? node.host : '';
     const shortUrl = url.length > 96 ? url.slice(0, 44) + ' … ' + url.slice(-48) : url;
 
     return (
@@ -1199,21 +1838,33 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
             <span className="inline-flex h-4 items-center rounded bg-cyan-500/10 px-1.5 text-[9px] font-bold tracking-wider text-cyan-700 dark:bg-cyan-400/10 dark:text-cyan-300">REQUEST</span>
           ) : isHost ? (
             <span className="inline-flex h-4 items-center rounded bg-cyan-500/10 px-1.5 text-[9px] font-bold tracking-wider text-cyan-700 dark:bg-cyan-400/10 dark:text-cyan-300">HOST</span>
+          ) : isGroup ? (
+            <span className="inline-flex h-4 items-center rounded px-1.5 text-[9px] font-bold tracking-wider" style={{ backgroundColor: `${accent}1a`, color: accent }}>GROUP</span>
+          ) : isMore ? (
+            <span className="inline-flex h-4 items-center rounded bg-black/5 px-1.5 text-[9px] font-bold tracking-wider text-zinc-500 dark:bg-white/10 dark:text-slate-400">
+              {node.moreAction === 'expand' ? 'SHOW ALL' : 'PREVIEW'}
+            </span>
           ) : (
             <span className="inline-flex h-4 items-center rounded px-1.5 text-[9px] font-bold tracking-wider" style={{ backgroundColor: `${accent}1a`, color: accent }}>
               {cls ? CLASS_LABEL[cls] : 'RES'}
             </span>
           )}
-          {isHost && node.id === graph.originId && (
+          {isHost && node.id === viewGraph.originId && (
             <span className="text-[9px] font-semibold tracking-wider text-cyan-600/70 dark:text-cyan-400/70">ORIGIN</span>
           )}
-          <span className="ml-auto text-[10px] font-medium text-zinc-500 dark:text-slate-400">×{node.count}</span>
+          <span className="ml-auto text-[10px] font-medium text-zinc-500 dark:text-slate-400">
+            {isGroup ? `${node.count} res` : isMore ? (node.moreAction === 'expand' ? `+${node.count}` : `${node.count}`) : `×${node.count}`}
+          </span>
         </div>
         <div className="mt-1.5 break-words text-[11.5px] font-semibold leading-tight text-zinc-900 dark:text-slate-100">
           {isRootNode ? 'Entry point' : isHost ? node.host : node.label}
         </div>
         {isRootNode ? (
           <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-slate-500">Everything below was triggered by this request.</div>
+        ) : isGroup || isMore ? (
+          <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-slate-500">
+            {isGroup ? `${node.count} resources on ${node.host}` : `on ${node.host}`}
+          </div>
         ) : (
           !isHost && <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-slate-500">{node.host}</div>
         )}
@@ -1264,10 +1915,110 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
         )}
         {(node.flagged || node.failed) && (
           <div className="mt-1.5 flex gap-1.5 text-[9.5px]">
-            {node.flagged && <span className="rounded bg-amber-400/10 px-1.5 py-0.5 font-medium text-amber-600 dark:text-amber-400">⚑ flagged</span>}
-            {node.failed && <span className="rounded bg-red-400/10 px-1.5 py-0.5 font-medium text-red-600 dark:text-red-400">✕ failed</span>}
+            {node.flagged && <span className="rounded bg-amber-400/10 px-1.5 py-0.5 font-medium text-amber-600 dark:text-amber-400">⚑ {node.flaggedCount || 1} flagged</span>}
+            {node.failed && <span className="rounded bg-red-400/10 px-1.5 py-0.5 font-medium text-red-600 dark:text-red-400">✕ {node.failedCount || 1} failed</span>}
           </div>
         )}
+      </div>
+    );
+  })();
+
+  // A minimap is the navigation aid a 2-D canvas deserves: it shows where the
+  // viewport sits in the wrapped graph and can be dragged directly. It only
+  // appears while the content overflows, so a fitted small graph stays clean.
+  const minimap = (() => {
+    if (tiny || layout.nodes.length === 0) return null;
+    const overflowX = layout.totalW * view.z > size.w * 1.02;
+    const overflowY = layout.totalH * view.z > size.h * 1.02;
+    if (!overflowX && !overflowY) return null;
+
+    const mmW = 152;
+    const mmH = 100;
+    const pad = 6;
+    const scale = Math.min(
+      (mmW - pad * 2) / Math.max(1, layout.totalW),
+      (mmH - pad * 2) / Math.max(1, layout.totalH),
+    );
+    const offX = (mmW - layout.totalW * scale) / 2;
+    const offY = (mmH - layout.totalH * scale) / 2;
+    const viewX = offX + (-view.x / view.z) * scale;
+    const viewY = offY + (-view.y / view.z) * scale;
+    const viewW = (size.w / view.z) * scale;
+    const viewH = (size.h / view.z) * scale;
+
+    const jump = (e: React.PointerEvent) => {
+      const el = minimapRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const wx = (e.clientX - rect.left - offX) / scale;
+      const wy = (e.clientY - rect.top - offY) / scale;
+      userAdjustedRef.current = true;
+      setV({
+        z: viewRef.current.z,
+        x: size.w / 2 - wx * viewRef.current.z,
+        y: size.h / 2 - wy * viewRef.current.z,
+      });
+    };
+
+    return (
+      <div
+        ref={minimapRef}
+        className="absolute bottom-2 right-2 z-10 cursor-crosshair touch-none overflow-hidden rounded-lg border border-zinc-300/80 bg-white/85 shadow-lg shadow-black/10 backdrop-blur-sm dark:border-white/10 dark:bg-slate-950/85"
+        style={{ width: mmW, height: mmH }}
+        title="Minimap — drag to move the view"
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          minimapDragRef.current = true;
+          jump(e);
+        }}
+        onPointerMove={(e) => {
+          if (!minimapDragRef.current) return;
+          e.stopPropagation();
+          jump(e);
+        }}
+        onPointerUp={(e) => {
+          e.stopPropagation();
+          minimapDragRef.current = false;
+          (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+        }}
+        onPointerCancel={() => { minimapDragRef.current = false; }}
+      >
+        <svg width={mmW} height={mmH} aria-hidden>
+          <rect width={mmW} height={mmH} fill={pal.canvas} />
+          {layout.nodes.map((n) => {
+            const cls = n.node.resourceClass;
+            const fill = n.node.failed
+              ? pal.error
+              : n.node.kind === 'host'
+                ? (n.node.id === viewGraph.originId ? pal.edgeEntry : pal.neutral)
+                : cls ? accentOf(cls) : pal.neutral;
+            return (
+              <rect
+                key={n.id}
+                x={offX + n.x * scale}
+                y={offY + n.y * scale}
+                width={Math.max(1, n.w * scale)}
+                height={Math.max(1, n.h * scale)}
+                rx={0.7}
+                fill={fill}
+                opacity={n.node.kind === 'resource' || n.node.kind === 'more' ? 0.55 : 0.9}
+              />
+            );
+          })}
+          <rect
+            x={viewX}
+            y={viewY}
+            width={Math.max(2, viewW)}
+            height={Math.max(2, viewH)}
+            rx={2}
+            fill="rgba(34, 211, 238, 0.10)"
+            stroke={pal.edgeEntry}
+            strokeWidth={1}
+          />
+        </svg>
       </div>
     );
   })();
@@ -1295,10 +2046,17 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
           {stats.resources} res
         </span>
         {stats.failed > 0 && (
-          <span className={`${chip} bg-red-500/10 text-red-600 dark:bg-red-400/10 dark:text-red-400`}>
+          <button
+            onClick={toggleFailed}
+            aria-pressed={onlyFailed}
+            title={onlyFailed ? 'Stop showing only failed resources' : 'Show only failed resources'}
+            className={`${chip} transition-all ${onlyFailed
+              ? 'bg-red-500/20 text-red-700 ring-1 ring-red-400/60 dark:bg-red-400/20 dark:text-red-300'
+              : 'bg-red-500/10 text-red-600 dark:bg-red-400/10 dark:text-red-400'}`}
+          >
             <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
-            {stats.failed} failed
-          </span>
+            {stats.failed} failed{onlyFailed ? ' · only' : ''}
+          </button>
         )}
         {stats.flagged > 0 && (
           <span className={`${chip} bg-amber-500/10 text-amber-600 dark:bg-amber-400/10 dark:text-amber-400`}>
@@ -1352,7 +2110,26 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
           </div>
         )}
 
+        {notice && (
+          <span role="status" className={`${chip} bg-cyan-500/10 text-cyan-700 dark:bg-cyan-400/10 dark:text-cyan-300`}>
+            {notice}
+          </span>
+        )}
+
         <div className="ml-auto flex items-center gap-0.5">
+          {groupByType && (expansion.hosts.size > 0 || expansion.groups.size > 0) && (
+            <button
+              onClick={collapseAll}
+              className="mr-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-zinc-500 transition-colors hover:bg-black/5 hover:text-zinc-900 dark:text-slate-400 dark:hover:bg-white/8 dark:hover:text-slate-100"
+              title="Collapse all hosts and type groups"
+            >
+              <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="m7 14 5-5 5 5" />
+                <path d="m7 20 5-5 5 5" />
+              </svg>
+              {!compact && 'collapse'}
+            </button>
+          )}
           <div className="mr-1 inline-flex overflow-hidden rounded-md border border-zinc-300 dark:border-white/10" role="group" aria-label="Layout direction">
             {(['horizontal', 'vertical'] as const).map((dir) => {
               const on = direction === dir;
@@ -1400,9 +2177,9 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
             );
           })}
           <button
-            onClick={() => { userAdjustedRef.current = false; fit(); }}
+            onClick={() => { userAdjustedRef.current = false; fit(true); }}
             className={`rounded-md px-2 py-0.5 text-zinc-500 transition-colors hover:bg-black/5 hover:text-zinc-900 dark:text-slate-400 dark:hover:bg-white/8 dark:hover:text-slate-100 ${compact ? '' : 'min-w-[34px]'}`}
-            title="Fit to view"
+            title="Fit to view — collapses expanded groups when the result would be unreadable"
           >
             fit
           </button>
@@ -1443,7 +2220,9 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
 
       <div
         ref={containerRef}
-        className="relative flex-1 touch-none overflow-hidden select-none"
+        tabIndex={0}
+        onKeyDown={onCanvasKey}
+        className="relative flex-1 touch-none overflow-hidden select-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-cyan-500/50"
         style={{ backgroundColor: pal.canvas, cursor: panning ? 'grabbing' : 'grab' }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -1467,7 +2246,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
           }
         }}
       >
-        {graph.nodes.length === 0 && (
+        {!onlyFailed && viewGraph.nodes.length === 0 && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
             <div className="relative h-12 w-12">
               <span className="absolute inset-0 rounded-full border border-cyan-500/40 dark:border-cyan-400/40" style={{ animation: 'rg-pulse 2.2s ease-out infinite' }} />
@@ -1478,6 +2257,17 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
               <div className="text-xs font-medium text-zinc-500 dark:text-slate-400">Waiting for network activity</div>
               <div className="mt-0.5 text-[10px] text-zinc-400 dark:text-slate-600">Open a page in the session to build the resource graph</div>
             </div>
+          </div>
+        )}
+        {onlyFailed && viewGraph.nodes.length === 0 && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
+            <div className="text-xs font-medium text-zinc-500 dark:text-slate-400">No failed requests in this view</div>
+            <button
+              onClick={() => setOnlyFailed(false)}
+              className="pointer-events-auto rounded-md border border-zinc-300 px-2 py-1 text-[10px] text-cyan-700 hover:bg-black/5 dark:border-white/15 dark:text-cyan-300 dark:hover:bg-white/10"
+            >
+              Show all requests
+            </button>
           </div>
         )}
 
@@ -1501,7 +2291,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
 
           <g transform={`translate(${view.x}, ${view.y}) scale(${view.z})`}>
             {layout.columns.map((c) => (
-              <g key={c.depth}>
+              <g key={`${c.depth}:${c.x}:${c.top}`}>
                 {vertical ? (
                   <>
                     <line
@@ -1524,7 +2314,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
                       fontFamily="ui-monospace, monospace"
                       letterSpacing={1}
                     >
-                      L{c.depth}
+                      {c.label ? `L${c.depth}` : ''}
                     </text>
                   </>
                 ) : (
@@ -1548,7 +2338,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
                       fontFamily="ui-monospace, monospace"
                       letterSpacing={1}
                     >
-                      L{c.depth}
+                      {c.label ? `L${c.depth}` : ''}
                     </text>
                   </>
                 )}
@@ -1559,16 +2349,22 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
             {layout.nodes.map((n) => (
               n.node.kind === 'root' ? renderRootNode(n)
                 : n.node.kind === 'host' ? renderHostNode(n)
-                  : renderResNode(n)
+                  : n.node.kind === 'group' ? renderGroupNode(n)
+                    : n.node.kind === 'more' ? renderMoreNode(n)
+                      : renderResNode(n)
             ))}
           </g>
         </svg>
 
+        {minimap}
+
         {tooltip}
 
-        {!compact && graph.nodes.length > 0 && (
-          <div className="pointer-events-none absolute bottom-1.5 right-2.5 text-[9px] tracking-wide text-zinc-500 dark:text-slate-600">
-            drag · scroll · pinch · click node to pin · double-click to fit · esc to clear
+        {!compact && viewGraph.nodes.length > 0 && (
+          <div className="pointer-events-none absolute bottom-1.5 left-2.5 text-[9px] tracking-wide text-zinc-500 dark:text-slate-600">
+            {overview
+              ? 'overview · zoom in for labels · click a host or type group to expand'
+              : 'drag · scroll · pinch · click to expand/select · double-click to fit · esc to clear'}
           </div>
         )}
       </div>
