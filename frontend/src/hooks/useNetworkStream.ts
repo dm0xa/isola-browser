@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BrowserTab, ConsoleEntry, CookieEntry, NetEntry } from '../components/IsolaNetworkPanel';
 import { cookieFromWire, mergeCookieEntry } from '../lib/cookieEntries';
 import { getNetworkLogMaxEntries } from '../lib/config';
+import { mergeNetEntry } from '../lib/netEntries';
 
 // Console and cookie caps mirror the in-viewer panel so a long-lived tab cannot
 // grow unbounded. The network cap is configurable (session.network_log_max_entries)
@@ -125,8 +126,8 @@ export function useNetworkStream(wsUrl: string | null) {
           case 'net': {
             if (!msg.e) return;
             const max = getNetworkLogMaxEntries();
-            const next = [...netRef.current, msg.e];
-            if (next.length > max) next.splice(0, next.length - max);
+            let next = mergeNetEntry(netRef.current, msg.e);
+            if (next.length > max) next = next.slice(next.length - max);
             netRef.current = next;
             setSnapshot((p) => ({ ...p, entries: next }));
             break;
