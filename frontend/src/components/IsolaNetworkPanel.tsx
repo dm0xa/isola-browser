@@ -130,6 +130,23 @@ function fmtTime(ts?: number): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
 
+// Clipboard output is a data format, not a screenshot of the table: ISO 8601
+// times (unambiguous and sortable), raw numbers, and one escaped cell per
+// column so a value can never break a record across lines.
+function isoTime(ts?: number): string {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
+function tsvCell(v: string | number | boolean | undefined | null): string {
+  return String(v ?? '').replace(/\t/g, '\\t').replace(/\r?\n/g, '\\n');
+}
+
+function tsvRow(cells: Array<string | number | boolean | undefined | null>): string {
+  return cells.map(tsvCell).join('\t');
+}
+
 // Domain shown for a browser tab in the per-tab filter. Internal pages and
 // empty/placeholder URLs carry no domain, so the caller falls back to the
 // hosts seen in that tab's captured requests.
@@ -418,6 +435,23 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
     });
   }, [analyzed, filter, onlyFlagged, methodFilter, statusFilter, typeFilter]);
 
+  // The graph honours the panel's text / flagged / method / status filters but
+  // keeps its own resource-type facet: the legend in the graph toolbar is the
+  // authoritative type filter there, and applying both would make one of the
+  // two chip rows silently invisible.
+  const graphEntries = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return analyzed
+      .filter(({ e, host, flags }) => {
+        if (onlyFlagged && !Object.values(flags).some(Boolean)) return false;
+        if (methodFilter.size > 0 && !methodFilter.has(methodOf(e))) return false;
+        if (statusFilter.size > 0 && !statusFilter.has(statusGroupOf(e))) return false;
+        if (!q) return true;
+        return e.url.toLowerCase().includes(q) || host.includes(q);
+      })
+      .map(({ e }) => e);
+  }, [analyzed, filter, onlyFlagged, methodFilter, statusFilter]);
+
   // Method / status chips are derived from the tab-filtered set (before the text
   // and flagged filters), so their counts and presence stay stable as the user
   // narrows the list.
@@ -555,18 +589,63 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
   }, []);
 
   const copyAllVisible = useCallback(() => {
-    const lines = visible.map(({ e }) =>
-      `${fmtTime(e.ts)}\t${(e.m || 'GET').padEnd(7)}${e.f ? 'ERR ' : String(e.s || '…').padEnd(4)} ${(e.b || 0)}\t${e.url}`,
-    );
+    const lines = [
+      tsvRow(['time', 'method', 'status', 'bytes', 'type', 'ip', 'sha1', 'error', 'url']),
+      ...visible.map(({ e }) =>
+        tsvRow([isoTime(e.ts), e.m || 'GET', e.f ? 'ERR' : e.s || '', e.b || 0, e.t, e.ip, e.h, e.e, e.url]),
+      ),
+    ];
     copyText(lines.join('\n'), 'all');
   }, [visible, copyText]);
 
   const copyDomains = useCallback(() => {
-    const lines = domainRows.map((d) =>
-      `${d.host}\t${Array.from(d.ips).join('|')}\t${d.count}\t${fmtSize(d.bytes)}`,
-    );
+    const lines = [
+      tsvRow(['domain', 'ips', 'requests', 'bytes']),
+      ...domainRows.map((d) => tsvRow([d.host, Array.from(d.ips).join('|'), d.count, d.bytes])),
+    ];
     copyText(lines.join('\n'), 'domains');
   }, [domainRows, copyText]);
+
+  const copyConsole = useCallback(() => {
+    const lines = [
+      tsvRow(['time', 'level', 'text']),
+      ...consoleFiltered.map((c) => tsvRow([isoTime(c.ts), c.level, c.text])),
+    ];
+    copyText(lines.join('\n'), 'console');
+  }, [consoleFiltered, copyText]);
+
+  const copyCookies = useCallback(() => {
+    const lines = [
+      tsvRow(['name', 'value', 'domain', 'path', 'expires', 'samesite', 'httponly', 'secure']),
+      ...cookieEntries.map((c) =>
+        tsvRow([
+          c.name,
+          c.value,
+          cookieDomainLabel(c.domain),
+          c.path || '/',
+          cookieExpiryLabel(c),
+          c.sameSite,
+          c.httpOnly,
+          c.secure,
+        ]),
+      ),
+    ];
+    copyText(lines.join('\n'), 'cookies');
+  }, [cookieEntries, copyText]);
+
+  // Copy follows the active tab: each tab renders its own kind of row, so
+  // copying network requests while the user is looking at cookies/console is
+  // never what the button appears to promise.
+  const copyAction =
+    tab === 'domains' ? copyDomains : tab === 'console' ? copyConsole : tab === 'cookies' ? copyCookies : copyAllVisible;
+  const copyTag = tab === 'domains' ? 'domains' : tab === 'console' ? 'console' : tab === 'cookies' ? 'cookies' : 'all';
+  const copyCount =
+    tab === 'domains' ? domainRows.length : tab === 'console' ? consoleFiltered.length : tab === 'cookies' ? cookieEntries.length : visible.length;
+  const copyTitle =
+    tab === 'domains' ? 'Copy domains as TSV to clipboard'
+      : tab === 'console' ? 'Copy visible console lines as TSV to clipboard'
+        : tab === 'cookies' ? 'Copy all cookies as TSV to clipboard'
+          : 'Copy visible rows as TSV to clipboard';
 
   const exportHAR = useCallback(() => {
     const har = {
@@ -708,8 +787,8 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
           )}
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <button onClick={tab === 'domains' ? copyDomains : copyAllVisible} disabled={tab === 'domains' ? domainRows.length === 0 : visible.length === 0} className="whitespace-nowrap rounded px-1.5 py-0.5 text-cyan-600 hover:bg-zinc-200 hover:text-cyan-700 disabled:opacity-40 dark:text-cyan-400 dark:hover:bg-gray-700 dark:hover:text-cyan-200" title={tab === 'domains' ? 'Copy domains list to clipboard' : 'Copy visible rows to clipboard'}>
-            {copiedTag === 'all' || copiedTag === 'domains' ? '✓ copied' : '⧉ copy'}
+          <button onClick={copyAction} disabled={copyCount === 0} className="whitespace-nowrap rounded px-1.5 py-0.5 text-cyan-600 hover:bg-zinc-200 hover:text-cyan-700 disabled:opacity-40 dark:text-cyan-400 dark:hover:bg-gray-700 dark:hover:text-cyan-200" title={copyTitle}>
+            {copiedTag === copyTag ? '✓ copied' : '⧉ copy'}
           </button>
           <button onClick={exportHAR} className="whitespace-nowrap rounded px-1.5 py-0.5 text-cyan-600 hover:bg-zinc-200 hover:text-cyan-700 dark:text-cyan-400 dark:hover:bg-gray-700 dark:hover:text-cyan-200" title="Export captured requests as HAR 1.2">⇩ HAR</button>
           {onPopOut && (
@@ -925,7 +1004,7 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
       {tab === 'graph' && (
         <div className="flex-1 overflow-hidden">
           <ResourceGraph
-            entries={tabFiltered}
+            entries={graphEntries}
             originHost={graphOriginHost(tabs, tabFilter)}
             onSelect={(sel) => {
               if (sel) setFilter(sel);

@@ -8,7 +8,9 @@ import {
   statusGroupOf,
   type BrowserTab,
   type ConsoleEntry,
+  type CookieEntry,
   type NetEntry,
+  type PanelTab,
 } from './IsolaNetworkPanel';
 
 const tab = (id: number, url: string, active = false): BrowserTab => ({ id, url, title: '', active });
@@ -311,5 +313,85 @@ describe('IsolaNetworkPanel method/status filters', () => {
     const copied = JSON.parse((writeText.mock.calls[0] as unknown as [string])[0]);
     expect(copied).toHaveProperty('sha1');
     expect(copied.sha1).toBe('');
+  });
+});
+
+describe('IsolaNetworkPanel copy action', () => {
+  const cookie = (over: Partial<CookieEntry> = {}): CookieEntry => ({
+    domain: 'example.com',
+    name: 'sid',
+    value: 'abc123',
+    path: '/',
+    sameSite: 'Lax',
+    expires: '',
+    httpOnly: true,
+    secure: true,
+    ...over,
+  });
+
+  const setup = (props: {
+    tab: PanelTab;
+    entries?: NetEntry[];
+    consoleEntries?: ConsoleEntry[];
+    cookieEntries?: CookieEntry[];
+  }) => {
+    render(
+      <IsolaNetworkPanel
+        entries={props.entries ?? []}
+        consoleEntries={props.consoleEntries ?? []}
+        cookieEntries={props.cookieEntries ?? []}
+        layout="bottom"
+        tab={props.tab}
+        onTab={() => {}}
+        onLayout={() => {}}
+        onClose={() => {}}
+      />,
+    );
+  };
+
+  const clipboard = () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    return writeText;
+  };
+
+  it('copies cookies, not network rows, when the cookies tab is active', () => {
+    const writeText = clipboard();
+    setup({ tab: 'cookies', entries: [net(1, 'https://example.com/api')], cookieEntries: [cookie()] });
+
+    fireEvent.click(screen.getByTitle('Copy all cookies as TSV to clipboard'));
+
+    expect(writeText).toHaveBeenCalledWith(
+      'name\tvalue\tdomain\tpath\texpires\tsamesite\thttponly\tsecure\n' +
+        'sid\tabc123\texample.com\t/\tSession\tLax\ttrue\ttrue',
+    );
+  });
+
+  it('copies console lines, escaping characters that would break a TSV record', () => {
+    const writeText = clipboard();
+    setup({
+      tab: 'console',
+      entries: [net(1, 'https://example.com/api')],
+      consoleEntries: [{ level: 'error', text: 'boom\nnext', tb: 1 }],
+    });
+
+    fireEvent.click(screen.getByTitle('Copy visible console lines as TSV to clipboard'));
+
+    expect(writeText).toHaveBeenCalledWith('time\tlevel\ttext\n\terror\tboom\\nnext');
+  });
+
+  it('copies request rows as headered TSV with ISO times and raw byte counts', () => {
+    const writeText = clipboard();
+    setup({
+      tab: 'network',
+      entries: [{ ...net(1, 'https://example.com/api'), ts: Date.UTC(2026, 0, 2, 3, 4, 5, 678), b: 1234, t: 'XHR' }],
+    });
+
+    fireEvent.click(screen.getByTitle('Copy visible rows as TSV to clipboard'));
+
+    expect(writeText).toHaveBeenCalledWith(
+      'time\tmethod\tstatus\tbytes\ttype\tip\tsha1\terror\turl\n' +
+        '2026-01-02T03:04:05.678Z\tGET\t200\t1234\tXHR\t\t\t\thttps://example.com/api',
+    );
   });
 });
