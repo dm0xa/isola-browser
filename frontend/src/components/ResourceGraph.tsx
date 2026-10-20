@@ -601,8 +601,25 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   const [size, setSize] = useState({ w: 800, h: 500 });
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // A hover tooltip must outlive the pointer leaving the node by enough to
+  // cross the gap into the card, or its copy buttons vanish before the
+  // pointer can reach them.
+  const hoverClearRef = useRef<number | null>(null);
+  const cancelHoverClear = useCallback(() => {
+    if (hoverClearRef.current !== null) window.clearTimeout(hoverClearRef.current);
+    hoverClearRef.current = null;
+  }, []);
+  const scheduleHoverClear = useCallback((id: string) => {
+    cancelHoverClear();
+    hoverClearRef.current = window.setTimeout(() => {
+      hoverClearRef.current = null;
+      setHoverId((h) => (h === id ? null : h));
+    }, 200);
+  }, [cancelHoverClear]);
+  useEffect(() => () => cancelHoverClear(), [cancelHoverClear]);
   const [typeFilter, setTypeFilter] = useState<ReadonlySet<ResourceClass>>(() => new Set());
   const [copiedHash, setCopiedHash] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(false);
   const [view, setView] = useState<View>({ z: 1, x: 0, y: 0 });
   const [panning, setPanning] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -828,6 +845,9 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
+    // The tooltip's own controls must not be swallowed by canvas panning:
+    // capturing the pointer here would retarget the click away from them.
+    if ((e.target as Element).closest('[data-graph-tooltip]')) return;
     if ((e.target as Element).closest('[data-node]') && e.pointerType === 'mouse') return;
     const el = containerRef.current!;
     el.setPointerCapture(e.pointerId);
@@ -1009,8 +1029,8 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     return (
       <g key={n.id} data-node transform={`translate(${n.x}, ${n.y})`} opacity={dim}
         style={{ cursor: 'pointer', transition: 'opacity 150ms ease' }}
-        onMouseEnter={() => setHoverId(n.id)}
-        onMouseLeave={() => setHoverId((h) => (h === n.id ? null : h))}
+        onMouseEnter={() => { cancelHoverClear(); setHoverId(n.id); }}
+        onMouseLeave={() => scheduleHoverClear(n.id)}
         onClick={() => { setSelectedId((s) => (s === n.id ? null : n.id)); onSelect?.(null); }}
       >
         <g className="rg-node" style={{ filter: selected ? 'drop-shadow(0 0 12px rgba(34, 211, 238, 0.5))' : 'drop-shadow(0 0 8px rgba(34, 211, 238, 0.3))' }}>
@@ -1065,8 +1085,8 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     return (
       <g key={n.id} data-node transform={`translate(${n.x}, ${n.y})`} opacity={dim}
         style={{ cursor: 'pointer', transition: 'opacity 150ms ease' }}
-        onMouseEnter={() => setHoverId(n.id)}
-        onMouseLeave={() => setHoverId((h) => (h === n.id ? null : h))}
+        onMouseEnter={() => { cancelHoverClear(); setHoverId(n.id); }}
+        onMouseLeave={() => scheduleHoverClear(n.id)}
         onClick={() => { setSelectedId((s) => (s === n.id ? null : n.id)); onSelect?.(node.host); }}
       >
         <g className="rg-node" style={{ filter: glow }}>
@@ -1123,8 +1143,8 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     return (
       <g key={n.id} data-node transform={`translate(${n.x}, ${n.y})`} opacity={dim}
         style={{ cursor: 'pointer', transition: 'opacity 150ms ease' }}
-        onMouseEnter={() => setHoverId(n.id)}
-        onMouseLeave={() => setHoverId((h) => (h === n.id ? null : h))}
+        onMouseEnter={() => { cancelHoverClear(); setHoverId(n.id); }}
+        onMouseLeave={() => scheduleHoverClear(n.id)}
         onClick={() => { setSelectedId((s) => (s === n.id ? null : n.id)); onSelect?.(node.host); }}
       >
         <g className="rg-node" style={{ filter: glow }}>
@@ -1168,7 +1188,10 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
 
     return (
       <div
-        className="pointer-events-none absolute z-20 w-60 rounded-xl border border-zinc-200 bg-white/95 p-2.5 shadow-2xl shadow-black/20 backdrop-blur-sm dark:border-white/10 dark:bg-[#0c1220]/95 dark:shadow-black/60"
+        data-graph-tooltip=""
+        onMouseEnter={cancelHoverClear}
+        onMouseLeave={() => scheduleHoverClear(node.id)}
+        className="pointer-events-auto absolute z-20 w-60 rounded-xl border border-zinc-200 bg-white/95 p-2.5 shadow-2xl shadow-black/20 backdrop-blur-sm dark:border-white/10 dark:bg-[#0c1220]/95 dark:shadow-black/60"
         style={{ left, top }}
       >
         <div className="flex items-center gap-1.5">
@@ -1195,8 +1218,25 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
           !isHost && <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-slate-500">{node.host}</div>
         )}
         {url && (
-          <div className="mt-1 truncate font-mono text-[9.5px] leading-relaxed text-zinc-500 dark:text-slate-500" title={url}>
-            {shortUrl}
+          <div className="mt-1 flex items-center gap-1.5">
+            <code className="min-w-0 flex-1 truncate font-mono text-[9.5px] leading-relaxed text-zinc-500 dark:text-slate-500" title={url}>
+              {shortUrl}
+            </code>
+            <button
+              type="button"
+              onClick={(ev) => {
+                ev.stopPropagation();
+                void copyToClipboard(url).then((ok) => {
+                  if (!ok) return;
+                  setCopiedUrl(true);
+                  window.setTimeout(() => setCopiedUrl(false), 1500);
+                });
+              }}
+              className="pointer-events-auto shrink-0 rounded border border-zinc-300 px-1 text-[9px] text-cyan-600 hover:bg-zinc-200 dark:border-white/10 dark:text-cyan-400 dark:hover:bg-white/10"
+              title="Copy URL"
+            >
+              {copiedUrl ? '✓' : 'copy'}
+            </button>
           </div>
         )}
         {node.sha1 && (
@@ -1412,6 +1452,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
         onClick={(e) => {
           // Click on empty canvas clears the pinned selection (a drag doesn't).
           if ((e.target as Element).closest('[data-node]')) return;
+          if ((e.target as Element).closest('[data-graph-tooltip]')) return;
           const start = clickStartRef.current;
           if (start) {
             const rect = containerRef.current!.getBoundingClientRect();
