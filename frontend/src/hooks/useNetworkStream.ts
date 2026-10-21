@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { BrowserTab, ConsoleEntry, CookieEntry, NetEntry } from '../components/IsolaNetworkPanel';
+import { mergeConsoleEntry } from '../lib/consoleEntries';
 import { cookieFromWire, mergeCookieEntry } from '../lib/cookieEntries';
 import { getNetworkLogMaxEntries } from '../lib/config';
 import { mergeNetEntry } from '../lib/netEntries';
@@ -149,7 +150,7 @@ export function useNetworkStream(wsUrl: string | null) {
               tb: typeof msg.tb === 'number' ? msg.tb : undefined,
               ts: typeof msg.ts === 'number' ? msg.ts : undefined,
             };
-            const next = [...consoleRef.current, entry];
+            const next = mergeConsoleEntry(consoleRef.current, entry);
             if (next.length > MAX_CONSOLE) next.splice(0, next.length - MAX_CONSOLE);
             consoleRef.current = next;
             setSnapshot((p) => ({ ...p, consoleEntries: next }));

@@ -29,6 +29,13 @@ var (
 const consoleMaxEntries = 300
 const consoleMaxTextLen = 500
 
+// consoleKey is the dedupe identity of one console line. It includes the tab so
+// the same text logged in two tabs is kept, and is shared with the pre-strip
+// rewrite in tabs.go so a rewritten entry stays deduped.
+func consoleKey(e consoleEntry) string {
+	return e.Level + "|" + e.Text + "|" + fmt.Sprint(e.Tab)
+}
+
 // consoleTap processes CDP Runtime events for console capture.
 // Called from the capture client's read loop; `tab` is the tab the event's
 // target belongs to.
@@ -82,7 +89,7 @@ func consoleTap(method string, params json.RawMessage, tab int) {
 	entry := consoleEntry{Level: level, Text: text, Tab: tab, TS: time.Now().UnixMilli()}
 
 	consoleMu.Lock()
-	key := entry.Level + "|" + entry.Text + "|" + fmt.Sprint(entry.Tab)
+	key := consoleKey(entry)
 	if consoleSentKeys[key] {
 		consoleMu.Unlock()
 		return

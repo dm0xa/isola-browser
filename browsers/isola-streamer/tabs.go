@@ -17,12 +17,17 @@ import (
 // When the active tab changes we point the CDP input client at the new
 // page target (matched by URL prefix) and force a reconnect.
 
+// unknownTab is the id capture events carry until the runner reports its tab
+// strip. It is never a real tab id (those are positive and monotonic), so it
+// can be recognised and rewritten later — see reassignUnknownTab.
+const unknownTab = -1
+
 var (
 	tabMu          sync.Mutex
 	tabListeners   = map[int]func(map[string]any){}
 	tabListenerSeq int
 	ctrlConn       net.Conn
-	activeTabID    = -1
+	activeTabID    = unknownTab
 	lastTabsMsg    map[string]any // last broadcast, replayed to new listeners
 	runnerTabs     []tabInfo      // last known tab strip state (id/url/title/active)
 )
@@ -194,6 +199,93 @@ func broadcastTabs(msg map[string]any) {
 	}
 }
 
+// applyTabsState installs one runner `tabs` broadcast: it becomes the attribution
+// source for later capture events and the state replayed to new viewers.
+func applyTabsState(tabsOut []tabInfo) {
+	newActive := -1
+	var activeURL string
+	for _, t := range tabsOut {
+		if t.Active {
+			newActive = t.ID
+			activeURL = t.URL
+		}
+	}
+
+	tabMu.Lock()
+	switched := newActive != activeTabID
+	// Capture starts before this socket is up, so anything captured until now
+	// carries the "no tab known yet" id (see reassignUnknownTab).
+	wasUnknown := activeTabID < 0
+	activeTabID = newActive
+	runnerTabs = tabsOut
+	tabMu.Unlock()
+
+	if wasUnknown && newActive > 0 {
+		reassignUnknownTab(newActive)
+	}
+	if switched && activeURL != "" && cdpClient != nil {
+		// Input must land in the newly active tab: point the
+		// CDP client at its page target and reattach.
+		cdpClient.SetPreferredTarget(activeURL)
+		cdpClient.ForceReconnect()
+	}
+	msg := map[string]any{"type": "tabs", "tabs": tabsOut}
+	tabMu.Lock()
+	lastTabsMsg = msg
+	tabMu.Unlock()
+	broadcastTabs(msg)
+}
+
+// reassignUnknownTab rewrites traffic captured before the runner reported its
+// tab strip onto the tab that is now active, and re-publishes the corrected
+// entries.
+//
+// activeTabID starts at -1, so the START_URL load — usually the largest burst
+// of a session — is captured before any tab id exists. The panel merges the tab
+// strip with the ids it sees in entries, so that -1 bucket rendered as a second,
+// phantom tab named after its busiest host ("1 tab in the browser, 2 in the
+// panel"). Folding it into the active tab is the same best-effort choice
+// tabForTarget makes for a target it cannot match. Re-publishing is safe: the
+// viewer merges entries by id, so a row is corrected in place rather than
+// duplicated.
+func reassignUnknownTab(tab int) {
+	if tab <= 0 {
+		return
+	}
+
+	var updated []netRequest
+	netMu.Lock()
+	for _, r := range netRequests {
+		if r.tab == unknownTab {
+			r.tab = tab
+			// Copy under the lock: a body hash may settle concurrently, and the
+			// copy must not be read while that writes the same struct.
+			updated = append(updated, *r)
+		}
+	}
+	netMu.Unlock()
+	for i := range updated {
+		broadcastNetEntry(&updated[i])
+	}
+
+	var lines []consoleEntry
+	consoleMu.Lock()
+	for i := range consoleBuffer {
+		if consoleBuffer[i].Tab != unknownTab {
+			continue
+		}
+		consoleBuffer[i].Tab = tab
+		// The dedupe key embeds the tab, so carry the rewritten entry over or
+		// the same line logged again would be added a second time.
+		consoleSentKeys[consoleKey(consoleBuffer[i])] = true
+		lines = append(lines, consoleBuffer[i])
+	}
+	consoleMu.Unlock()
+	for _, e := range lines {
+		broadcastToInputWS(map[string]any{"type": "console", "l": e.Level, "t": e.Text, "tb": e.Tab, "ts": e.TS})
+	}
+}
+
 func forwardTabCommand(data []byte) {
 	// Client messages use {"type":"tab_new",...}; the runner protocol is
 	// {"cmd":"tab_new",...}. Translate instead of forwarding raw.
@@ -316,33 +408,11 @@ func startTabCtrl() {
 				if ev.Ev != "tabs" {
 					continue
 				}
-				newActive := -1
-				var activeURL string
 				tabsOut := make([]tabInfo, 0, len(ev.Tabs))
 				for _, t := range ev.Tabs {
 					tabsOut = append(tabsOut, tabInfo{ID: t.ID, URL: t.URL, Title: t.Title, Active: t.Active})
-					if t.Active {
-						newActive = t.ID
-						activeURL = t.URL
-					}
 				}
-
-				tabMu.Lock()
-				switched := newActive != activeTabID
-				activeTabID = newActive
-				runnerTabs = tabsOut
-				tabMu.Unlock()
-				if switched && activeURL != "" && cdpClient != nil {
-					// Input must land in the newly active tab: point the
-					// CDP client at its page target and reattach.
-					cdpClient.SetPreferredTarget(activeURL)
-					cdpClient.ForceReconnect()
-				}
-				msg := map[string]any{"type": "tabs", "tabs": tabsOut}
-				tabMu.Lock()
-				lastTabsMsg = msg
-				tabMu.Unlock()
-				broadcastTabs(msg)
+				applyTabsState(tabsOut)
 			}
 
 			tabMu.Lock()
