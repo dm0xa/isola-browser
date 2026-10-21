@@ -10,12 +10,12 @@ import (
 // resetNetCapture in cdp_capture_test.go).
 func resetConsoleCapture() func() {
 	consoleMu.Lock()
-	prevBuffer, prevKeys := consoleBuffer, consoleSentKeys
-	consoleBuffer, consoleSentKeys = nil, map[string]bool{}
+	prevBuffer, prevKeys, prevSeq := consoleBuffer, consoleSentKeys, consoleSeq
+	consoleBuffer, consoleSentKeys, consoleSeq = nil, map[string]bool{}, 0
 	consoleMu.Unlock()
 	return func() {
 		consoleMu.Lock()
-		consoleBuffer, consoleSentKeys = prevBuffer, prevKeys
+		consoleBuffer, consoleSentKeys, consoleSeq = prevBuffer, prevKeys, prevSeq
 		consoleMu.Unlock()
 	}
 }
@@ -73,23 +73,62 @@ func TestConsoleTapDefaultsLevelAndHandlesExceptions(t *testing.T) {
 	}
 }
 
-// Repeat messages are collapsed (the tap dedups on level+text+tab), but the same
-// text on a different tab is a distinct entry — so one chatty tab cannot mask
-// another tab's output in the per-tab filter.
+// A repeat at the same millisecond on the same tab is the same event and is
+// collapsed; the same text on a different tab, or at a later millisecond, is a
+// distinct line and must not be dropped.
 func TestConsoleTapDedupsPerTab(t *testing.T) {
 	defer resetConsoleCapture()()
+	oldNow := consoleNow
+	consoleNow = func() int64 { return 1000 }
+	defer func() { consoleNow = oldNow }()
 
 	params := json.RawMessage(`{"type":"warning","args":[{"value":"same"}]}`)
 	consoleTap("Runtime.consoleAPICalled", params, 1)
-	consoleTap("Runtime.consoleAPICalled", params, 1) // repeat on same tab → dropped
+	consoleTap("Runtime.consoleAPICalled", params, 1) // same ms, same tab → dropped
 	consoleTap("Runtime.consoleAPICalled", params, 2) // other tab → kept
 
 	got := consoleEntriesSnapshot()
 	if len(got) != 2 {
-		t.Fatalf("got %d entries, want 2 (same-tab repeat deduped, other tab kept)", len(got))
+		t.Fatalf("got %d entries, want 2 (same-ms repeat deduped, other tab kept)", len(got))
 	}
 	if got[0].Tab != 1 || got[1].Tab != 2 {
 		t.Fatalf("tab attribution wrong: %+v", got)
+	}
+
+	// A genuine repeat later in the session is a new line, not a duplicate.
+	consoleNow = func() int64 { return 1001 }
+	consoleTap("Runtime.consoleAPICalled", params, 1)
+	if got := consoleEntriesSnapshot(); len(got) != 3 {
+		t.Fatalf("got %d entries, want 3 (later repeat must be kept)", len(got))
+	}
+}
+
+// A re-published line keeps its id, so the viewer folds the corrected tab into
+// the row instead of appending a second copy.
+func TestConsoleRepublishKeepsLineID(t *testing.T) {
+	defer resetConsoleCapture()()
+	defer snapshotTabState()()
+
+	oldNow := consoleNow
+	consoleNow = func() int64 { return 7 }
+	defer func() { consoleNow = oldNow }()
+
+	got, unregister := collectBroadcasts("console")
+	defer unregister()
+
+	consoleTap("Runtime.consoleAPICalled", json.RawMessage(`{"type":"log","args":[{"value":"hello"}]}`), unknownTab)
+	reassignUnknownTab(3)
+
+	if len(*got) != 2 {
+		t.Fatalf("broadcasts = %d, want 2 (original + republish)", len(*got))
+	}
+	first, _ := (*got)[0]["i"].(int64)
+	second, _ := (*got)[1]["i"].(int64)
+	if first != second {
+		t.Fatalf("line id changed on republish: %v -> %v", first, second)
+	}
+	if (*got)[1]["tb"] != 3 {
+		t.Fatalf("republished tab = %v, want 3", (*got)[1]["tb"])
 	}
 }
 

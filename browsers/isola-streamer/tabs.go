@@ -212,11 +212,19 @@ func applyTabsState(tabsOut []tabInfo) {
 	}
 
 	tabMu.Lock()
-	switched := newActive != activeTabID
+	previous := activeTabID
 	// Capture starts before this socket is up, so anything captured until now
 	// carries the "no tab known yet" id (see reassignUnknownTab).
-	wasUnknown := activeTabID < 0
-	activeTabID = newActive
+	wasUnknown := previous < 0
+	// A strip may briefly carry no active tab (the runner is switching tabs).
+	// Assigning -1 would re-arm the backfill and re-open the unknown bucket, so
+	// keep the last known attribution until a real tab replaces it.
+	if newActive > 0 {
+		activeTabID = newActive
+	}
+	// `switched` only means the strip named a different tab; an empty strip
+	// must not re-point input.
+	switched := newActive > 0 && newActive != previous
 	runnerTabs = tabsOut
 	tabMu.Unlock()
 
@@ -253,19 +261,18 @@ func reassignUnknownTab(tab int) {
 		return
 	}
 
-	var updated []netRequest
+	var msgs []map[string]any
 	netMu.Lock()
 	for _, r := range netRequests {
 		if r.tab == unknownTab {
 			r.tab = tab
-			// Copy under the lock: a body hash may settle concurrently, and the
-			// copy must not be read while that writes the same struct.
-			updated = append(updated, *r)
+			// Serialise while the lock is held; see netWireMessage.
+			msgs = append(msgs, netWireMessage(r))
 		}
 	}
 	netMu.Unlock()
-	for i := range updated {
-		broadcastNetEntry(&updated[i])
+	for _, msg := range msgs {
+		broadcastNetMessage(msg)
 	}
 
 	var lines []consoleEntry
@@ -274,15 +281,17 @@ func reassignUnknownTab(tab int) {
 		if consoleBuffer[i].Tab != unknownTab {
 			continue
 		}
+		// The dedupe key embeds the tab, so drop the old key and carry the
+		// rewritten entry over; otherwise the same line logged again would be
+		// added a second time and the old key would leak.
+		delete(consoleSentKeys, consoleKey(consoleBuffer[i]))
 		consoleBuffer[i].Tab = tab
-		// The dedupe key embeds the tab, so carry the rewritten entry over or
-		// the same line logged again would be added a second time.
 		consoleSentKeys[consoleKey(consoleBuffer[i])] = true
 		lines = append(lines, consoleBuffer[i])
 	}
 	consoleMu.Unlock()
 	for _, e := range lines {
-		broadcastToInputWS(map[string]any{"type": "console", "l": e.Level, "t": e.Text, "tb": e.Tab, "ts": e.TS})
+		broadcastToInputWS(consoleWire(e))
 	}
 }
 

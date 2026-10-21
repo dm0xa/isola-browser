@@ -46,6 +46,8 @@ export interface GraphNode {
   lastTs?: number;
   /** Hex SHA-1 of the file's content, once the streamer has hashed it. */
   sha1?: string;
+  /** The streamer clipped this URL to its wire budget; copy is incomplete. */
+  ut?: boolean;
 }
 
 export interface GraphEdge {
@@ -184,29 +186,40 @@ export function buildGraph(
 
   if (entries.length === 0) return { nodes: [], edges: [], rootId: null, originId: null };
 
+  // One parse per entry. The trigger scan below looks back up to 40 entries per
+  // row, so calling analyze()/classifyResource() inside it was ~40k URL parses
+  // per build — and the memo runs twice and on every network event.
+  const facts = entries.map((e) => {
+    const { host, flags } = analyze(e.url);
+    return {
+      host,
+      cls: classifyResource(e.t || '', e.url),
+      flagged: Object.values(flags).some(Boolean),
+    };
+  });
+
   // The origin is decided over the whole capture, never the filtered slice:
   // narrowing to one type must not make a CDN host look like the opened page.
   let rootHost: string | null = null;
   let rootDocHost: string | null = null;
-  for (const e of entries) {
-    const { host } = analyze(e.url);
-    const rClass = classifyResource(e.t || '', e.url);
-    if (!rootDocHost && (rClass === 'document' || (e.t || '').toLowerCase().includes('document'))) {
+  for (let i = 0; i < entries.length; i++) {
+    const { host, cls } = facts[i];
+    if (!rootDocHost && (cls === 'document' || (entries[i].t || '').toLowerCase().includes('document'))) {
       rootDocHost = host;
     }
     if (!rootHost) rootHost = host;
   }
 
   // A non-empty type filter drops everything else, so the graph shows exactly
-  // the kinds the user kept (a filter, not a spotlight).
+  // the kinds the user kept (a filter, not a spotlight). Indices are kept so a
+  // precomputed fact can be indexed directly.
   const included = typeFilter && typeFilter.size > 0
-    ? entries.filter((e) => typeFilter.has(classifyResource(e.t || '', e.url)))
-    : entries;
+    ? entries.map((_, i) => i).filter((i) => typeFilter.has(facts[i].cls))
+    : entries.map((_, i) => i);
 
-  for (const e of included) {
-    const { host, flags } = analyze(e.url);
-    const rClass = classifyResource(e.t || '', e.url);
-    const entryFlagged = Object.values(flags).some(Boolean);
+  for (const idx of included) {
+    const e = entries[idx];
+    const { host, cls: rClass, flagged: entryFlagged } = facts[idx];
     const entryFailed = !!e.f;
 
     const hid = hostId(host);
@@ -230,6 +243,7 @@ export function buildGraph(
         count: 1, flagged: entryFlagged, failed: entryFailed,
         lastTs: e.ts,
         sha1: e.h,
+        ut: e.ut,
       };
       nodes.set(rid, resource);
       hNode.resourceCount = (hNode.resourceCount || 0) + 1;
@@ -288,22 +302,18 @@ export function buildGraph(
   }
 
   const lastTriggerByHost = new Map<string, string>();
-  const entryOrder = [...included];
-  for (let i = 0; i < entryOrder.length; i++) {
-    const e = entryOrder[i];
-    const { host } = analyze(e.url);
+  for (let i = 0; i < included.length; i++) {
+    const host = facts[included[i]].host;
 
     for (let j = i - 1; j >= 0 && j >= i - 40; j--) {
-      const prev = entryOrder[j];
-      const { host: prevHost } = analyze(prev.url);
-      const prevClass = classifyResource(prev.t || '', prev.url);
-      if (prevHost === host) continue;
-      if (prevClass !== 'script' && prevClass !== 'stylesheet' && prevClass !== 'document') continue;
-      const edgeId = `${hostId(prevHost)}->${hostId(host)}`;
+      const prev = facts[included[j]];
+      if (prev.host === host) continue;
+      if (prev.cls !== 'script' && prev.cls !== 'stylesheet' && prev.cls !== 'document') continue;
+      const edgeId = `${hostId(prev.host)}->${hostId(host)}`;
       if (!edges.has(edgeId)) {
-        edges.set(edgeId, { id: edgeId, from: hostId(prevHost), to: hostId(host), direct: false });
+        edges.set(edgeId, { id: edgeId, from: hostId(prev.host), to: hostId(host), direct: false });
       }
-      lastTriggerByHost.set(host, hostId(prevHost));
+      lastTriggerByHost.set(host, hostId(prev.host));
       break;
     }
 
@@ -979,8 +989,21 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   }, [cancelHoverClear]);
   useEffect(() => () => cancelHoverClear(), [cancelHoverClear]);
   const [typeFilter, setTypeFilter] = useState<ReadonlySet<ResourceClass>>(() => new Set());
-  const [copiedHash, setCopiedHash] = useState(false);
-  const [copiedUrl, setCopiedUrl] = useState(false);
+  // Copy confirmation is scoped to the node that was copied: a global flag
+  // showed ✓ on the next node's button too.
+  const [copied, setCopied] = useState<string | null>(null);
+  const copiedResetRef = useRef<number | null>(null);
+  const markCopied = useCallback((key: string) => {
+    setCopied(key);
+    if (copiedResetRef.current !== null) window.clearTimeout(copiedResetRef.current);
+    copiedResetRef.current = window.setTimeout(() => {
+      copiedResetRef.current = null;
+      setCopied(null);
+    }, 1500);
+  }, []);
+  useEffect(() => () => {
+    if (copiedResetRef.current !== null) window.clearTimeout(copiedResetRef.current);
+  }, []);
   const [view, setView] = useState<View>({ z: 1, x: 0, y: 0 });
   const [panning, setPanning] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -1142,9 +1165,14 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     userAdjustedRef.current = true;
   }, []);
 
+  const noticeResetRef = useRef<number | null>(null);
   const flashNotice = useCallback((message: string) => {
     setNotice(message);
-    window.setTimeout(() => setNotice((n) => (n === message ? '' : n)), 3200);
+    if (noticeResetRef.current !== null) window.clearTimeout(noticeResetRef.current);
+    noticeResetRef.current = window.setTimeout(() => {
+      noticeResetRef.current = null;
+      setNotice((n) => (n === message ? '' : n));
+    }, 3200);
   }, []);
 
   // Switching axis re-frames the graph even if the user had zoomed manually.
@@ -1965,14 +1993,14 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
                 ev.stopPropagation();
                 void copyToClipboard(url).then((ok) => {
                   if (!ok) return;
-                  setCopiedUrl(true);
-                  window.setTimeout(() => setCopiedUrl(false), 1500);
+                  markCopied(`url:${node.id}`);
+                  if (node.ut) flashNotice('Copied the truncated URL shown in this capture');
                 });
               }}
               className="pointer-events-auto shrink-0 rounded border border-zinc-300 px-1 text-[9px] text-cyan-600 hover:bg-zinc-200 dark:border-white/10 dark:text-cyan-400 dark:hover:bg-white/10"
-              title="Copy URL"
+              title={node.ut ? 'Copy URL (truncated in this capture)' : 'Copy URL'}
             >
-              {copiedUrl ? '✓' : 'copy'}
+              {copied === `url:${node.id}` ? '✓' : 'copy'}
             </button>
           </div>
         )}
@@ -1988,14 +2016,13 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
                 ev.stopPropagation();
                 void copyToClipboard(node.sha1!).then((ok) => {
                   if (!ok) return;
-                  setCopiedHash(true);
-                  window.setTimeout(() => setCopiedHash(false), 1500);
+                  markCopied(`sha1:${node.id}`);
                 });
               }}
               className="pointer-events-auto shrink-0 rounded border border-zinc-300 px-1 text-[9px] text-cyan-600 hover:bg-zinc-200 dark:border-white/10 dark:text-cyan-400 dark:hover:bg-white/10"
               title="Copy SHA-1"
             >
-              {copiedHash ? '✓' : 'copy'}
+              {copied === `sha1:${node.id}` ? '✓' : 'copy'}
             </button>
           </div>
         )}
@@ -2012,7 +2039,9 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   // A minimap is the navigation aid a 2-D canvas deserves: it shows where the
   // viewport sits in the wrapped graph and can be dragged directly. It only
   // appears while the content overflows, so a fitted small graph stays clean.
-  const minimap = (() => {
+  // Nodes are painted into one <canvas>: a <rect> per node added ~1000
+  // elements to the DOM after "expand all", all re-created on every event.
+  const minimapGeom = useMemo(() => {
     if (tiny || layout.nodes.length === 0) return null;
     const overflowX = layout.totalW * view.z > size.w * 1.02;
     const overflowY = layout.totalH * view.z > size.h * 1.02;
@@ -2027,6 +2056,46 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     );
     const offX = (mmW - layout.totalW * scale) / 2;
     const offY = (mmH - layout.totalH * scale) / 2;
+    return { mmW, mmH, scale, offX, offY };
+  }, [tiny, layout, view.z, size.w, size.h]);
+
+  const minimapCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const g = minimapGeom;
+    const canvas = minimapCanvasRef.current;
+    if (!g || !canvas) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const { mmW, mmH, scale, offX, offY } = g;
+    canvas.width = Math.round(mmW * dpr);
+    canvas.height = Math.round(mmH * dpr);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = pal.canvas;
+    ctx.fillRect(0, 0, mmW, mmH);
+    for (const n of layout.nodes) {
+      const cls = n.node.resourceClass;
+      const fill = n.node.failed
+        ? pal.error
+        : n.node.kind === 'host'
+          ? (n.node.id === viewGraph.originId ? pal.edgeEntry : pal.neutral)
+          : cls ? accentOf(cls) : pal.neutral;
+      ctx.globalAlpha = n.node.kind === 'resource' || n.node.kind === 'more' ? 0.55 : 0.9;
+      ctx.fillStyle = fill;
+      ctx.fillRect(
+        offX + n.x * scale,
+        offY + n.y * scale,
+        Math.max(1, n.w * scale),
+        Math.max(1, n.h * scale),
+      );
+    }
+    ctx.globalAlpha = 1;
+  }, [minimapGeom, layout, viewGraph.originId, pal, accentOf]);
+
+  const minimap = (() => {
+    const g = minimapGeom;
+    if (!g) return null;
+    const { mmW, mmH, scale, offX, offY } = g;
     const viewX = offX + (-view.x / view.z) * scale;
     const viewY = offY + (-view.y / view.z) * scale;
     const viewW = (size.w / view.z) * scale;
@@ -2072,28 +2141,14 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
         }}
         onPointerCancel={() => { minimapDragRef.current = false; }}
       >
-        <svg width={mmW} height={mmH} aria-hidden>
-          <rect width={mmW} height={mmH} fill={pal.canvas} />
-          {layout.nodes.map((n) => {
-            const cls = n.node.resourceClass;
-            const fill = n.node.failed
-              ? pal.error
-              : n.node.kind === 'host'
-                ? (n.node.id === viewGraph.originId ? pal.edgeEntry : pal.neutral)
-                : cls ? accentOf(cls) : pal.neutral;
-            return (
-              <rect
-                key={n.id}
-                x={offX + n.x * scale}
-                y={offY + n.y * scale}
-                width={Math.max(1, n.w * scale)}
-                height={Math.max(1, n.h * scale)}
-                rx={0.7}
-                fill={fill}
-                opacity={n.node.kind === 'resource' || n.node.kind === 'more' ? 0.55 : 0.9}
-              />
-            );
-          })}
+        <canvas
+          ref={minimapCanvasRef}
+          width={mmW}
+          height={mmH}
+          style={{ width: mmW, height: mmH, display: 'block' }}
+          aria-hidden
+        />
+        <svg className="absolute inset-0" width={mmW} height={mmH} aria-hidden>
           <rect
             x={viewX}
             y={viewY}

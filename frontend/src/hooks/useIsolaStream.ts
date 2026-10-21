@@ -1310,7 +1310,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
           // so the panel can live in React without the hook owning it.
           window.dispatchEvent(new CustomEvent('isola-net', { detail: msg.e }));
         } else if (msg.type === 'console' && typeof msg.l === 'string' && typeof msg.t === 'string') {
-          window.dispatchEvent(new CustomEvent('isola-console', { detail: { level: msg.l, text: msg.t, tb: msg.tb, ts: typeof msg.ts === 'number' ? msg.ts : undefined } }));
+          window.dispatchEvent(new CustomEvent('isola-console', { detail: { i: typeof msg.i === 'number' ? msg.i : undefined, level: msg.l, text: msg.t, tb: msg.tb, ts: typeof msg.ts === 'number' ? msg.ts : undefined } }));
         } else if (msg.type === 'cookie' && typeof msg.n === 'string') {
           window.dispatchEvent(new CustomEvent('isola-cookie', { detail: msg }));
         } else if (msg.type === 'cursor' && typeof msg.c === 'string') {

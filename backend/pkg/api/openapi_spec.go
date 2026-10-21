@@ -323,8 +323,8 @@ func getOpenAPISpec() []byte {
           { "name": "type", "in": "query", "schema": { "type": "string" }, "description": "Comma-separated resource types to keep: document,script,stylesheet,image,font,xhr,media,other" },
           { "name": "failed", "in": "query", "schema": { "type": "string", "enum": ["0", "1"] }, "description": "Draw only failed requests" },
           { "name": "scale", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 4, "default": 2 }, "description": "Raster scale" },
-          { "name": "width", "in": "query", "schema": { "type": "integer", "minimum": 320, "maximum": 8000, "default": 1400 }, "description": "Layout width hint used to wrap long sibling runs" },
-          { "name": "height", "in": "query", "schema": { "type": "integer", "minimum": 320, "maximum": 8000, "default": 900 }, "description": "Layout height hint used to wrap long sibling runs" },
+          { "name": "width", "in": "query", "schema": { "type": "integer", "minimum": 320, "maximum": 8000, "default": 1400 }, "description": "Frame the image is fitted into (multiplied by scale) and where long sibling runs wrap" },
+          { "name": "height", "in": "query", "schema": { "type": "integer", "minimum": 320, "maximum": 8000, "default": 900 }, "description": "Frame the image is fitted into (multiplied by scale) and where long sibling runs wrap" },
           { "name": "origin", "in": "query", "schema": { "type": "string" }, "description": "Override the host the graph starts from" },
           { "name": "caption", "in": "query", "schema": { "type": "string", "enum": ["0", "1"], "default": "1" }, "description": "Draw the provenance caption (origin, counts, theme, UTC time)" }
         ],

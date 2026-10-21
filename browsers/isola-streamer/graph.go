@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"net/url"
 	"path"
@@ -398,9 +399,16 @@ func expandModel(m graphModel, mode expandMode) graphModel {
 	return expandInto(m, out, hostOpen, mode == expandAll)
 }
 
+// goGroupPreview is the number of resource rows an expanded type group lists
+// before it collapses the rest into one "more" row. It mirrors GROUP_PREVIEW in
+// frontend/src/components/ResourceGraph.tsx: the PNG is a summary, and an
+// uncapped group made the canvas (and the render) grow with the capture.
+const goGroupPreview = 12
+
 // expandInto adds type groups for the open hosts and, when `resources` is set,
-// every resource under those groups. Edges follow the same shape the viewer
-// builds: host→group and group→resource, never host→resource.
+// up to goGroupPreview of their resources plus a "more" row. Edges follow the
+// same shape the viewer builds: host→group and group→resource, never
+// host→resource.
 func expandInto(m graphModel, out graphModel, hostOpen map[string]bool, resources bool) graphModel {
 	type hostResources struct {
 		byClass map[resClass][]graphNode
@@ -475,9 +483,30 @@ func expandInto(m graphModel, out graphModel, hostOpen map[string]bool, resource
 				}
 				return list[i].Label < list[j].Label
 			})
-			for _, r := range list {
+			shown := len(list)
+			if shown > goGroupPreview {
+				shown = goGroupPreview
+			}
+			shownFailed, shownFlagged := 0, 0
+			for _, r := range list[:shown] {
+				if r.Failed {
+					shownFailed++
+				}
+				if r.Flagged {
+					shownFlagged++
+				}
 				out.Nodes = append(out.Nodes, r)
 				out.Edges = append(out.Edges, graphEdge{From: gid, To: r.ID, Direct: true})
+			}
+			if remaining := len(list) - shown; remaining > 0 {
+				mid := "more:" + gid
+				out.Nodes = append(out.Nodes, graphNode{
+					ID: mid, Kind: "more", Label: fmt.Sprintf("show all %d more", remaining), Host: host,
+					Class: class, Count: remaining, ResourceCnt: remaining,
+					FailedCnt: failed - shownFailed, FlaggedCnt: flagged - shownFlagged,
+					Failed: failed > shownFailed, Flagged: flagged > shownFlagged,
+				})
+				out.Edges = append(out.Edges, graphEdge{From: gid, To: mid, Direct: true})
 			}
 		}
 	}
@@ -543,7 +572,7 @@ func nodeSize(n graphNode) (w float64, h float64) {
 	}
 }
 
-var kindRank = map[string]int{"root": 0, "host": 1, "group": 2, "resource": 3}
+var kindRank = map[string]int{"root": 0, "host": 1, "group": 2, "resource": 3, "more": 3}
 
 type layoutNode struct {
 	Node  graphNode

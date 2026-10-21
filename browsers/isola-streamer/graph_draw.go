@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"image/color"
@@ -208,6 +209,9 @@ type gCanvas struct {
 	scale float64
 	// faces is this render's font cache; see face().
 	faces map[string]font.Face
+	// z is reused across colour batches. Reset zeroes the mask, but reusing
+	// the rasterizer keeps its canvas-sized buffer allocated.
+	z vector.Rasterizer
 }
 
 func (c *gCanvas) px(v float64) float64 { return v * c.scale }
@@ -216,6 +220,53 @@ func (c *gCanvas) px(v float64) float64 { return v * c.scale }
 func (c *gCanvas) textW(f font.Face, s string) float64 { return textWidth(f, s) / c.scale }
 
 const kappa = 0.5522847498
+
+// rectShape and polyShape are queued instead of drawn one at a time so
+// drawRects/drawPolys can batch same-colour shapes into one rasteriser pass.
+// vector.Rasterizer.Reset zeroes the whole canvas, and Draw walks the whole
+// destination rect, so per-shape drawing was O(shapes × canvas) — the reason a
+// 200-entry capture took minutes.
+type rectShape struct {
+	x, y, w, h, r float64
+	col           color.RGBA
+}
+
+type polyShape struct {
+	pts   [][2]float64
+	width float64
+	col   color.RGBA
+}
+
+type textShape struct {
+	f       font.Face
+	x, base float64
+	col     color.RGBA
+	s       string
+}
+
+type colourGroup[T any] struct {
+	col   color.RGBA
+	items []T
+}
+
+func groupByColour[T any](items []T, colOf func(T) color.RGBA, valid func(T) bool) []colourGroup[T] {
+	var groups []colourGroup[T]
+	byCol := map[color.RGBA]int{}
+	for _, it := range items {
+		if !valid(it) {
+			continue
+		}
+		col := colOf(it)
+		i, ok := byCol[col]
+		if !ok {
+			i = len(groups)
+			byCol[col] = i
+			groups = append(groups, colourGroup[T]{col: col})
+		}
+		groups[i].items = append(groups[i].items, it)
+	}
+	return groups
+}
 
 func roundRectPath(z *vector.Rasterizer, x, y, w, h, r float64) {
 	if r <= 0.01 {
@@ -239,44 +290,70 @@ func roundRectPath(z *vector.Rasterizer, x, y, w, h, r float64) {
 	z.ClosePath()
 }
 
-func (c *gCanvas) fillRoundRect(x, y, w, h, r float64, col color.RGBA) {
-	if w <= 0 || h <= 0 || col.A == 0 {
-		return
+// drawRects fills every queued rounded rectangle, one rasteriser pass per
+// colour. Shapes are grouped within a single layer, so grouping cannot move a
+// shape across another shape that must sit under it.
+func (c *gCanvas) drawRects(shapes []rectShape) {
+	groups := groupByColour(shapes, func(s rectShape) color.RGBA { return s.col }, func(s rectShape) bool {
+		return s.w > 0 && s.h > 0 && s.col.A != 0
+	})
+	for _, g := range groups {
+		c.z.Reset(c.img.Bounds().Dx(), c.img.Bounds().Dy())
+		for _, s := range g.items {
+			roundRectPath(&c.z, c.px(s.x), c.px(s.y), c.px(s.w), c.px(s.h), c.px(s.r))
+		}
+		c.z.Draw(c.img, c.img.Bounds(), image.NewUniform(g.col), image.Point{})
 	}
-	var z vector.Rasterizer
-	z.Reset(c.img.Bounds().Dx(), c.img.Bounds().Dy())
-	roundRectPath(&z, c.px(x), c.px(y), c.px(w), c.px(h), c.px(r))
-	z.Draw(c.img, c.img.Bounds(), image.NewUniform(col), image.Point{})
+}
+
+// drawPolys fills the offset polygon around each polyline, one rasteriser pass
+// per colour. Same-colour strokes accumulate as subpaths of one mask.
+func (c *gCanvas) drawPolys(shapes []polyShape) {
+	groups := groupByColour(shapes, func(s polyShape) color.RGBA { return s.col }, func(s polyShape) bool {
+		return len(s.pts) >= 2 && s.width > 0 && s.col.A != 0
+	})
+	for _, g := range groups {
+		c.z.Reset(c.img.Bounds().Dx(), c.img.Bounds().Dy())
+		for _, s := range g.items {
+			poly := offsetPolygon(s.pts, c.scale, c.px(s.width)/2)
+			if poly == nil {
+				continue
+			}
+			c.z.MoveTo(float32(poly[0][0]), float32(poly[0][1]))
+			for _, p := range poly[1:] {
+				c.z.LineTo(float32(p[0]), float32(p[1]))
+			}
+			c.z.ClosePath()
+		}
+		c.z.Draw(c.img, c.img.Bounds(), image.NewUniform(g.col), image.Point{})
+	}
 }
 
 func (c *gCanvas) fillRect(x, y, w, h float64, col color.RGBA) {
-	c.fillRoundRect(x, y, w, h, 0, col)
+	c.drawRects([]rectShape{{x: x, y: y, w: w, h: h, col: col}})
 }
 
-func (c *gCanvas) line(x0, y0, x1, y1, width float64, col color.RGBA) {
-	c.strokePolyline([][2]float64{{x0, y0}, {x1, y1}}, width, col)
-}
-
-// strokePolyline fills a polygon offset around the polyline, which gives
-// antialiased caps and joins without a stroking rasteriser.
-func (c *gCanvas) strokePolyline(pts [][2]float64, width float64, col color.RGBA) {
-	if len(pts) < 2 || width <= 0 {
-		return
+// offsetPolygon builds the visible outline of a stroked polyline by offsetting
+// its points to both sides. This gives antialiased caps and joins without a
+// stroking rasteriser. Points are logical; out is in device pixels.
+func offsetPolygon(pts [][2]float64, scale, half float64) [][2]float64 {
+	if len(pts) < 2 || half <= 0 {
+		return nil
 	}
-	half := c.px(width) / 2
 	scaled := make([][2]float64, len(pts))
 	for i, p := range pts {
-		scaled[i] = [2]float64{c.px(p[0]), c.px(p[1])}
+		scaled[i] = [2]float64{p[0] * scale, p[1] * scale}
 	}
 	left := make([][2]float64, 0, len(scaled))
 	right := make([][2]float64, 0, len(scaled))
 	for i := range scaled {
 		var nx, ny float64
-		if i == 0 {
+		switch {
+		case i == 0:
 			nx, ny = normal(scaled[0], scaled[1])
-		} else if i == len(scaled)-1 {
+		case i == len(scaled)-1:
 			nx, ny = normal(scaled[i-1], scaled[i])
-		} else {
+		default:
 			ax, ay := normal(scaled[i-1], scaled[i])
 			bx, by := normal(scaled[i], scaled[i+1])
 			nx, ny = ax+bx, ay+by
@@ -287,17 +364,12 @@ func (c *gCanvas) strokePolyline(pts [][2]float64, width float64, col color.RGBA
 		left = append(left, [2]float64{scaled[i][0] + nx*half, scaled[i][1] + ny*half})
 		right = append(right, [2]float64{scaled[i][0] - nx*half, scaled[i][1] - ny*half})
 	}
-	var z vector.Rasterizer
-	z.Reset(c.img.Bounds().Dx(), c.img.Bounds().Dy())
-	z.MoveTo(float32(left[0][0]), float32(left[0][1]))
-	for _, p := range left[1:] {
-		z.LineTo(float32(p[0]), float32(p[1]))
-	}
+	out := make([][2]float64, 0, len(left)+len(right))
+	out = append(out, left...)
 	for i := len(right) - 1; i >= 0; i-- {
-		z.LineTo(float32(right[i][0]), float32(right[i][1]))
+		out = append(out, right[i])
 	}
-	z.ClosePath()
-	z.Draw(c.img, c.img.Bounds(), image.NewUniform(col), image.Point{})
+	return out
 }
 
 func normal(a, b [2]float64) (float64, float64) {
@@ -309,11 +381,13 @@ func normal(a, b [2]float64) (float64, float64) {
 	return -dy / l, dx / l
 }
 
-// dashedPolyline splits a sampled curve into dash/space runs by arc length.
-func (c *gCanvas) dashedPolyline(pts [][2]float64, width float64, col color.RGBA, dash, gap float64) {
-	if len(pts) < 2 {
-		return
+// dashPolygons splits a sampled curve into dash runs by arc length. The caller
+// batches the runs with the rest of the same-colour strokes.
+func dashPolygons(pts [][2]float64, dash, gap float64) [][][2]float64 {
+	if len(pts) < 2 || dash <= 0 || gap <= 0 {
+		return nil
 	}
+	var runs [][][2]float64
 	var run [][2]float64
 	drawing := true
 	remaining := dash
@@ -333,7 +407,7 @@ func (c *gCanvas) dashedPolyline(pts [][2]float64, width float64, col color.RGBA
 			remaining -= step
 			if remaining <= 1e-9 {
 				if drawing && len(run) > 1 {
-					c.strokePolyline(run, width, col)
+					runs = append(runs, run)
 				}
 				drawing = !drawing
 				run = [][2]float64{point}
@@ -346,8 +420,9 @@ func (c *gCanvas) dashedPolyline(pts [][2]float64, width float64, col color.RGBA
 		}
 	}
 	if drawing && len(run) > 1 {
-		c.strokePolyline(run, width, col)
+		runs = append(runs, run)
 	}
+	return runs
 }
 
 func (c *gCanvas) text(f font.Face, x, baseline float64, col color.RGBA, s string) {
@@ -496,9 +571,17 @@ func graphStatsOf(m graphModel) graphStats {
 }
 
 // renderGraphPNG builds and paints the graph. Entries are the streamer's
-// network log; filters mirror the viewer's facets.
-func renderGraphPNG(entries []netDumpEntry, opts graphOptions, now time.Time) image.Image {
+// network log; filters mirror the viewer's facets. The context is checked
+// between passes so a client that gave up does not keep a sandbox CPU busy.
+func renderGraphPNG(ctx context.Context, entries []netDumpEntry, opts graphOptions, now time.Time) (image.Image, error) {
 	theme := graphThemes[opts.Theme]
+	// The origin is decided over the whole capture, never the filtered slice:
+	// filtering to failures must not make the first failing host look like the
+	// page the user opened.
+	pinned := opts.Origin
+	if pinned == "" {
+		pinned = originOf(entries)
+	}
 	if opts.FailedOnly {
 		filtered := make([]netDumpEntry, 0, len(entries))
 		for _, e := range entries {
@@ -509,20 +592,43 @@ func renderGraphPNG(entries []netDumpEntry, opts graphOptions, now time.Time) im
 		entries = filtered
 	}
 
-	full := buildGraphModel(entries, opts.Origin, opts.Types)
+	full := buildGraphModel(entries, pinned, opts.Types)
 	stats := graphStatsOf(full)
 
 	if len(full.Nodes) == 0 {
-		return renderEmptyGraph(opts, theme, now)
+		return renderEmptyGraph(opts, theme, now), nil
 	}
 
 	layout := layoutModel(expandModel(full, opts.Expand), opts.Width, opts.Height, opts.Direction)
-	return paintGraph(layout, stats, full.Origin, opts, theme, now)
+	return paintGraph(ctx, layout, stats, full.Origin, opts, theme, now)
+}
+
+// originOf applies buildGraphModel's origin rule to an unfiltered capture: the
+// host of the first document, else the first host seen.
+func originOf(entries []netDumpEntry) string {
+	origin, rootDocHost := "", ""
+	for i := range entries {
+		facts := parseRequestURL(entries[i].URL)
+		if facts.Host == "" {
+			continue
+		}
+		if rootDocHost == "" && classifyResource(entries[i].Type, facts) == classDocument {
+			rootDocHost = facts.Host
+		}
+		if origin == "" {
+			origin = facts.Host
+		}
+	}
+	if rootDocHost != "" {
+		return rootDocHost
+	}
+	return origin
 }
 
 func renderEmptyGraph(opts graphOptions, theme graphTheme, now time.Time) image.Image {
 	w, h := 720.0, 220.0
-	img := image.NewRGBA(image.Rect(0, 0, int(w*opts.Scale), int(h*opts.Scale)))
+	opts.Scale = fitRenderScale(opts, w, h)
+	img := image.NewRGBA(image.Rect(0, 0, int(math.Round(w*opts.Scale)), int(math.Round(h*opts.Scale))))
 	c := &gCanvas{img: img, scale: opts.Scale}
 	c.fillRect(0, 0, w, h, theme.Canvas)
 	c.text(c.face("bold", 14*opts.Scale), 32, 96, theme.Label, "No requests captured yet")
@@ -557,7 +663,31 @@ func captionLine(origin string, stats graphStats, theme string, now time.Time) s
 	return strings.Join(parts, " · ")
 }
 
-func paintGraph(layout graphLayout, stats graphStats, origin string, opts graphOptions, theme graphTheme, now time.Time) image.Image {
+// fitRenderScale bounds the raster. width/height describe the frame the caller
+// asked for (in layout units) and scale multiplies it, so the image shrinks
+// uniformly when the layout overflows that frame. Hard limits mirror the
+// viewer's export cap, so no request can allocate an arbitrarily large image.
+func fitRenderScale(opts graphOptions, w, h float64) float64 {
+	const (
+		maxRenderEdge   = 8192.0
+		maxRenderPixels = 24_000_000.0
+		minRenderScale  = 0.05
+	)
+	s := opts.Scale
+	if w > 0 && h > 0 {
+		if boxW, boxH := opts.Width*opts.Scale, opts.Height*opts.Scale; boxW > 0 && boxH > 0 {
+			s = math.Min(s, math.Min(boxW/w, boxH/h))
+		}
+		s = math.Min(s, maxRenderEdge/math.Max(w, h))
+		s = math.Min(s, math.Sqrt(maxRenderPixels/(w*h)))
+	}
+	if s < minRenderScale {
+		s = minRenderScale
+	}
+	return s
+}
+
+func paintGraph(ctx context.Context, layout graphLayout, stats graphStats, origin string, opts graphOptions, theme graphTheme, now time.Time) (image.Image, error) {
 	footer := 0.0
 	if opts.Caption {
 		footer = graphFooter
@@ -566,54 +696,70 @@ func paintGraph(layout graphLayout, stats graphStats, origin string, opts graphO
 	contentH := math.Max(layout.TotalH, 200)
 	w := contentW + graphPad*2
 	h := contentH + graphPad*2 + footer
+	opts.Scale = fitRenderScale(opts, w, h)
 
 	img := image.NewRGBA(image.Rect(0, 0, int(math.Round(w*opts.Scale)), int(math.Round(h*opts.Scale))))
 	c := &gCanvas{img: img, scale: opts.Scale}
 
 	c.fillRect(0, 0, w, h, theme.Canvas)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	// Grid, drawn in the content area only.
+	var grid []polyShape
 	for gx := graphPad; gx < w-graphPad; gx += 24 {
-		c.line(gx, graphPad, gx, graphPad+contentH, 0.5, theme.GridMinor)
+		grid = append(grid, polyShape{pts: [][2]float64{{gx, graphPad}, {gx, graphPad + contentH}}, width: 0.5, col: theme.GridMinor})
 	}
 	for gy := graphPad; gy < graphPad+contentH; gy += 24 {
-		c.line(graphPad, gy, w-graphPad, gy, 0.5, theme.GridMinor)
+		grid = append(grid, polyShape{pts: [][2]float64{{graphPad, gy}, {w - graphPad, gy}}, width: 0.5, col: theme.GridMinor})
 	}
 	for gx := graphPad; gx < w-graphPad; gx += 120 {
-		c.line(gx, graphPad, gx, graphPad+contentH, 0.5, theme.GridMajor)
+		grid = append(grid, polyShape{pts: [][2]float64{{gx, graphPad}, {gx, graphPad + contentH}}, width: 0.5, col: theme.GridMajor})
 	}
 	for gy := graphPad; gy < graphPad+contentH; gy += 120 {
-		c.line(graphPad, gy, w-graphPad, gy, 0.5, theme.GridMajor)
+		grid = append(grid, polyShape{pts: [][2]float64{{graphPad, gy}, {w - graphPad, gy}}, width: 0.5, col: theme.GridMajor})
 	}
+	c.drawPolys(grid)
 
 	// Translate the layout into the padded frame.
 	shift := func(n *layoutNode) (float64, float64) { return graphPad + n.X, graphPad + n.Y }
 
 	// Column guides + depth labels.
+	var columns []polyShape
+	var texts []textShape
 	for _, col := range layout.Columns {
+		var pts [][2]float64
+		labelBase := 0.0
 		if opts.Direction == dirVertical {
-			c.dashedPolyline([][2]float64{
+			pts = [][2]float64{
 				{graphPad + col.X - 14, graphPad + col.Top - 14},
 				{graphPad + col.X - 14, graphPad + col.Bottom + 14},
-			}, 1, theme.ColumnLine, 2, 6)
-			if col.Label {
-				label := fmt.Sprintf("L%d", col.Depth)
-				f := c.face("monob", 9*opts.Scale)
-				c.text(f, graphPad+col.X-14-c.textW(f, label)/2, graphPad+col.Top-22, theme.ColumnLabel, label)
 			}
-			continue
+			labelBase = graphPad + col.Top - 22
+		} else {
+			pts = [][2]float64{
+				{graphPad + col.X - 14, graphPad + col.Top - 24},
+				{graphPad + col.X - 14, graphPad + col.Bottom + 14},
+			}
+			labelBase = graphPad + col.Top - 32
 		}
-		c.dashedPolyline([][2]float64{
-			{graphPad + col.X - 14, graphPad + col.Top - 24},
-			{graphPad + col.X - 14, graphPad + col.Bottom + 14},
-		}, 1, theme.ColumnLine, 2, 6)
+		for _, run := range dashPolygons(pts, 2, 6) {
+			columns = append(columns, polyShape{pts: run, width: 1, col: theme.ColumnLine})
+		}
 		if col.Label {
 			label := fmt.Sprintf("L%d", col.Depth)
 			f := c.face("monob", 9*opts.Scale)
-			c.text(f, graphPad+col.X-14-c.textW(f, label)/2, graphPad+col.Top-32, theme.ColumnLabel, label)
+			texts = append(texts, textShape{
+				f: f, x: graphPad + col.X - 14 - c.textW(f, label)/2, base: labelBase,
+				col: theme.ColumnLabel, s: label,
+			})
 		}
 	}
+	c.drawPolys(columns)
 
 	// Edges behind the cards.
+	var edges []polyShape
 	for _, e := range layout.Edges {
 		x0, y0 := shift(e.From)
 		x1, y1 := shift(e.To)
@@ -627,10 +773,16 @@ func paintGraph(layout graphLayout, stats graphStats, origin string, opts graphO
 		}
 		pts := edgeCurve(startX, startY, endX, endY, opts.Direction == dirVertical)
 		if e.Direct {
-			c.strokePolyline(pts, 1, blend(theme.Canvas, theme.Neutral, 0.55))
+			edges = append(edges, polyShape{pts: pts, width: 1, col: blend(theme.Canvas, theme.Neutral, 0.55)})
 		} else {
-			c.dashedPolyline(pts, 1.2, blend(theme.Canvas, theme.Neutral, 0.5), 7, 5)
+			for _, run := range dashPolygons(pts, 7, 5) {
+				edges = append(edges, polyShape{pts: run, width: 1.2, col: blend(theme.Canvas, theme.Neutral, 0.5)})
+			}
 		}
+	}
+	c.drawPolys(edges)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	labelBold := c.face("bold", 12.5*opts.Scale)
@@ -638,7 +790,17 @@ func paintGraph(layout graphLayout, stats graphStats, origin string, opts graphO
 	monoFace := c.face("mono", 10*opts.Scale)
 	monoBold := c.face("monob", 9*opts.Scale)
 
+	// Shapes are collected per layer (border, background, accent, badge) and
+	// painted in that order once each loop completes. Grouping by colour inside
+	// a layer cannot reorder overlapping shapes, because cards do not overlap.
+	var borders, bgs, accents, decor []rectShape
+	var accentsPoly []polyShape
 	for i := range layout.Nodes {
+		if i%128 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		n := &layout.Nodes[i]
 		x, y := shift(n)
 		accent := theme.Accent[n.Node.Class]
@@ -655,22 +817,22 @@ func paintGraph(layout graphLayout, stats graphStats, origin string, opts graphO
 			bg = theme.CardFlagged
 		case n.Node.Kind == "group":
 			bg = blend(theme.Canvas, accent, 0.10)
-		case n.Node.Kind == "resource":
+		case n.Node.Kind == "resource" || n.Node.Kind == "more":
 			bg = blend(theme.Canvas, accent, 0.07)
 		}
 		// Border by drawing a slightly larger rounded rect underneath.
-		c.fillRoundRect(x, y, n.W, n.H, 10, blend(bg, accent, 0.55))
-		c.fillRoundRect(x+1, y+1, n.W-2, n.H-2, 9, bg)
-		c.fillRoundRect(x+0.5, y+6, 3, n.H-12, 1.5, accent)
+		borders = append(borders, rectShape{x, y, n.W, n.H, 10, blend(bg, accent, 0.55)})
+		bgs = append(bgs, rectShape{x + 1, y + 1, n.W - 2, n.H - 2, 9, bg})
+		accents = append(accents, rectShape{x + 0.5, y + 6, 3, n.H - 12, 1.5, accent})
 
 		switch n.Node.Kind {
 		case "root", "host":
-			c.fillRoundRect(x+13, y+n.H/2-9, 22, 18, 5, blend(bg, accent, 0.16))
+			accents = append(accents, rectShape{x + 13, y + n.H/2 - 9, 22, 18, 5, blend(bg, accent, 0.16)})
 			glyph := "H"
 			if n.Node.Kind == "root" {
 				glyph = "R"
 			}
-			c.text(monoBold, x+24-c.textW(monoBold, glyph)/2, y+n.H/2+4.5, accent, glyph)
+			texts = append(texts, textShape{monoBold, x + 24 - c.textW(monoBold, glyph)/2, y + n.H/2 + 4.5, accent, glyph})
 
 			badge := strconv.Itoa(n.Node.Count)
 			bw := math.Max(26, c.textW(monoFace, badge)+12)
@@ -679,27 +841,31 @@ func paintGraph(layout graphLayout, stats graphStats, origin string, opts graphO
 				reserved += 16
 			}
 			label := fitText(labelBold, n.Node.Label, c.px(n.W-45-reserved))
-			c.text(labelBold, x+45, y+n.H/2+4.5, theme.Label, label)
-			c.fillRoundRect(x+n.W-8-bw, y+n.H/2-9, bw, 18, 5, theme.Badge)
-			c.text(monoFace, x+n.W-8-bw+(bw-c.textW(monoFace, badge))/2, y+n.H/2+4, theme.BadgeText, badge)
+			texts = append(texts, textShape{labelBold, x + 45, y + n.H/2 + 4.5, theme.Label, label})
+			decor = append(decor, rectShape{x + n.W - 8 - bw, y + n.H/2 - 9, bw, 18, 5, theme.Badge})
+			texts = append(texts, textShape{monoFace, x + n.W - 8 - bw + (bw-c.textW(monoFace, badge))/2, y + n.H/2 + 4, theme.BadgeText, badge})
 			if n.Node.Failed {
 				cx := x + n.W - 16 - bw - 8
-				c.line(cx-3, y+n.H/2-3, cx+3, y+n.H/2+3, 1.6, theme.Accent[classImage])
-				c.line(cx-3, y+n.H/2+3, cx+3, y+n.H/2-3, 1.6, theme.Accent[classImage])
+				// The failed cross rides with the accent shapes; the accent pass is
+				// already over the card background.
+				accentsPoly = append(accentsPoly,
+					polyShape{pts: [][2]float64{{cx - 3, y + n.H/2 - 3}, {cx + 3, y + n.H/2 + 3}}, width: 1.6, col: theme.Accent[classImage]},
+					polyShape{pts: [][2]float64{{cx - 3, y + n.H/2 + 3}, {cx + 3, y + n.H/2 - 3}}, width: 1.6, col: theme.Accent[classImage]},
+				)
 			}
 		case "group":
-			c.fillRoundRect(x+10, y+n.H/2-3.5, 7, 7, 3.5, accent)
+			accents = append(accents, rectShape{x + 10, y + n.H/2 - 3.5, 7, 7, 3.5, accent})
 			badge := strconv.Itoa(n.Node.Count)
 			bw := math.Max(24, c.textW(monoFace, badge)+12)
 			label := fitText(smallFace, n.Node.Label, c.px(n.W-29-8-bw-12))
-			c.text(smallFace, x+29, y+n.H/2+4, theme.Label, label)
-			c.fillRoundRect(x+n.W-8-bw, y+n.H/2-8, bw, 16, 4, theme.Badge)
-			c.text(monoBold, x+n.W-8-bw+(bw-c.textW(monoBold, badge))/2, y+n.H/2+3.5, theme.BadgeText, badge)
+			texts = append(texts, textShape{smallFace, x + 29, y + n.H/2 + 4, theme.Label, label})
+			decor = append(decor, rectShape{x + n.W - 8 - bw, y + n.H/2 - 8, bw, 16, 4, theme.Badge})
+			texts = append(texts, textShape{monoBold, x + n.W - 8 - bw + (bw-c.textW(monoBold, badge))/2, y + n.H/2 + 3.5, theme.BadgeText, badge})
 		default:
 			chip := classShort[n.Node.Class]
 			cw := math.Max(30, c.textW(monoBold, chip)+12)
-			c.fillRoundRect(x+9, y+n.H/2-9, cw, 18, 5, blend(bg, accent, 0.18))
-			c.text(monoBold, x+9+(cw-c.textW(monoBold, chip))/2, y+n.H/2+3.5, accent, chip)
+			accents = append(accents, rectShape{x + 9, y + n.H/2 - 9, cw, 18, 5, blend(bg, accent, 0.18)})
+			texts = append(texts, textShape{monoBold, x + 9 + (cw-c.textW(monoBold, chip))/2, y + n.H/2 + 3.5, accent, chip})
 			badge := ""
 			bw := 0.0
 			if n.Node.Count > 1 {
@@ -711,12 +877,24 @@ func paintGraph(layout graphLayout, stats graphStats, origin string, opts graphO
 				reserve += bw + 8
 			}
 			label := fitText(smallFace, n.Node.Label, c.px(n.W-9-cw-9-reserve))
-			c.text(smallFace, x+9+cw+9, y+n.H/2+3.5, theme.Label, label)
+			texts = append(texts, textShape{smallFace, x + 9 + cw + 9, y + n.H/2 + 3.5, theme.Label, label})
 			if bw > 0 {
-				c.fillRoundRect(x+n.W-8-bw, y+n.H/2-8, bw, 16, 4, theme.Badge)
-				c.text(monoFace, x+n.W-8-bw+(bw-c.textW(monoFace, badge))/2, y+n.H/2+3.5, theme.BadgeText, badge)
+				decor = append(decor, rectShape{x + n.W - 8 - bw, y + n.H/2 - 8, bw, 16, 4, theme.Badge})
+				texts = append(texts, textShape{monoFace, x + n.W - 8 - bw + (bw-c.textW(monoFace, badge))/2, y + n.H/2 + 3.5, theme.BadgeText, badge})
 			}
 		}
+	}
+
+	c.drawRects(borders)
+	c.drawRects(bgs)
+	c.drawRects(accents)
+	c.drawPolys(accentsPoly)
+	c.drawRects(decor)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	for _, t := range texts {
+		c.text(t.f, t.x, t.base, t.col, t.s)
 	}
 
 	if opts.Caption {
@@ -726,7 +904,7 @@ func paintGraph(layout graphLayout, stats graphStats, origin string, opts graphO
 		mf := c.face("bold", 12*opts.Scale)
 		c.text(mf, w-graphPad-c.textW(mf, mark), h-graphFooter/2+4, theme.Neutral, mark)
 	}
-	return img
+	return img, nil
 }
 
 // edgeCurve samples a cubic from one card's edge to another's, bending along
@@ -768,7 +946,16 @@ func graphHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	img := renderGraphPNG(snapshotNetworkLog(), opts, time.Now())
+	img, err := renderGraphPNG(r.Context(), snapshotNetworkLog(), opts, time.Now())
+	if err != nil {
+		if r.Context().Err() != nil {
+			// The client went away; there is nobody to write an image to.
+			return
+		}
+		log.Printf("graph: render: %v", err)
+		http.Error(w, "render failed", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "no-store")
 	if err := png.Encode(w, img); err != nil {

@@ -68,6 +68,7 @@ var (
 	netMu       sync.Mutex
 	netRequests = map[string]*netRequest{} // CDP requestId → state
 	netOrder    []string                   // completion order, capped
+	netOrdered  map[string]bool            // membership index for netOrder
 	netSeenSeq  int
 )
 
@@ -80,14 +81,35 @@ const (
 	// metadata only, but an absurd value would still let one session pin
 	// memory for its whole lifetime.
 	netMaxEntriesCap = 10000
+	// netWireURLMax is the displayed URL budget. Longer URLs (data: payloads,
+	// tracking blobs) are clipped; the wire marks them so the viewer does not
+	// present a clipped copy as the real address.
+	netWireURLMax = 300
+)
+
+var (
+	netMaxOnce sync.Once
+	netMaxVal  int
 )
 
 // netMaxEntries reports how many network entries the capture keeps. The
 // orchestrator passes NET_LOG_MAX_ENTRIES per container from
 // session.network_log_max_entries (ISOLA_NETWORK_LOG_MAX_ENTRIES on the
 // backend). An unset or invalid value keeps the default so a session never
-// starts with an unbounded or zero window.
+// starts with an unbounded or zero window. The container environment is fixed
+// at process start, so the value is read once instead of on every event.
 func netMaxEntries() int {
+	netMaxOnce.Do(func() { netMaxVal = readNetMaxEntries() })
+	return netMaxVal
+}
+
+// resetNetMaxEntriesForTest re-arms the one-time environment read.
+func resetNetMaxEntriesForTest() {
+	netMaxOnce = sync.Once{}
+	netMaxVal = 0
+}
+
+func readNetMaxEntries() int {
 	v := os.Getenv("NET_LOG_MAX_ENTRIES")
 	if v == "" {
 		return netMaxEntriesDefault
@@ -116,10 +138,17 @@ func netMonitorTap(scope, sessionID, method string, params json.RawMessage, tab 
 
 	netMu.Lock()
 	broadcast, hashJob := applyNetEvent(key, uiID, method, &p, tab, sessionID)
+	// Serialise while the lock is held: the entry's string fields are written
+	// by other goroutines (redirects, tab reassignment, body hashing), so a
+	// wire map built after unlocking is a data race on a string header.
+	var msg map[string]any
+	if broadcast != nil {
+		msg = netWireMessage(broadcast)
+	}
 	netMu.Unlock()
 
-	if broadcast != nil {
-		broadcastNetEntry(broadcast)
+	if msg != nil {
+		broadcastNetMessage(msg)
 	}
 	if hashJob != nil {
 		go hashNetBody(hashJob)
@@ -174,8 +203,13 @@ func applyNetEvent(key, uiID, method string, p *netEvent, tab int, sessionID str
 		if r == nil {
 			// Attached after requestWillBeSent (e.g. mid-navigation
 			// reconnect) — attribute to whatever tab the target belongs to.
+			// It must enter the rolling window here: a response that never
+			// produces loadingFinished/loadingFailed (streaming, SSE, a
+			// closed tab) would otherwise stay outside netOrder forever and
+			// escape the capture window.
 			r = &netRequest{id: uiID, cdpID: p.RequestId, tab: tab, startedAt: captureTime(p.WallTime)}
 			netRequests[key] = r
+			rememberOrder(key)
 		}
 		r.status = p.Response.Status
 		r.ip = p.Response.RemoteIPAddress
@@ -258,11 +292,17 @@ func hashNetBody(job *netHashJob) {
 		job.r.sha1 = hex.EncodeToString(sum[:])
 	}
 	// Only publish if this is still the live entry — a reconnect or buffer
-	// eviction may have dropped it while the body was in flight.
+	// eviction may have dropped it while the body was in flight. Build the
+	// message under the lock; a listener callback (a viewer WS write) must
+	// never run while netMu is held, or one slow viewer stalls capture.
+	var msg map[string]any
 	if netRequests[job.key] == job.r {
-		broadcastNetEntry(job.r)
+		msg = netWireMessage(job.r)
 	}
 	netMu.Unlock()
+	if msg != nil {
+		broadcastNetMessage(msg)
+	}
 }
 
 // fetchResponseBody blocks until the capture client answers with the body (or
@@ -297,15 +337,21 @@ func captureTime(wallTime float64) int64 {
 }
 
 func rememberOrder(key string) {
-	for _, seen := range netOrder {
-		if seen == key {
-			return
+	if netOrdered == nil {
+		netOrdered = make(map[string]bool, len(netOrder)+1)
+		for _, seen := range netOrder {
+			netOrdered[seen] = true
 		}
 	}
+	if netOrdered[key] {
+		return
+	}
+	netOrdered[key] = true
 	netOrder = append(netOrder, key)
 	if len(netOrder) > netMaxEntries() {
 		old := netOrder[0]
 		netOrder = netOrder[1:]
+		delete(netOrdered, old)
 		delete(netRequests, old)
 	}
 }
@@ -316,21 +362,21 @@ func rememberOrder(key string) {
 func replayNetTo(fn func(map[string]any)) {
 	fn(map[string]any{"type": "net_init", "entries": []any{}})
 	netMu.Lock()
-	entries := make([]netRequest, 0, len(netOrder))
+	msgs := make([]map[string]any, 0, len(netOrder))
 	for _, id := range netOrder {
 		if r, ok := netRequests[id]; ok {
-			entries = append(entries, *r)
+			msgs = append(msgs, netWireMessage(r))
 		}
 	}
 	netMu.Unlock()
-	for _, r := range entries {
-		fn(map[string]any{"type": "net", "e": netEntryWire(&r)})
+	for _, msg := range msgs {
+		fn(msg)
 	}
 }
 
 func clip(u string) string {
-	if len(u) > 300 {
-		return u[:300]
+	if len(u) > netWireURLMax {
+		return u[:netWireURLMax]
 	}
 	return u
 }
@@ -352,18 +398,30 @@ func netEntryWire(r *netRequest) map[string]any {
 		"tb":  r.tab,
 		"ts":  r.startedAt,
 	}
+	if len(r.url) > netWireURLMax {
+		// The panel can show a clipped URL, but copying it must not look like
+		// it produced the real address. Flag it so the viewer can say so.
+		e["ut"] = true
+	}
 	if r.sha1 != "" {
 		e["h"] = r.sha1
 	}
 	return e
 }
 
-// broadcastNetEntry ships one compact entry to every viewer input WS.
-func broadcastNetEntry(r *netRequest) {
-	msg := map[string]any{
+// netWireMessage wraps one serialised entry for the wire. Callers must hold
+// netMu: netEntryWire reads fields other goroutines write.
+func netWireMessage(r *netRequest) map[string]any {
+	return map[string]any{
 		"type": "net",
 		"e":    netEntryWire(r),
 	}
+}
+
+// broadcastNetMessage ships one already-serialised entry to every viewer input
+// WS. It must be called without netMu held, so a slow viewer cannot stall the
+// capture loop.
+func broadcastNetMessage(msg map[string]any) {
 	tabMu.Lock()
 	fns := make([]func(map[string]any), 0, len(tabListeners))
 	for _, fn := range tabListeners {

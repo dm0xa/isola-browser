@@ -26,7 +26,7 @@ export function useIsolaMonitorEvents(
     const onConsole = (e: Event) => {
       const d = (e as CustomEvent).detail;
       if (!d) return;
-      const entry: ConsoleEntry = { level: d.level || 'log', text: d.text || '', tb: typeof d.tb === 'number' ? d.tb : undefined, ts: typeof d.ts === 'number' ? d.ts : undefined };
+      const entry: ConsoleEntry = { i: typeof d.i === 'number' ? d.i : undefined, level: d.level || 'log', text: d.text || '', tb: typeof d.tb === 'number' ? d.tb : undefined, ts: typeof d.ts === 'number' ? d.ts : undefined };
       const next = mergeConsoleEntry(consoleRef.current, entry);
       if (next.length > 300) next.splice(0, next.length - 300);
       consoleRef.current = next;

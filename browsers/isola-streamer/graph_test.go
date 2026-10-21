@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -146,14 +148,20 @@ func TestLayoutKeepsNodesInsideTotals(t *testing.T) {
 func TestRenderGraphPNGThemesDiffer(t *testing.T) {
 	now := time.Date(2026, 10, 21, 10, 45, 0, 0, time.UTC)
 
-	dark := renderGraphPNG(sampleEntries(), graphOptions{
+	dark, err := renderGraphPNG(context.Background(), sampleEntries(), graphOptions{
 		Theme: "dark", Direction: dirHorizontal, Expand: expandAll,
 		Scale: 1, Width: 900, Height: 600, Caption: true,
 	}, now)
-	light := renderGraphPNG(sampleEntries(), graphOptions{
+	if err != nil {
+		t.Fatalf("dark render: %v", err)
+	}
+	light, err := renderGraphPNG(context.Background(), sampleEntries(), graphOptions{
 		Theme: "light", Direction: dirHorizontal, Expand: expandAll,
 		Scale: 1, Width: 900, Height: 600, Caption: true,
 	}, now)
+	if err != nil {
+		t.Fatalf("light render: %v", err)
+	}
 
 	if dark.Bounds().Dx() <= 0 || dark.Bounds().Dy() <= 0 {
 		t.Fatal("dark render has empty bounds")
@@ -181,7 +189,10 @@ func TestRenderGraphHonoursTypeFilterAndFailedOnly(t *testing.T) {
 	if got := graphStatsOf(m); got.Resources != 1 || got.Failed != 1 {
 		t.Fatalf("stats = %+v, want one failing font resource", got)
 	}
-	img := renderGraphPNG(sampleEntries(), opts, time.Now())
+	img, err := renderGraphPNG(context.Background(), sampleEntries(), opts, time.Now())
+	if err != nil {
+		t.Fatalf("filtered render: %v", err)
+	}
 	if img.Bounds().Dx() <= 0 {
 		t.Fatal("filtered render has empty bounds")
 	}
@@ -265,5 +276,110 @@ func TestGraphHandlerServesPNGAndValidates(t *testing.T) {
 	graphHandler(post, httptest.NewRequest(http.MethodPost, "/graph.png", nil))
 	if post.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST status = %d", post.Code)
+	}
+}
+
+// TestExpandGroupCappedAtPreview: expand=all is a summary, not a dump. An
+// uncapped group made the canvas (and the render) grow with the capture.
+func TestExpandGroupCappedAtPreview(t *testing.T) {
+	entries := []netDumpEntry{{URL: "https://example.com/", Type: "Document"}}
+	for i := 0; i < goGroupPreview+8; i++ {
+		entries = append(entries, netDumpEntry{
+			URL:  "https://cdn.example.com/asset-" + strconv.Itoa(i) + ".js",
+			Type: "Script",
+		})
+	}
+	full := expandModel(buildGraphModel(entries, "", nil), expandAll)
+
+	resources, more := 0, 0
+	for _, n := range full.Nodes {
+		switch n.Kind {
+		case "resource":
+			if n.Class == classScript {
+				resources++
+			}
+		case "more":
+			more++
+			if n.Count != 8 {
+				t.Fatalf("more row count = %d, want 8", n.Count)
+			}
+		}
+	}
+	if resources != goGroupPreview {
+		t.Fatalf("expanded script resources = %d, want %d", resources, goGroupPreview)
+	}
+	if more != 1 {
+		t.Fatalf("more rows = %d, want 1", more)
+	}
+}
+
+// TestRenderGraphFitsRequestedFrame: width/height bound the raster, so a large
+// capture cannot allocate an arbitrarily large image.
+func TestRenderGraphFitsRequestedFrame(t *testing.T) {
+	entries := []netDumpEntry{{URL: "https://example.com/", Type: "Document"}}
+	for i := 0; i < 120; i++ {
+		entries = append(entries, netDumpEntry{
+			URL:  "https://host" + strconv.Itoa(i%12) + ".example.com/file-" + strconv.Itoa(i) + ".js",
+			Type: "Script",
+		})
+	}
+	opts := graphOptions{
+		Theme: "dark", Direction: dirHorizontal, Expand: expandAll,
+		Scale: 4, Width: 640, Height: 480, Caption: true,
+	}
+	img, err := renderGraphPNG(context.Background(), entries, opts, time.Now())
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	b := img.Bounds()
+	if float64(b.Dx()) > opts.Width*opts.Scale+1 || float64(b.Dy()) > opts.Height*opts.Scale+1 {
+		t.Fatalf("image %v exceeds the requested %gx%g frame at scale %g", b, opts.Width, opts.Height, opts.Scale)
+	}
+	if b.Dx()*b.Dy() > 24_000_000 {
+		t.Fatalf("image %v exceeds the pixel budget", b)
+	}
+}
+
+func TestRenderGraphStopsOnCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := renderGraphPNG(ctx, sampleEntries(), graphOptions{
+		Theme: "dark", Direction: dirHorizontal, Expand: expandAll,
+		Scale: 1, Width: 900, Height: 600,
+	}, time.Now())
+	if err == nil {
+		t.Fatal("cancelled render returned nil error")
+	}
+}
+
+func TestOriginOfPrefersDocumentHost(t *testing.T) {
+	entries := []netDumpEntry{
+		{URL: "https://cdn.example.net/lib.js", Type: "Script"},
+		{URL: "https://page.example.se/", Type: "Document"},
+	}
+	if got := originOf(entries); got != "page.example.se" {
+		t.Fatalf("originOf = %q, want page.example.se", got)
+	}
+}
+
+// BenchmarkRenderGraphPNG measures the full build+layout+paint path. The
+// per-shape rasteriser this replaced took seconds to minutes on the same input.
+func BenchmarkRenderGraphPNG(b *testing.B) {
+	entries := []netDumpEntry{{URL: "https://example.com/", Type: "Document"}}
+	for i := 0; i < 200; i++ {
+		entries = append(entries, netDumpEntry{
+			URL:  "https://host" + strconv.Itoa(i%10) + ".example.com/file-" + strconv.Itoa(i) + ".js",
+			Type: "Script",
+		})
+	}
+	opts := graphOptions{
+		Theme: "dark", Direction: dirHorizontal, Expand: expandAll,
+		Scale: 2, Width: 1400, Height: 900, Caption: true,
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := renderGraphPNG(context.Background(), entries, opts, time.Now()); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

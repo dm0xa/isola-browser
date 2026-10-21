@@ -23,7 +23,7 @@ Base URL for a local deployment: `http://localhost:8080`.
 | `PATCH` | `/api/sessions/{id}` | session | Extend the session TTL. |
 | `POST` | `/api/sessions/{id}/resize` | session | Change the capture resolution. |
 | `POST` | `/api/sessions/{id}/audio` | session | Toggle audio capture. |
-| `GET` | `/api/sessions/{id}/graph.png` | session | Render the captured network as a resource-graph PNG (`theme`, `direction`, `expand`, `type`, `failed`, `scale`). |
+| `GET` | `/api/sessions/{id}/graph.png` | session | Render the captured network as a resource-graph PNG (`theme`, `direction`, `expand`, `type`, `failed`, `scale`, `width`, `height`, `origin`, `caption`). |
 | `DELETE` | `/api/sessions/{id}` | session | Terminate the session. |
 | `POST` | `/api/sessions/{id}/shares` | session | Create a view-only share link. |
 | `GET` | `/api/sessions/{id}/shares` | session | List share links. |
@@ -145,7 +145,9 @@ proxying: an unknown or out-of-range option returns
 returns `502 graph_render_failed`; a render that exceeds 45 seconds returns
 `504 graph_render_timeout`. Renders are serialised per session — at most two run
 at once, and a further concurrent request gets `429 graph_render_busy` with
-`Retry-After`.
+`Retry-After`. A capture larger than `width`×`height` at the requested `scale`
+is scaled down to fit that frame instead of being rasterised at full size, and
+the raster is hard-capped at 8192 px per edge and 24 MP.
 
 | Parameter | Values | Default | Meaning |
 | :--- | :--- | :--- | :--- |
@@ -155,7 +157,7 @@ at once, and a further concurrent request gets `429 graph_render_busy` with
 | `type` | comma list of `document`, `script`, `stylesheet`, `image`, `font`, `xhr`, `media`, `other` | all | Keep only these resource types. |
 | `failed` | `0`, `1` | `0` | Draw only failed requests. |
 | `scale` | `1`–`4` | `2` | Raster scale (1× is logical size). |
-| `width`, `height` | 320–8000 | `1400`, `900` | Layout hints that decide where long sibling runs wrap. |
+| `width`, `height` | 320–8000 | `1400`, `900` | Frame the image is fitted into (layout units, multiplied by `scale`), and where long sibling runs wrap. A graph larger than the frame is scaled down to fit; the raster is capped at 8192 px per edge and 24 MP. |
 | `origin` | hostname | the opened page | Start the graph from another host. |
 | `caption` | `0`, `1` | `1` | Draw the provenance line (origin, counts, theme, UTC time). |
 

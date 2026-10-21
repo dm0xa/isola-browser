@@ -32,6 +32,7 @@ interface WireMessage {
   l?: string;
   t?: string;
   tb?: number;
+  i?: number;
   d?: string;
   n?: string;
   h?: boolean;
@@ -145,6 +146,7 @@ export function useNetworkStream(wsUrl: string | null) {
           case 'console': {
             if (typeof msg.l !== 'string' || typeof msg.t !== 'string') return;
             const entry: ConsoleEntry = {
+              i: typeof msg.i === 'number' ? msg.i : undefined,
               level: msg.l,
               text: msg.t,
               tb: typeof msg.tb === 'number' ? msg.tb : undefined,

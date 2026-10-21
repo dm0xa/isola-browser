@@ -18,9 +18,13 @@ export interface NetEntry {
   ts?: number; // capture time in Unix ms (streamer CDP wallTime)
   /** Hex SHA-1 of the response body, once the streamer has hashed the file. */
   h?: string;
+  /** The URL shown here was clipped by the streamer's wire budget. */
+  ut?: boolean;
 }
 
 export interface ConsoleEntry {
+  /** Stable line id from the streamer; survives a tab-attribution re-publish. */
+  i?: number;
   level: string;
   text: string;
   tb?: number; // browser tab the message was logged in (tab strip id)
@@ -140,7 +144,14 @@ function isoTime(ts?: number): string {
 }
 
 function tsvCell(v: string | number | boolean | undefined | null): string {
-  return String(v ?? '').replace(/\t/g, '\\t').replace(/\r?\n/g, '\\n');
+  // Escape the backslash first: otherwise a value containing the literal
+  // two-character sequence \t becomes indistinguishable from an escaped tab.
+  // A lone \r is a record hazard too, so it gets its own escape.
+  return String(v ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/\t/g, '\\t')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n');
 }
 
 function tsvRow(cells: Array<string | number | boolean | undefined | null>): string {

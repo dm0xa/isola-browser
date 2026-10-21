@@ -29,6 +29,13 @@ publishes the section matching the tag.
 
 ### Changed
 
+- The resource-graph renderer now batches same-colour shapes into one rasteriser
+  pass instead of resetting a canvas-sized mask per shape, and fits the result
+  into the requested `width`×`height` frame (capped at 8192 px per edge and
+  24 MP). A 200-entry `expand=all` render went from minutes to roughly 0.2 s,
+  `width`/`height` bound the image in both directions, and `expand=all` lists at
+  most 12 resources per type group plus a "show all N more" row, matching the
+  viewer.
 - Resource graph requests are validated by the API before they reach the
   streamer, and a render is now bounded: at most two run concurrently per session
   (`429 graph_render_busy`), each has a 45 s budget (`504 graph_render_timeout`),
@@ -53,6 +60,23 @@ publishes the section matching the tag.
 
 ### Fixed
 
+- The streamer's network capture could race a viewer with the capture loop: an
+  entry's URL, error and body hash were read outside the lock while redirects,
+  tab reassignment and body hashing wrote them, which the race detector flagged
+  and a torn string header could turn into a crash. Wire messages are now built
+  under the lock and broadcast after it is released, so one slow viewer can no
+  longer stall capture either. CI runs the whole streamer suite with `-race`.
+- A request first seen at `responseReceived` (mid-navigation reconnect) now
+  enters the rolling capture window immediately, so a response that never emits
+  `loadingFinished`/`loadingFailed` is evicted and replayed like any other.
+- A tab strip with no active tab no longer resets attribution to `-1`, which
+  re-opened the phantom tab and re-ran the pre-strip backfill.
+- `failed=1` graphs keep the opened page as the origin instead of naming the
+  first failing host in the caption.
+- Console capture no longer drops a legitimate repeat of the same line, and its
+  dedupe map is bounded by the 300-line buffer instead of growing for the
+  session's lifetime. Lines carry a stable id, so re-publishing a corrected tab
+  attribution folds in place while two tabs' identical lines stay distinct.
 - Two concurrent resource-graph renders could kill the whole streamer, taking
   every attached video stream with them: the font-face cache was an
   unsynchronised map, and each cache entry was an `opentype.Face`, which is not
@@ -66,6 +90,13 @@ publishes the section matching the tag.
   reserved for real option errors.
 - Installation aborted when the default install directory could not be created
   by the invoking user.
+- The Network panel's CSV/TSV export now escapes a literal backslash and a lone
+  carriage return, the URL copy button says when the streamer clipped the URL,
+  copy confirmation is scoped to the node that was copied, and the graph's
+  notice/copy timers are cleared on unmount.
+- The resource graph no longer parses every URL up to 40 times per row on every
+  network event (`buildGraph` precomputes host and class once per entry), and
+  the minimap is painted into one canvas instead of a DOM rect per node.
 - Fullscreen filled the screen with black bands above and below the stream: the
   viewer is now sized from the fullscreen element (100% height chain) instead of
   `100vh`, which kept the pre-fullscreen height in some browsers, and the

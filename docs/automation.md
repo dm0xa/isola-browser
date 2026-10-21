@@ -257,8 +257,8 @@ The socket is not only a request channel — the sandbox reports state on it as 
 | `{"type":"selection","text":"..."}` | Reply to `get_selection`. |
 | `{"type":"tabs","tabs":[{"id":1,"url":"...","title":"...","active":true}]}` | Tab strip state — after any tab command and once on attach. |
 | `{"type":"net_init","entries":[...]}` | Replay of everything captured before this client attached. |
-| `{"type":"net","e":{...}}` | One network entry as it completes: `id`, `url`, `m`, `s`, `t`, `ip`, `b` (bytes), `f` (failed), `e` (error), `tb` (browser tab), `ts`, `h` (SHA-1 of the body). |
-| `{"type":"console","l":"error","t":"...","tb":1,"ts":...}` | Console line with its level and tab (text capped at 500 chars). |
+| `{"type":"net","e":{...}}` | One network entry as it completes: `id`, `url`, `m`, `s`, `t`, `ip`, `b` (bytes), `f` (failed), `e` (error), `tb` (browser tab), `ts`, `h` (SHA-1 of the body), `ut` (the URL was clipped to the wire budget). |
+| `{"type":"console","l":"error","t":"...","tb":1,"ts":...}` | Console line with its level and tab (text capped at 500 chars). `i` is a stable line id that survives a tab-attribution re-publish. |
 | `{"type":"cookie","n":"name","v":"...","d":"domain","p":"/","ss":"Lax","exp":"...","h":true,"s":true}` | A cookie was set or changed. |
 | `{"type":"cursor","c":"text","u":"https://..."}` | Computed cursor shape under the pointer, plus the hovered URL. |
 | `{"type":"renderer_stall","stalled":true,"ms":...,"recoveries":...}` | The sandbox replaced a wedged renderer, or recovered from one. |

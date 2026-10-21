@@ -96,11 +96,29 @@ func TestReassignUnknownTabRewritesConsoleLines(t *testing.T) {
 		t.Fatalf("re-published line tb = %v, want 2", (*got)[0]["tb"])
 	}
 
-	// The dedupe key embeds the tab, so the rewritten line must stay deduped
-	// under its new id — otherwise it would reappear on the next identical log.
+	// The dedupe key embeds the tab, so the old key must be gone and the
+	// rewritten line must stay deduped under its new id.
+	consoleMu.Lock()
+	_, oldKey := consoleSentKeys[consoleKey(consoleEntry{Level: "log", Text: `"from start page"`, Tab: unknownTab})]
+	_, newKey := consoleSentKeys[consoleKey(consoleEntry{Level: "log", Text: `"from start page"`, Tab: 2})]
+	consoleMu.Unlock()
+	if oldKey || !newKey {
+		t.Fatalf("dedupe keys after rewrite: old=%v new=%v, want false/true", oldKey, newKey)
+	}
+
+	// A duplicate event with the same timestamp is dropped; a later repeat is a
+	// new line (the tap must not swallow legitimate repeats).
+	oldNow := consoleNow
+	consoleNow = func() int64 { return 0 }
+	defer func() { consoleNow = oldNow }()
 	consoleTap(`Runtime.consoleAPICalled`, []byte(`{"type":"log","args":[{"value":"from start page"}]}`), 2)
 	if lines := consoleEntriesSnapshot(); len(lines) != 2 {
-		t.Fatalf("buffer grew to %d entries; rewritten line was not deduped", len(lines))
+		t.Fatalf("buffer grew to %d entries; same-ms rewritten line was not deduped", len(lines))
+	}
+	consoleNow = func() int64 { return 1 }
+	consoleTap(`Runtime.consoleAPICalled`, []byte(`{"type":"log","args":[{"value":"from start page"}]}`), 2)
+	if lines := consoleEntriesSnapshot(); len(lines) != 3 {
+		t.Fatalf("buffer has %d entries; later repeat was dropped", len(lines))
 	}
 }
 
@@ -147,5 +165,41 @@ func TestApplyTabsStateBackfillsOnlyOnFirstStrip(t *testing.T) {
 	netMu.Unlock()
 	if untouched != unknownTab {
 		t.Fatalf("entry added after the first strip was rewritten to %d", untouched)
+	}
+}
+
+// A strip can arrive with no active tab while the runner is switching. That
+// must not regress attribution to -1 (which re-opens the phantom tab and
+// re-arms the backfill).
+func TestApplyTabsStateKeepsAttributionWhenStripHasNoActiveTab(t *testing.T) {
+	defer resetNetCapture()()
+	defer snapshotTabState()()
+
+	tabMu.Lock()
+	activeTabID, runnerTabs, lastTabsMsg = unknownTab, nil, nil
+	tabMu.Unlock()
+
+	applyTabsState([]tabInfo{{ID: 1, URL: "https://a.example/", Active: true}})
+	applyTabsState([]tabInfo{{ID: 1, URL: "https://a.example/"}}) // switching, no active tab
+
+	tabMu.Lock()
+	active := activeTabID
+	tabMu.Unlock()
+	if active != 1 {
+		t.Fatalf("active tab regressed to %d, want 1", active)
+	}
+
+	// Attribution already happened, so a later unknown-id row is not rewritten
+	// by the next strip that does have an active tab.
+	netMu.Lock()
+	netRequests["late|1"] = &netRequest{id: "late:1", tab: unknownTab}
+	netOrder = append(netOrder, "late|1")
+	netMu.Unlock()
+	applyTabsState([]tabInfo{{ID: 1, URL: "https://a.example/", Active: true}})
+	netMu.Lock()
+	late := netRequests["late|1"].tab
+	netMu.Unlock()
+	if late != unknownTab {
+		t.Fatalf("backfill ran twice: late entry rewritten to %d", late)
 	}
 }
