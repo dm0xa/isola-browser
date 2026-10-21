@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>isola — interface demo</title>
+    <meta
+      name="description"
+      content="Interactive demo of the isola interface: type a URL, press Open, and see the session viewer. Nothing is provisioned; the page is embedded locally."
+    />
+    <meta name="color-scheme" content="dark light" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2 22 8 12 14 2 8Z' fill='%231a2024'/%3E%3Cpath d='M2 8 12 14 12 19 2 13Z' fill='%230f1418'/%3E%3Cpath d='M22 8 12 14 12 19 22 13Z' fill='%230a0e10'/%3E%3Cpath d='M12 2 18 5.5 12 9 6 5.5Z' fill='none' stroke='%2300e5ff' stroke-width='1.4'/%3E%3C/svg%3E"
+    />
+    <script>
+      // Apply the saved theme before first paint (same key the real app uses).
+      try {
+        if (localStorage.getItem('isola_theme') === 'light') {
+          document.documentElement.classList.remove('dark');
+        }
+      } catch (e) {
+        /* storage unavailable — keep the dark default */
+      }
+    </script>
+    <link rel="stylesheet" href="./demo.css" />
+    <script src="https://cdn.tailwindcss.com/3.4.14"></script>
+    <script>
+      tailwind.config = { darkMode: 'class' };
+    </script>
+  </head>
+  <body class="app-surface">
+    <div id="app">
+      <!-- ── Landing (mirrors frontend/src/pages/LandingPage.tsx) ─────────── -->
+      <section
+        id="landing"
+        class="relative flex flex-col items-center justify-center min-h-screen px-6 app-surface transition-colors"
+      >
+        <div class="absolute top-6 right-6 flex gap-4 text-sm">
+          <button
+            id="theme-toggle"
+            type="button"
+            class="text-zinc-500 hover:text-zinc-700 dark:text-gray-600 dark:hover:text-gray-300 transition-colors"
+            title="Switch to light"
+            aria-label="Toggle colour theme"
+          ></button>
+        </div>
+
+        <div class="text-center mb-2">
+          <div class="flex items-center select-none" style="width: 320px; margin: 0 auto">
+            <div class="shrink-0 pointer-events-none" style="width: 96px">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 512 512"
+                class="isola-logo w-24 h-24 mt-3"
+                draggable="false"
+                aria-hidden="true"
+              >
+                <g transform="translate(256, 270)">
+                  <g class="logo-float-base">
+                    <path d="M 0 50 L 110 0 L 0 -50 L -110 0 Z" fill="#1a2024" />
+                    <path d="M -110 0 L 0 50 L 0 85 L -110 35 Z" fill="#0f1418" />
+                    <path d="M 110 0 L 0 50 L 0 85 L 110 35 Z" fill="#0a0e10" />
+                  </g>
+                  <g class="logo-float-ring">
+                    <path d="M 0 -20 L 100 -65 L 0 -110 L -100 -65 Z" fill="none" stroke="#00e5ff" stroke-width="10" stroke-linejoin="miter" />
+                    <path d="M -100 -65 L 0 -20 L 0 5 L -100 -40 Z" fill="none" stroke="#00e5ff" stroke-width="10" stroke-linejoin="miter" />
+                    <path d="M 100 -65 L 0 -20 L 0 5 L 100 -40 Z" fill="none" stroke="#00e5ff" stroke-width="10" stroke-linejoin="miter" />
+                  </g>
+                  <g class="logo-float-top">
+                    <path d="M 0 -85 L 85 -125 L 0 -165 L -85 -125 Z" fill="#ffffff" />
+                    <path d="M -85 -125 L 0 -85 L 0 -65 L -85 -105 Z" fill="#e0e0e0" />
+                    <path d="M 85 -125 L 0 -85 L 0 -65 L 85 -105 Z" fill="#cccccc" />
+                  </g>
+                </g>
+              </svg>
+            </div>
+            <h1
+              class="text-5xl font-extralight tracking-tight text-zinc-900 dark:text-white whitespace-nowrap pl-[25px] pr-[25px] pointer-events-none"
+              style="font-family: 'Bitcount Prop Single', monospace; font-variation-settings: 'wght' 400, 'slnt' 0, 'CRSV' 0.5, 'ELSH' 0, 'ELXP' 0"
+              draggable="false"
+            >
+              <span id="typed"></span><span
+                id="cursor"
+                class="inline-block w-[3px] h-[0.8em] bg-gray-900 dark:bg-white ml-0.5 align-middle transition-opacity duration-75"
+              ></span>
+            </h1>
+          </div>
+        </div>
+
+        <form id="launch-form" class="w-full max-w-lg mt-12" novalidate>
+          <div
+            class="flex items-end gap-3 border-b border-zinc-400 dark:border-gray-700 focus-within:border-zinc-600 dark:focus-within:border-gray-400 transition-colors pb-2"
+          >
+            <input
+              id="url-input"
+              type="text"
+              placeholder="Enter URL..."
+              value="example.com"
+              readonly
+              aria-readonly="true"
+              title="The URL is fixed in the demo"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+              aria-label="URL to open in the sandbox"
+              class="flex-1 bg-transparent text-zinc-800 dark:text-[#aea2a2] text-sm placeholder-zinc-500 dark:placeholder-white/50 focus:outline-none py-1"
+            />
+            <div class="relative" id="settings-wrap">
+              <button
+                id="settings-btn"
+                type="button"
+                class="text-gray-400 hover:text-gray-700 dark:text-gray-500 dark:hover:text-white transition-colors pb-0.5"
+                title="Settings"
+                aria-label="Launch settings"
+                aria-haspopup="menu"
+                aria-expanded="false"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+              </button>
+
+              <div
+                id="settings-menu"
+                data-hidden
+                role="menu"
+                class="absolute bottom-full left-0 mb-1 bg-zinc-200 dark:bg-gray-800 border border-zinc-400 dark:border-gray-700 rounded-lg py-1 shadow-xl z-50 min-w-[140px]"
+              >
+                <div class="px-3 py-1 text-[10px] text-gray-500 dark:text-gray-600 uppercase tracking-wider">Resolution</div>
+                <button type="button" class="menu-item is-active" data-resolution="1920x1080">1080p</button>
+                <button type="button" class="menu-item" data-resolution="1280x720">720p</button>
+                <button type="button" class="menu-item flex items-center justify-between gap-3" data-resolution="current" title="Match your display size">
+                  <span>Current</span>
+                  <span id="my-screen-value" class="tabular-nums opacity-60"></span>
+                </button>
+                <div class="mx-2 my-1 border-t border-zinc-400 dark:border-gray-700"></div>
+                <div class="px-3 py-1 text-[10px] text-zinc-600 dark:text-gray-600 uppercase tracking-wider">Tor</div>
+                <button type="button" id="tor-toggle" class="menu-item" aria-pressed="false">
+                  <span class="flex items-center gap-2">
+                    <span id="tor-icon" class="inline-flex"></span>
+                    <span id="tor-label">Disabled</span>
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <button
+              id="open-btn"
+              type="submit"
+              class="text-sm text-zinc-700 hover:text-zinc-900 dark:text-[#aea2a2] dark:hover:text-white disabled:opacity-40 transition-colors pb-1"
+            >
+              Open →
+            </button>
+          </div>
+
+          <p class="mt-6 text-[11px] leading-relaxed text-zinc-500 dark:text-gray-600 text-center max-w-md mx-auto">
+            Interactive interface demo — <span class="text-zinc-600 dark:text-gray-500">Open</span> simulates a session and
+            draws a static example.com page; no container is started.
+            <span class="mt-1 block">
+              <a
+                href="https://github.com/dm0xa/isola-browser"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="underline underline-offset-4 decoration-zinc-400/40 hover:text-zinc-700 dark:hover:text-gray-400"
+                >The real thing runs in a disposable sandbox ↗</a
+              >
+            </span>
+          </p>
+        </form>
+
+        <div class="absolute bottom-4 left-0 right-0 px-6 flex items-center justify-between text-[10px] tracking-widest text-zinc-400 dark:text-gray-700">
+          <span class="flex items-center gap-2 mr-auto">
+            <span class="inline-block w-1.5 h-1.5 rounded-full bg-cyan-500" title="Demo mode — no backend"></span>
+            <span>demo</span>
+          </span>
+          <span class="hidden sm:block flex-1 text-center">interface demo · simulated session</span>
+          <span class="ml-auto flex items-center gap-1.5 text-zinc-400 dark:text-gray-700">
+            <span>made in</span>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 16" class="w-5 h-3.5 rounded-[1px] overflow-hidden opacity-70" aria-label="European Union">
+              <rect width="24" height="16" fill="#1f2937" />
+              <g fill="#9ca3af">
+                <circle cx="12" cy="3" r="0.6" /><circle cx="14.5" cy="3.67" r="0.6" /><circle cx="16.33" cy="5.5" r="0.6" />
+                <circle cx="17" cy="8" r="0.6" /><circle cx="16.33" cy="10.5" r="0.6" /><circle cx="14.5" cy="12.33" r="0.6" />
+                <circle cx="12" cy="13" r="0.6" /><circle cx="9.5" cy="12.33" r="0.6" /><circle cx="7.67" cy="10.5" r="0.6" />
+                <circle cx="7" cy="8" r="0.6" /><circle cx="7.67" cy="5.5" r="0.6" /><circle cx="9.5" cy="3.67" r="0.6" />
+              </g>
+            </svg>
+          </span>
+          <a
+            href="https://github.com/dm0xa/isola-browser"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="ml-4 text-zinc-500 hover:text-zinc-700 dark:text-gray-600 dark:hover:text-gray-300 transition-colors"
+            title="View source on GitHub"
+            aria-label="View source on GitHub"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4">
+              <path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58 0-.29-.01-1.24-.02-2.25-3.34.73-4.04-1.42-4.04-1.42-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.34-5.47-5.95 0-1.31.47-2.38 1.24-3.22-.12-.31-.54-1.53.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 3-.4c1.02 0 2.05.14 3 .4 2.29-1.55 3.3-1.23 3.3-1.23.66 1.65.24 2.87.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.62-2.8 5.65-5.48 5.94.43.37.81 1.1.81 2.22 0 1.6-.01 2.9-.01 3.29 0 .32.22.7.82.58A12.01 12.01 0 0 0 24 12.5C24 5.87 18.63.5 12 .5z" />
+            </svg>
+          </a>
+        </div>
+      </section>
+
+      <!-- ── Viewer (mirrors ViewerPage + ViewerToolbar) ──────────────────── -->
+      <section id="viewer" data-hidden class="flex flex-col h-full app-surface relative">
+        <div class="flex items-center px-4 py-1 chrome-surface shrink-0 relative z-50">
+          <div id="toolbar-left" class="flex items-center gap-2 min-w-0 flex-1">
+            <button
+              id="viewer-home"
+              type="button"
+              class="text-zinc-500 dark:text-gray-400 hover:text-zinc-900 dark:hover:text-white transition-colors shrink-0"
+              title="Home — end the demo session"
+              aria-label="Home — end the demo session"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="isola-logo w-9 h-9 mt-1" aria-hidden="true">
+                <g transform="translate(256, 270)">
+                  <g class="logo-mini-base">
+                    <path d="M 0 50 L 110 0 L 0 -50 L -110 0 Z" fill="#1a2024" />
+                    <path d="M -110 0 L 0 50 L 0 85 L -110 35 Z" fill="#0f1418" />
+                    <path d="M 110 0 L 0 50 L 0 85 L 110 35 Z" fill="#0a0e10" />
+                  </g>
+                  <g class="logo-mini-ring">
+                    <path d="M 0 -20 L 100 -65 L 0 -110 L -100 -65 Z" fill="none" stroke="#00e5ff" stroke-width="10" stroke-linejoin="miter" />
+                    <path d="M -100 -65 L 0 -20 L 0 5 L -100 -40 Z" fill="none" stroke="#00e5ff" stroke-width="10" stroke-linejoin="miter" />
+                    <path d="M 100 -65 L 0 -20 L 0 5 L 100 -40 Z" fill="none" stroke="#00e5ff" stroke-width="10" stroke-linejoin="miter" />
+                  </g>
+                  <g class="logo-mini-top">
+                    <path d="M 0 -85 L 85 -125 L 0 -165 L -85 -125 Z" fill="#ffffff" />
+                    <path d="M -85 -125 L 0 -85 L 0 -65 L -85 -105 Z" fill="#e0e0e0" />
+                    <path d="M 85 -125 L 0 -85 L 0 -65 L 85 -105 Z" fill="#cccccc" />
+                  </g>
+                </g>
+              </svg>
+            </button>
+            <div class="flex items-center gap-2 min-w-0">
+              <span id="session-id" class="hidden sm:inline text-xs text-zinc-600 dark:text-gray-500 font-mono"></span>
+              <span
+                class="inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wider text-cyan-700 bg-cyan-500/10 ring-1 ring-inset ring-cyan-500/30 dark:text-cyan-300"
+                title="Simulated demo: the page below is a static drawing of example.com, not streamed from a container."
+                >demo</span
+              >
+              <span class="hidden shrink-0 items-center text-emerald-500 sm:flex" title="Stream quality: good · RTT 12 ms" aria-label="Stream quality: good">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M2 20h.01" /><path d="M7 20v-4" /><path d="M12 20v-8" /><path d="M17 20V8" /><path d="M22 4v16" />
+                </svg>
+              </span>
+              <button
+                id="tour-help"
+                type="button"
+                class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-zinc-300 text-[10px] font-mono text-zinc-500 transition-colors hover:border-zinc-400 hover:text-zinc-800 dark:border-gray-600 dark:text-gray-400 dark:hover:border-gray-500 dark:hover:text-white"
+                title="Take the interface tour"
+                aria-label="Take the interface tour"
+              >
+                ?
+              </button>
+            </div>
+          </div>
+
+          <div id="session-clock" class="flex shrink-0 items-center">
+            <div class="inline-flex h-7 items-center text-xs rounded-md bg-zinc-200/80 ring-1 ring-inset ring-zinc-300/80 dark:bg-gray-800 dark:ring-gray-700">
+              <span class="flex items-center gap-1.5 px-2 font-mono tabular-nums">
+                <svg id="clock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="clock-icon" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+                </svg>
+                <span id="time-left" class="clock-readout">10:00</span>
+              </span>
+              <span id="extend-divider" aria-hidden="true" class="h-3.5 w-px shrink-0 bg-zinc-300 dark:bg-gray-600"></span>
+              <button
+                id="extend-btn"
+                type="button"
+                class="flex h-full items-center gap-1 rounded-r-[5px] px-2 font-mono tabular-nums transition-colors focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40 extend-btn"
+                title="Extend session by 5 minutes"
+                aria-label="Extend session by 5 minutes"
+              >
+                <span>+5m</span>
+              </button>
+            </div>
+          </div>
+
+          <div id="toolbar-actions" class="flex items-center gap-3 min-w-0 flex-1 justify-end">
+            <button id="audio-btn" type="button" class="p-1.5 rounded transition-colors audio-btn" title="Unmute audio" aria-label="Unmute audio" aria-pressed="false">
+              <svg id="audio-off" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <line x1="22" x2="16" y1="9" y2="15" /><line x1="16" x2="22" y1="9" y2="15" />
+              </svg>
+              <svg id="audio-on" data-hidden xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+              </svg>
+            </button>
+
+            <div class="relative">
+              <button
+                id="menu-btn"
+                type="button"
+                title="Session actions"
+                aria-label="Session actions"
+                aria-haspopup="menu"
+                aria-expanded="false"
+                class="p-1.5 rounded transition-colors text-zinc-500 dark:text-gray-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-300 dark:hover:bg-gray-800"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="1" /><circle cx="12" cy="5" r="1" /><circle cx="12" cy="19" r="1" />
+                </svg>
+              </button>
+              <div
+                id="session-menu"
+                data-hidden
+                role="menu"
+                class="absolute right-0 top-full z-50 mt-1 w-52 overflow-hidden rounded-xl border border-zinc-200 dark:border-gray-700 bg-white/95 dark:bg-gray-900/95 py-1 shadow-2xl backdrop-blur text-[13px]"
+              >
+                <button id="fullscreen-item" type="button" role="menuitem" class="flex w-full items-center gap-3 px-3 py-2 text-left text-zinc-500 dark:text-gray-400 hover:bg-zinc-100 dark:hover:bg-gray-800 transition-colors">
+                  <span id="fullscreen-icon" class="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-400 dark:text-gray-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="15 3 21 3 21 9" /><polyline points="9 21 3 21 3 15" /><line x1="21" x2="14" y1="3" y2="10" /><line x1="3" x2="10" y1="21" y2="14" />
+                    </svg>
+                  </span>
+                  <span id="fullscreen-label" class="flex-1 truncate">Enter fullscreen</span>
+                </button>
+                <button type="button" role="menuitem" disabled title="Disabled in the demo" class="flex w-full items-center gap-3 px-3 py-2 text-left text-zinc-500 dark:text-gray-400 disabled:cursor-not-allowed disabled:opacity-40">
+                  <span class="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-400 dark:text-gray-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="m8 2 1.88 1.88" /><path d="M14.12 3.88 16 2" /><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1" /><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6" /><path d="M12 20v-9" /><path d="M6.53 9C4.6 8.8 3 7.1 3 5" /><path d="M6 13H2" /><path d="M6.53 17c-1.93.2-3.53 1.9-3.53 4" /><path d="M20 5c0 2.1-1.6 3.8-3.53 4" /><path d="M22 13h-4" /><path d="M20 21c0-2.1-1.6-3.8-3.53-4" />
+                    </svg>
+                  </span>
+                  <span class="flex-1 truncate">Show debug overlay</span>
+                </button>
+                <div class="flex items-center">
+                  <button type="button" role="menuitem" disabled title="Disabled in the demo" class="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-zinc-500 dark:text-gray-400 disabled:cursor-not-allowed disabled:opacity-40">
+                    <span class="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-400 dark:text-gray-500">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />
+                      </svg>
+                    </span>
+                    <span class="flex-1 truncate">Show network panel</span>
+                  </button>
+                  <span class="mr-1.5 flex h-7 w-7 shrink-0 items-center justify-center text-zinc-400 opacity-40 dark:text-gray-500" aria-hidden="true">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                    </svg>
+                  </span>
+                </div>
+                <div role="menuitem" aria-disabled="true" class="flex w-full cursor-default select-none items-center gap-3 px-3 py-2 text-left text-zinc-500 dark:text-gray-400">
+                  <span class="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-400 dark:text-gray-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="m12 14 4-4" /><path d="M3.34 19a10 10 0 1 1 17.32 0" />
+                    </svg>
+                  </span>
+                  <span class="flex-1 truncate">Quality (Auto)</span>
+                </div>
+                <button type="button" role="menuitem" disabled title="Disabled in the demo" class="flex w-full items-center gap-3 px-3 py-2 text-left text-zinc-500 dark:text-gray-400 disabled:cursor-not-allowed disabled:opacity-40">
+                  <span class="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-400 dark:text-gray-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><line x1="8.59" x2="15.42" y1="13.51" y2="17.49" /><line x1="15.41" x2="8.59" y1="6.51" y2="10.49" />
+                    </svg>
+                  </span>
+                  <span class="flex-1 truncate">Share session link</span>
+                </button>
+                <div class="my-1 h-px bg-zinc-200/70 dark:bg-gray-700/70"></div>
+                <button id="restart-item" type="button" role="menuitem" class="flex w-full items-center gap-3 px-3 py-2 text-left text-zinc-500 dark:text-gray-400 hover:bg-zinc-100 dark:hover:bg-gray-800 transition-colors">
+                  <span class="flex h-5 w-5 shrink-0 items-center justify-center text-zinc-400 dark:text-gray-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" />
+                    </svg>
+                  </span>
+                  <span class="flex-1 truncate">Restart session</span>
+                </button>
+              </div>
+            </div>
+
+            <button id="end-btn" type="button" class="p-1.5 rounded transition-colors end-btn" title="End session" aria-label="End session">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18 6 6 18" /><path d="m6 6 12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="flex-1 relative min-h-0 overflow-hidden stream-pane">
+          <div id="isola-tabbar" class="isola-tabbar" aria-label="Browser tabs"></div>
+          <div id="stream" class="absolute left-0 right-0 bottom-0 stream-pane" style="top: 36px">
+            <div id="example-page" class="example-page">
+              <div class="example-page-body">
+                <svg class="example-book" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 7v14" />
+                  <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" />
+                </svg>
+                <p>
+                  <strong>This domain is for use in documentation examples without needing permission. This is not a service; avoid relying on it for testing and monitoring purposes.</strong>
+                </p>
+                <p lang="ar" dir="rtl">هذا النطاق مخصص للاستخدام في أمثلة التوثيق دون الحاجة إلى إذن. هذه ليست خدمة؛ يُرجى تجنب الاعتماد عليها لأغراض الاختبار والمراقبة.</p>
+                <p lang="zh">该域名仅用于文档示例，无需获得许可。这并非一项服务，请勿将其用于测试和监控目的。</p>
+                <p lang="fr">L’usage de ce domaine est réservé à des exemples de documentation, sans autorisation préalable. Il ne s’agit pas d’un service ; son utilisation à des fins de test ou de surveillance est à éviter.</p>
+                <p lang="ru">Данный домен предназначен для использования в примерах документации без необходимости получения предварительного разрешения. Это не сервис; не рекомендуется его использование для тестирования и мониторинга.</p>
+                <p lang="es">Este dominio está destinado al uso en ejemplos de documentación sin necesidad de permiso. Esto no es un servicio; evitar utilizarlo para realizar pruebas o monitoreos.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Interface tour ───────────────────────────────────────────────── -->
+        <div
+          id="tour-intro"
+          data-hidden
+          class="fixed bottom-4 left-4 z-[70] w-[320px] max-w-[calc(100vw-2rem)] rounded-xl border border-zinc-300 dark:border-gray-700 bg-white/95 dark:bg-gray-900/95 p-4 shadow-2xl backdrop-blur"
+        >
+          <p class="text-[10px] font-mono uppercase tracking-widest text-cyan-700 dark:text-cyan-400">Simulated session</p>
+          <p class="mt-1.5 text-[13px] font-medium text-zinc-800 dark:text-gray-100">You're looking at a static isola demo.</p>
+          <p class="mt-1 text-xs leading-relaxed text-zinc-600 dark:text-gray-400">
+            The page is drawn locally; nothing is provisioned. Want a 30-second tour of the interface?
+          </p>
+          <div class="mt-3 flex items-center justify-end gap-2">
+            <button
+              id="tour-intro-skip"
+              type="button"
+              class="rounded-md px-2.5 py-1.5 text-xs text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-zinc-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white"
+            >
+              Skip
+            </button>
+            <button
+              id="tour-intro-start"
+              type="button"
+              class="rounded-md bg-cyan-600 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-cyan-500 dark:bg-cyan-500 dark:text-gray-950 dark:hover:bg-cyan-400"
+            >
+              Show me around
+            </button>
+          </div>
+        </div>
+
+        <div id="tour-layer" data-hidden>
+          <div id="tour-blocker"></div>
+          <div id="tour-highlight"></div>
+          <div id="tour-tip" role="dialog" aria-modal="true" aria-labelledby="tour-title" aria-describedby="tour-body">
+            <div class="flex items-center justify-between gap-3">
+              <span id="tour-step" class="text-[10px] font-mono uppercase tracking-widest text-cyan-700 dark:text-cyan-400"></span>
+              <button
+                id="tour-close"
+                type="button"
+                class="text-xs leading-none text-zinc-400 transition-colors hover:text-zinc-700 dark:hover:text-gray-200"
+                aria-label="Close tour"
+              >
+                ✕
+              </button>
+            </div>
+            <h2 id="tour-title" class="mt-1 text-[13px] font-medium text-zinc-900 dark:text-white"></h2>
+            <p id="tour-body" class="mt-1 text-xs leading-relaxed text-zinc-600 dark:text-gray-400"></p>
+            <div class="mt-3 flex items-center justify-between gap-3">
+              <button
+                id="tour-skip"
+                type="button"
+                class="text-xs text-zinc-500 transition-colors hover:text-zinc-800 dark:text-gray-400 dark:hover:text-white"
+              >
+                Skip tour
+              </button>
+              <div class="flex items-center gap-2">
+                <button
+                  id="tour-back"
+                  type="button"
+                  class="rounded-md border border-zinc-300 px-2.5 py-1 text-xs text-zinc-600 transition-colors hover:bg-zinc-100 disabled:opacity-40 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-800"
+                >
+                  Back
+                </button>
+                <button
+                  id="tour-next"
+                  type="button"
+                  class="rounded-md bg-cyan-600 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-cyan-500 dark:bg-cyan-500 dark:text-gray-950 dark:hover:bg-cyan-400"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div
+      id="demo-toast"
+      data-hidden
+      role="status"
+      aria-live="polite"
+      class="fixed bottom-10 left-1/2 -translate-x-1/2 z-[70] rounded-lg border border-zinc-300 dark:border-gray-700 bg-white/95 dark:bg-gray-900/95 px-3 py-2 text-[11px] font-mono tracking-wide text-zinc-600 dark:text-gray-300 shadow-xl backdrop-blur"
+    ></div>
+
+    <!-- ── Launch overlay (mirrors LoadingOverlay.tsx) ────────────────────── -->
+    <div id="launch-overlay" data-hidden class="fixed inset-0 z-[60]">
+      <div class="loader-root absolute inset-0 z-40 flex flex-col items-center justify-center">
+        <div class="relative mb-10">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="isola-logo isola-logo--loader w-24 h-24" aria-hidden="true">
+            <g transform="translate(256, 270)">
+              <g class="logo-float-base">
+                <path class="loader-logo-face" d="M 0 50 L 110 0 L 0 -50 L -110 0 Z" />
+                <path class="loader-logo-face-left" d="M -110 0 L 0 50 L 0 85 L -110 35 Z" />
+                <path class="loader-logo-face-right" d="M 110 0 L 0 50 L 0 85 L 110 35 Z" />
+              </g>
+              <g class="logo-float-ring">
+                <path class="loader-logo-stroke" fill="none" d="M 0 -20 L 100 -65 L 0 -110 L -100 -65 Z" stroke-width="10" stroke-linejoin="miter" style="animation: loader-stroke-trace 2.4s ease-in-out infinite" />
+                <path class="loader-logo-stroke" fill="none" d="M -100 -65 L 0 -20 L 0 5 L -100 -40 Z" stroke-width="10" stroke-linejoin="miter" style="animation: loader-stroke-trace 2.4s ease-in-out infinite 0.3s" />
+                <path class="loader-logo-stroke" fill="none" d="M 100 -65 L 0 -20 L 0 5 L 100 -40 Z" stroke-width="10" stroke-linejoin="miter" style="animation: loader-stroke-trace 2.4s ease-in-out infinite 0.6s" />
+              </g>
+              <g class="logo-float-top">
+                <path class="loader-logo-top" d="M 0 -85 L 85 -125 L 0 -165 L -85 -125 Z" />
+                <path class="loader-logo-top-left" d="M -85 -125 L 0 -85 L 0 -65 L -85 -105 Z" />
+                <path class="loader-logo-top-right" d="M 85 -125 L 0 -85 L 0 -65 L 85 -105 Z" />
+              </g>
+            </g>
+          </svg>
+        </div>
+
+        <div id="launch-phases" class="w-80 max-w-[80vw] flex flex-col gap-2">
+          <div class="flex items-center gap-3 text-xs font-mono">
+            <span class="w-4 flex justify-center" data-phase-icon><span class="loader-phase-pending" aria-hidden="true">○</span></span>
+            <span class="loader-phase-pending" data-phase-label>Provisioning container</span>
+            <span class="loader-phase-progress ml-auto animate-pulse" data-phase-progress data-hidden>…</span>
+          </div>
+          <div class="flex items-center gap-3 text-xs font-mono">
+            <span class="w-4 flex justify-center" data-phase-icon><span class="loader-phase-pending" aria-hidden="true">○</span></span>
+            <span class="loader-phase-pending" data-phase-label>Launching browser</span>
+            <span class="loader-phase-progress ml-auto animate-pulse" data-phase-progress data-hidden>…</span>
+          </div>
+          <div class="flex items-center gap-3 text-xs font-mono">
+            <span class="w-4 flex justify-center" data-phase-icon><span class="loader-phase-pending" aria-hidden="true">○</span></span>
+            <span class="loader-phase-pending" data-phase-label>Establishing stream</span>
+            <span class="loader-phase-progress ml-auto animate-pulse" data-phase-progress data-hidden>…</span>
+          </div>
+          <div class="flex items-center gap-3 text-xs font-mono">
+            <span class="w-4 flex justify-center" data-phase-icon><span class="loader-phase-pending" aria-hidden="true">○</span></span>
+            <span class="loader-phase-pending" data-phase-label>Ready</span>
+            <span class="loader-phase-progress ml-auto animate-pulse" data-phase-progress data-hidden>…</span>
+          </div>
+        </div>
+
+        <div id="launch-restart" data-hidden class="w-80 max-w-[80vw]">
+          <div class="flex items-center gap-3 text-xs font-mono">
+            <span class="w-4 flex justify-center"><span class="loader-phase-dot inline-block w-1.5 h-1.5 rounded-full" style="animation: loader-dot 1.2s ease-in-out infinite"></span></span>
+            <span class="loader-phase-active">Restarting session</span>
+            <span class="loader-phase-progress ml-auto animate-pulse">…</span>
+          </div>
+        </div>
+
+        <p id="launch-caption" class="absolute bottom-6 text-[11px] font-mono loader-bottom-hint tracking-wider">STARTING REMOTE BROWSER</p>
+        <p class="absolute bottom-2 text-[9px] font-mono loader-bottom-hint tracking-widest opacity-70">DEMO · NO CONTAINER IS STARTED</p>
+      </div>
+    </div>
+
+    <script src="./demo.js"></script>
+  </body>
+</html>

@@ -6,6 +6,19 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Added
+
+- `demo/` — a static, no-build interface demo that reproduces the landing page
+  (pinned to `example.com`), the four-phase launch overlay and the viewer chrome
+  (tab strip, address bar, session clock, end/restart/fullscreen). It simulates
+  the launch and draws example.com locally — the page is never requested — so it
+  can be hosted on GitHub Pages; nothing is provisioned. The address box is
+  read-only, new tabs are disabled with a short notice, and the session menu is
+  fully drawn with Enter fullscreen and Restart session enabled. An opt-in
+  spotlight tour explains the session chrome and can be replayed from a `?`
+  button.
+  `.github/workflows/pages.yml` publishes it from the `demo/` directory.
+
 ## [1.2.0] - 2026-10-21
 
 ### Added

@@ -18,6 +18,10 @@ Isola boots a throwaway Docker container with offscreen Chromium, streams it to 
 
 ![Landing Page](./docs/images/landing-page.png)
 
+[**Try the interface demo →**](https://dm0xa.github.io/isola-browser/)
+
+<sub>Landing, launch overlay and viewer chrome pinned to `example.com`. The demo simulates the session and draws the page locally; nothing is provisioned.</sub>
+
 </div>
 
 ---

@@ -1,0 +1,513 @@
+/*
+ * isola interface demo — styles that are not Tailwind utilities.
+ *
+ * The palette, dimensions and transitions in this file are copied from the
+ * real app so the demo looks like the product:
+ *   - logo geometry/keyframes   frontend/src/components/IsolaLogo.tsx
+ *   - launch overlay            frontend/src/components/LoadingOverlay.tsx
+ *   - tab strip palette         frontend/src/hooks/useIsolaStream.ts (TABBAR_PALETTE)
+ *   - viewer chrome             frontend/src/pages/viewer/ViewerToolbar.tsx
+ *
+ * Keep them in sync when those change. Everything else on the page is plain
+ * Tailwind, loaded from the Play CDN.
+ */
+
+@font-face {
+  font-family: 'Bitcount Prop Single';
+  src: url('./fonts/BitcountPropSingle-VariableFont.ttf') format('truetype-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Views and overlays are toggled with this attribute rather than Tailwind's
+   `hidden`, so `display:flex`/`display:block` on the same element can win
+   without specificity games. */
+[data-hidden] {
+  display: none !important;
+}
+
+:root {
+  color-scheme: light;
+  --app-bg: #e4e4e7;          /* zinc-200 — landing + viewer root */
+  --chrome-bg: #f4f4f5;       /* zinc-100 — viewer toolbar */
+  --stream-bg: #f4f4f5;       /* --vnc-container-bg (light) */
+  --vnc-container-bg: #f4f4f5;
+
+  /* TABBAR_PALETTE.light */
+  --tabbar-bg: rgba(244, 244, 245, 0.92);
+  --tabbar-text: #18181b;
+  --tab-chip-bg: #d4d4d8;
+  --tab-chip-text: #09090b;
+  --tab-btn-bg: rgba(24, 24, 27, 0.07);
+  --tab-btn-bg-hover: rgba(24, 24, 27, 0.14);
+  --tab-btn-text: #3f3f46;
+  --tab-btn-text-hover: #09090b;
+  --tab-input-bg: #ffffff;
+  --tab-input-border: #d4d4d8;
+  --tab-input-text: #18181b;
+}
+
+html.dark {
+  color-scheme: dark;
+  --app-bg: #030712;          /* gray-950 */
+  --chrome-bg: #111827;       /* gray-900 */
+  --stream-bg: #030712;
+  --vnc-container-bg: #030712;
+
+  /* TABBAR_PALETTE.dark */
+  --tabbar-bg: rgba(17, 24, 39, 0.88);
+  --tabbar-text: #e5e7eb;
+  --tab-chip-bg: #374151;
+  --tab-chip-text: #ffffff;
+  --tab-btn-bg: rgba(255, 255, 255, 0.08);
+  --tab-btn-bg-hover: rgba(255, 255, 255, 0.16);
+  --tab-btn-text: #e5e7eb;
+  --tab-btn-text-hover: #ffffff;
+  --tab-input-bg: #111827;
+  --tab-input-border: #4b5563;
+  --tab-input-text: #e5e7eb;
+}
+
+.app-surface { background: var(--app-bg); }
+.chrome-surface { background: var(--chrome-bg); }
+.stream-pane { background: var(--stream-bg); }
+
+/* ── Logo ────────────────────────────────────────────────────────────────── */
+
+@keyframes logo-glow {
+  0%, 100% { filter: drop-shadow(0 0 8px rgba(0, 229, 255, 0.3)); }
+  50% { filter: drop-shadow(0 0 18px rgba(0, 229, 255, 0.6)); }
+}
+@keyframes logo-glow-light {
+  0%, 100% { filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.15)); }
+  50% { filter: drop-shadow(0 0 10px rgba(0, 0, 0, 0.25)); }
+}
+@keyframes logo-float-base {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(9px, 13px); }
+  50% { transform: translate(13px, 5px); }
+  75% { transform: translate(4px, -3px); }
+  100% { transform: translate(0, 0); }
+}
+@keyframes logo-float-ring {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(-10px, -8px); }
+  50% { transform: translate(-13px, 2px); }
+  75% { transform: translate(-4px, 7px); }
+  100% { transform: translate(0, 0); }
+}
+@keyframes logo-float-top {
+  0% { transform: translate(0, 0); }
+  30% { transform: translate(6px, -14px); }
+  55% { transform: translate(-4px, -18px); }
+  80% { transform: translate(2px, -7px); }
+  100% { transform: translate(0, 0); }
+}
+@keyframes logo-mini-base {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(14px, 19px); }
+  50% { transform: translate(22px, 8px); }
+  75% { transform: translate(6px, -4px); }
+  100% { transform: translate(0, 0); }
+}
+@keyframes logo-mini-ring {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(-17px, -13px); }
+  50% { transform: translate(-24px, 4px); }
+  75% { transform: translate(-7px, 12px); }
+  100% { transform: translate(0, 0); }
+}
+@keyframes logo-mini-top {
+  0% { transform: translate(0, 0); }
+  30% { transform: translate(11px, -25px); }
+  55% { transform: translate(-7px, -32px); }
+  80% { transform: translate(4px, -12px); }
+  100% { transform: translate(0, 0); }
+}
+
+.isola-logo {
+  overflow: visible;
+  animation: logo-glow-light 3s ease-in-out infinite;
+}
+html.dark .isola-logo {
+  animation: logo-glow 3s ease-in-out infinite;
+}
+.isola-logo.isola-logo--loader {
+  animation: loader-logo-pulse 2.4s ease-in-out infinite;
+}
+html.dark .isola-logo.isola-logo--loader {
+  animation: loader-logo-pulse 2.4s ease-in-out infinite;
+}
+
+.logo-float-base { animation: logo-float-base 6s ease-in-out infinite; }
+.logo-float-ring { animation: logo-float-ring 8s ease-in-out infinite; }
+.logo-float-top { animation: logo-float-top 7s ease-in-out infinite; }
+.logo-mini-base { animation: logo-mini-base 6s ease-in-out infinite; }
+.logo-mini-ring { animation: logo-mini-ring 8s ease-in-out infinite; }
+.logo-mini-top { animation: logo-mini-top 7s ease-in-out infinite; }
+
+/* ── Launch overlay (LoadingOverlay.tsx) ─────────────────────────────────── */
+
+@keyframes loader-logo-pulse {
+  0%, 100% { filter: drop-shadow(0 0 12px var(--loader-glow)); transform: translateY(0); }
+  50% { filter: drop-shadow(0 0 28px var(--loader-glow-strong)); transform: translateY(-3px); }
+}
+@keyframes loader-stroke-trace {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@keyframes loader-dot {
+  0%, 100% { transform: scale(1); opacity: 0.5; }
+  50% { transform: scale(1.4); opacity: 1; }
+}
+
+.loader-root {
+  background: #f4f4f5;
+  background-image: radial-gradient(circle at 50% 40%, rgba(8, 145, 178, 0.08) 0%, rgba(244, 244, 245, 0) 60%);
+  color: #3f3f46;
+  --loader-glow: rgba(8, 145, 178, 0.18);
+  --loader-glow-strong: rgba(8, 145, 178, 0.35);
+}
+html.dark .loader-root {
+  background: #030712;
+  background-image: radial-gradient(circle at 50% 40%, rgba(0, 229, 255, 0.06) 0%, rgba(3, 7, 18, 0) 60%);
+  color: #aea2a2;
+  --loader-glow: rgba(0, 229, 255, 0.25);
+  --loader-glow-strong: rgba(0, 229, 255, 0.6);
+}
+
+.loader-logo-face { fill: #e4e4e7; }
+.loader-logo-face-left { fill: #d4d4d8; }
+.loader-logo-face-right { fill: #c8c8cc; }
+.loader-logo-stroke { stroke: #0891b2; }
+.loader-logo-top { fill: #18181b; }
+.loader-logo-top-left { fill: #27272a; }
+.loader-logo-top-right { fill: #3f3f46; }
+html.dark .loader-logo-face { fill: #1a2024; }
+html.dark .loader-logo-face-left { fill: #0f1418; }
+html.dark .loader-logo-face-right { fill: #0a0e10; }
+html.dark .loader-logo-stroke { stroke: #00e5ff; }
+html.dark .loader-logo-top { fill: #ffffff; }
+html.dark .loader-logo-top-left { fill: #e0e0e0; }
+html.dark .loader-logo-top-right { fill: #cccccc; }
+
+.loader-phase-done { color: #0891b2; }
+.loader-phase-dot { background: #0891b2; box-shadow: 0 0 6px rgba(8, 145, 178, 0.5); }
+.loader-phase-pending { color: #d4d4d8; }
+.loader-phase-active { color: #0e7490; }
+.loader-phase-done-text { color: #52525b; }
+.loader-phase-progress { color: #71717a; }
+.loader-bottom-hint { color: #a1a1aa; }
+
+html.dark .loader-phase-done { color: #00e5ff; }
+html.dark .loader-phase-dot { background: #00e5ff; box-shadow: 0 0 8px rgba(0, 229, 255, 0.7); }
+html.dark .loader-phase-pending { color: #374151; }
+html.dark .loader-phase-active { color: #67e8f9; }
+html.dark .loader-phase-done-text { color: #9ca3af; }
+html.dark .loader-phase-progress { color: #6b7280; }
+html.dark .loader-bottom-hint { color: #4b5563; }
+
+/* ── isola tab strip (#isola-tabbar in useIsolaStream.ts) ────────────────── */
+
+.isola-tabbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 36px;
+  padding: 4px 6px;
+  background: var(--tabbar-bg);
+  color: var(--tabbar-text);
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  user-select: none;
+}
+
+.isola-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  max-width: 180px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--tabbar-text);
+  transition: background 120ms ease, color 120ms ease;
+}
+.isola-tab.active {
+  background: var(--tab-chip-bg);
+  color: var(--tab-chip-text);
+}
+.isola-tab:not(.active):hover {
+  background: var(--tab-btn-bg);
+}
+.isola-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.isola-tab-close {
+  opacity: 0.6;
+  padding: 0 2px;
+  border-radius: 4px;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+.isola-tab-close:hover {
+  opacity: 1;
+  background: var(--tab-btn-bg-hover);
+}
+
+.isola-tabbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--tab-btn-text);
+  background: var(--tab-btn-bg);
+  transition: background 120ms ease, color 120ms ease;
+}
+.isola-tabbar-btn:hover {
+  background: var(--tab-btn-bg-hover);
+  color: var(--tab-btn-text-hover);
+}
+.isola-tabbar-plus { padding: 3px 9px; }
+.isola-tabbar-back { margin-left: 6px; }
+.isola-tabbar-reload { margin-left: 2px; }
+
+.isola-url {
+  flex: 1;
+  min-width: 120px;
+  margin-left: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--tab-input-border);
+  background: var(--tab-input-bg);
+  color: var(--tab-input-text);
+  font: inherit;
+  outline: none;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.isola-url::placeholder { color: var(--tab-btn-text); opacity: 0.7; }
+
+/* ── Static example.com page ─────────────────────────────────────────────── */
+/* Drawn from the IANA example page: the demo makes no request for it. */
+
+.example-page {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #eeeeee;
+  color: #222222;
+  transition: opacity 120ms ease;
+}
+html.dark .example-page {
+  background: #222222;
+  color: #e8e8e8;
+}
+.example-page.is-reloading { opacity: 0.15; }
+
+.example-page-body {
+  box-sizing: content-box;
+  max-width: 26em;
+  margin: 0 auto;
+  padding: 10vh 2em 2em;
+  text-align: center;
+  font: 16px/1.6 system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+.example-page-body p { margin: 1em 0; }
+
+.example-book {
+  display: block;
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 4px;
+  color: #666666;
+}
+html.dark .example-book { color: #9ca3af; }
+
+#viewer:fullscreen {
+  width: 100%;
+  height: 100%;
+  background: var(--app-bg);
+}
+
+/* Open state of the session-actions (3-dots) button. */
+#menu-btn.is-open {
+  background: #d4d4d8;
+  color: #18181b;
+}
+html.dark #menu-btn.is-open {
+  background: #1f2937;
+  color: #ffffff;
+}
+
+/* The tour shows the actions menu as it looks in the real product. */
+#session-menu.is-tour-enabled button[disabled],
+#session-menu.is-tour-enabled [aria-disabled="true"],
+#session-menu.is-tour-enabled .opacity-40 {
+  opacity: 1 !important;
+}
+
+/* ── Viewer controls ─────────────────────────────────────────────────────── */
+
+.clock-readout { color: #52525b; }
+.clock-readout.is-warning { color: #d97706; }
+.clock-readout.is-critical { color: #dc2626; }
+html.dark .clock-readout { color: #d1d5db; }
+html.dark .clock-readout.is-warning { color: #fbbf24; }
+html.dark .clock-readout.is-critical { color: #f87171; }
+
+.clock-icon { color: #a1a1aa; }
+.clock-icon.is-warning { color: #f59e0b; }
+.clock-icon.is-critical { color: #ef4444; }
+html.dark .clock-icon { color: #6b7280; }
+html.dark .clock-icon.is-warning { color: #fbbf24; }
+html.dark .clock-icon.is-critical { color: #f87171; }
+.clock-icon.is-pulsing { animation: clock-pulse 1.4s ease-in-out infinite; }
+@keyframes clock-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.extend-btn { color: #52525b; }
+.extend-btn:hover:not(:disabled) { background: rgba(212, 212, 216, 0.8); }
+.extend-btn.is-added { color: #047857; }
+html.dark .extend-btn { color: #d1d5db; }
+html.dark .extend-btn:hover:not(:disabled) { background: #374151; }
+html.dark .extend-btn.is-added { color: #6ee7b7; }
+
+.end-btn { color: #dc2626; }
+.end-btn:hover { background: rgba(239, 68, 68, 0.1); }
+.end-btn.is-armed { background: #dc2626; color: #ffffff; }
+.end-btn.is-armed:hover { background: #ef4444; }
+html.dark .end-btn { color: #f87171; }
+
+.audio-btn { color: #71717a; }
+.audio-btn:hover { background: #d4d4d8; }
+.audio-btn.is-on { color: #0891b2; }
+html.dark .audio-btn { color: #9ca3af; }
+html.dark .audio-btn:hover { background: #1f2937; }
+html.dark .audio-btn.is-on { color: #22d3ee; }
+
+/* Settings gear menu rows (LandingPage.tsx menuItemClass). */
+.menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #52525b;
+  transition: color 120ms ease, background 120ms ease;
+}
+.menu-item:hover {
+  color: #27272a;
+  background: #d4d4d8;
+}
+.menu-item.is-active {
+  color: #27272a;
+  background: #d4d4d8;
+}
+html.dark .menu-item { color: #6b7280; }
+html.dark .menu-item:hover { color: #ffffff; background: rgba(55, 65, 81, 0.5); }
+html.dark .menu-item.is-active { color: #ffffff; background: #374151; }
+
+.tor-on { color: #a855f7; }
+
+/* Cursor blink uses a class (not opacity utilities) so it survives any CDN
+   hiccup and cannot collide with Tailwind's opacity scale. */
+.cursor-off { opacity: 0; }
+
+/* ── Interface tour ─────────────────────────────────────────────────────── */
+
+#tour-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+}
+
+#tour-blocker {
+  position: absolute;
+  inset: 0;
+}
+
+#tour-highlight {
+  position: absolute;
+  border-radius: 10px;
+  pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(24, 24, 27, 0.45);
+  outline: 1px solid rgba(8, 145, 178, 0.55);
+  transition: top 120ms ease, left 120ms ease, width 120ms ease, height 120ms ease;
+}
+
+html.dark #tour-highlight {
+  box-shadow: 0 0 0 9999px rgba(3, 7, 18, 0.72);
+  outline-color: rgba(0, 229, 255, 0.55);
+}
+
+#tour-tip {
+  position: absolute;
+  width: max-content;
+  max-width: 360px;
+  border-radius: 12px;
+  border: 1px solid #e4e4e7;
+  background: rgba(255, 255, 255, 0.97);
+  color: #27272a;
+  padding: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.2);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+html.dark #tour-tip {
+  border-color: #374151;
+  background: rgba(17, 24, 39, 0.97);
+  color: #e5e7eb;
+}
+
+#tour-tip.is-sheet {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  width: calc(100% - 24px);
+  max-width: 560px;
+}
+
+/* ── Reduced motion ──────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .isola-logo,
+  .isola-logo.isola-logo--loader,
+  .logo-float-base,
+  .logo-float-ring,
+  .logo-float-top,
+  .logo-mini-base,
+  .logo-mini-ring,
+  .logo-mini-top,
+  .clock-icon.is-pulsing,
+  #tour-highlight {
+    animation: none !important;
+    transition: none !important;
+  }
+}
