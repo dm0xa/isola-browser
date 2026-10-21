@@ -121,7 +121,7 @@ Each session container is capped at **2 GB RAM, 3 CPUs, and 512 PIDs**. Size the
 
 - **Cores** — the CPU cap can never exceed the host's core count; the Docker daemon refuses `--cpus` above it. The default is 3, so a host with fewer than 3 cores gets its own core count automatically, and an explicit `ISOLA_SESSION_CPUS` above it fails every session with a Docker exit `125`.
 - **~2 GB per concurrent session** — plus memory for the OS, Docker, and the Isola process itself.
-- A **warm pool** of size *N* holds *N* extra containers, each costing a full session's memory even while idle. Budget for it explicitly.
+- A **warm pool** of size *N* keeps *N* idle containers ready, each costing a full session's memory while it waits. A claimed container is no longer idle, so peak concurrency plus *N* idle containers is the memory to budget.
 - **Disk** — used by the images and by `/dev/shm` allocations; the browser images are the bulk of it.
 
 ## GPU Acceleration

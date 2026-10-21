@@ -62,9 +62,21 @@ Pre-started containers, so a session is live the moment a user hits enter rather
 | Key | Default | Env | Meaning |
 | :--- | :--- | :--- | :--- |
 | `warm_pool.enabled` | `false` | `WARM_POOL_ENABLED` | Keep containers pre-warmed. |
-| `warm_pool.size` | `1` | `WARM_POOL_SIZE` | Number of containers to keep warm (minimum 1). |
+| `warm_pool.size` | `1` | `WARM_POOL_SIZE` | Idle containers kept ready (minimum 1). |
 
-The pool serves a claim only when the request matches what it was built with: Isola transport, the configured resolution, default theme and frame rate, no Tor/bandwidth override. Anything else transparently falls back to a cold start. The session timer starts at entry either way.
+`size` counts **idle** containers only. A claimed container leaves the pool and
+serves a session, and its replacement is provisioned immediately in the
+background. Until that replacement is ready the pool holds no idle container, so
+a second matching launch during that window cold-starts. Set `size: 2` to keep
+one waiting while one is in use. Idle containers that died or stopped answering
+are replaced on the next pool pass.
+
+Empty slots are filled one at a time, with a pause between boots, so a larger
+pool warms up over several browser boots instead of booting every container at
+once. A failed fill ends that pass and is retried on the next one rather than
+looping.
+
+The pool serves a claim only when the request matches what it was built with: Isola transport, the configured theme and frame rate, and a resolution no larger than the configured one — a smaller request is claimed and the display is reshaped to it inside that box, the same way `POST /api/sessions/{id}/resize` does. A larger resolution, a different theme or frame rate, or a Tor/bandwidth override transparently falls back to a cold start. The session timer starts at entry either way.
 
 ### `browser`
 
@@ -204,6 +216,9 @@ warm_pool:
 ```
 
 Or without editing the file: `WARM_POOL_ENABLED=true WARM_POOL_SIZE=2`.
+
+With `size: 2`, a claim consumes one container and the second stays idle, so
+back-to-back launches both skip the container boot.
 
 ### Require a token to create sessions
 

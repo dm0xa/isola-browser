@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +41,7 @@ import (
 type WarmPool struct {
 	orch       *Orchestrator
 	size       int
+	fillGap    time.Duration // pause between consecutive fills (see warmFillGap)
 	image      string
 	resolution string
 	theme      string
@@ -66,13 +68,14 @@ type WarmPool struct {
 	// for tests; defaults to the orchestrator's docker ps).
 	sweepLister func(ctx context.Context) []string
 
-	mu       sync.Mutex
-	warm     []*warmContainer
-	filling  int             // fills in flight (guards against over-provisioning)
-	pending  map[string]bool // containers created by an in-flight fill, not yet in warm
-	misses   map[string]int  // consecutive probe failures per container id
-	started  bool
-	disabled bool
+	mu         sync.Mutex
+	warm       []*warmContainer
+	filling    int             // fills in flight (guards against over-provisioning)
+	fillWorker bool            // one worker walks the empty slots, one at a time
+	pending    map[string]bool // containers created by an in-flight fill, not yet in warm
+	misses     map[string]int  // consecutive probe failures per container id
+	started    bool
+	disabled   bool
 
 	// fillCtx bounds every fill and is cancelled by Drain, so a shutdown stops
 	// a browser boot in progress instead of orphaning its container (the
@@ -105,6 +108,12 @@ func (p *WarmPool) clearPending(containerID string) {
 // warmMissLimit is how many consecutive probes must fail before an idle warm
 // container is torn down (mirrors containerMissLimit for live sessions).
 const warmMissLimit = 2
+
+// warmFillGap spaces consecutive warm fills. Empty slots are provisioned by a
+// single worker, one container at a time, so a size-N pool never boots N
+// browsers at once; the gap keeps the bursts apart on a loaded host and stops a
+// fast failure from turning the worker into a retry loop.
+const warmFillGap = 2 * time.Second
 
 // noteMiss increments the consecutive probe-failure count for a container.
 func (p *WarmPool) noteMiss(containerID string) int {
@@ -158,6 +167,7 @@ func NewWarmPool(orch *Orchestrator, cfg *config.Config) *WarmPool {
 	p := &WarmPool{
 		orch:                 orch,
 		size:                 cfg.WarmPoolSize,
+		fillGap:              warmFillGap,
 		image:                cfg.SessionImage(),
 		resolution:           cfg.Resolution,
 		theme:                theme,
@@ -217,28 +227,41 @@ func (p *WarmPool) Start(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// Claim pops a warm container whose baked parameters match the request.
-// It returns nil when the pool is disabled/empty or nothing matches — the
-// caller falls back to a cold create. The caller owns the container from the
-// moment Claim returns.
-func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int) *SessionInfo {
+// Claim pops a warm container that can serve the request. It returns the
+// container and the resolution the container was built at, or (nil, "") when
+// the pool is disabled/empty or nothing matches — the caller falls back to a
+// cold create. The caller owns the container from the moment Claim returns.
+//
+// Theme and frame rate must match exactly: both are baked into the window and
+// the encoder. The resolution only has to fit inside the pooled box, because
+// the caller reshapes the display with the session resize path, which clamps to
+// the launch resolution. A smaller request therefore claims too, and the pixel
+// budget, encoder and /dev/shm all stay within what the container was created
+// with.
+func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int) (*SessionInfo, string) {
 	p.mu.Lock()
 	if p.disabled {
 		p.mu.Unlock()
-		return nil
+		return nil, ""
 	}
 	var claimed *warmContainer
+	baked := ""
 	for i, wc := range p.warm {
-		if wc.info.Resolution == resolution && wc.info.Theme == theme && wc.info.FPS == fps {
-			claimed = wc
-			p.warm = append(p.warm[:i], p.warm[i+1:]...)
-			break
+		if wc.info.Theme != theme || wc.info.FPS != fps {
+			continue
 		}
+		if !resolutionFits(wc.info.Resolution, resolution) {
+			continue
+		}
+		claimed = wc
+		baked = wc.info.Resolution
+		p.warm = append(p.warm[:i], p.warm[i+1:]...)
+		break
 	}
 	p.mu.Unlock()
 
 	if claimed == nil {
-		return nil
+		return nil, ""
 	}
 
 	// Last-mile health check: the container was verified when it entered the
@@ -249,7 +272,7 @@ func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int)
 			Msg("warm pool: claim probe failed, discarding container")
 		p.stop(context.Background(), claimed.info.ContainerID)
 		p.replenish(ctx)
-		return nil
+		return nil, ""
 	}
 
 	// Start the replacement now, not on the next reconcile tick: a browser
@@ -260,8 +283,33 @@ func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int)
 	log.Info().
 		Str("container_id", claimed.info.ContainerID).
 		Str("warm_age", p.nower().Sub(claimed.startedAt).Round(time.Millisecond).String()).
+		Str("baked_resolution", baked).
+		Str("requested_resolution", resolution).
 		Msg("warm pool: container claimed")
-	return &claimed.info.SessionInfo
+	return &claimed.info.SessionInfo, baked
+}
+
+// resolutionFits reports whether want fits inside have on both axes. A pair that
+// cannot be parsed never fits, so a malformed request falls back to the cold
+// path instead of claiming a container it cannot be reshaped to.
+func resolutionFits(have, want string) bool {
+	hw, hh, ok := parseDims(have)
+	if !ok {
+		return false
+	}
+	ww, wh, ok := parseDims(want)
+	if !ok {
+		return false
+	}
+	return ww <= hw && wh <= hh
+}
+
+func parseDims(res string) (int, int, bool) {
+	var w, h int
+	if _, err := fmt.Sscanf(res, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
+		return 0, 0, false
+	}
+	return w, h, true
 }
 
 // NotifyNavigateDisabled lets the handler report that the running browser
@@ -347,6 +395,28 @@ func (p *WarmPool) checkNavigate(ctx context.Context, info *SessionInfo) error {
 	}
 }
 
+// containerIDMatches reports whether two container IDs name the same
+// container, accepting a truncated form on either side. `docker ps --format
+// '{{.ID}}'` returns the 12-character prefix while a create reports the full
+// ID, so comparing them for equality made every pooled container look
+// untracked and the sweep killed the pool it exists to protect.
+func containerIDMatches(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	return a == b || strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+}
+
+// containerIDIn reports whether id matches any ID in set.
+func containerIDIn(set map[string]bool, id string) bool {
+	for known := range set {
+		if containerIDMatches(known, id) {
+			return true
+		}
+	}
+	return false
+}
+
 // collectOrphans removes warm-labeled containers the pool does not own and no
 // active session references. It covers three cases the pool cannot otherwise
 // see:
@@ -389,7 +459,7 @@ func (p *WarmPool) collectOrphans(ctx context.Context) {
 		active = set
 	}
 	for _, id := range ids {
-		if tracked[id] || active[id] {
+		if containerIDIn(tracked, id) || containerIDIn(active, id) {
 			continue
 		}
 		log.Info().Str("container_id", id).Msg("warm pool: removing untracked warm container")
@@ -452,52 +522,81 @@ func (p *WarmPool) reconcile(ctx context.Context) {
 	p.replenish(ctx).Wait()
 }
 
-// replenish starts async fills for the pool's empty slots, skipping slots a
-// fill (or a concurrent claim) already covers. Returns a WaitGroup the caller
-// may wait on; Claim ignores it so a user's request never waits on a browser
-// boot.
+// replenish starts the fill worker when the pool has empty slots. One worker
+// owns every fill and provisions the slots one at a time, so a size-N pool
+// never boots N browsers at once — on a small host that burst is the spike the
+// pool exists to avoid. Returns a WaitGroup the caller may wait on (reconcile
+// does, so passes never overlap); Claim ignores it so a user's request never
+// waits on a browser boot.
 func (p *WarmPool) replenish(ctx context.Context) *sync.WaitGroup {
 	wg := &sync.WaitGroup{}
 
 	p.mu.Lock()
-	if p.disabled {
+	if p.disabled || p.fillWorker || p.size-len(p.warm)-p.filling <= 0 {
 		p.mu.Unlock()
 		return wg
 	}
-	need := p.size - len(p.warm) - p.filling
-	if need <= 0 {
-		p.mu.Unlock()
-		return wg
+	p.fillWorker = true
+	// Parent the fill on the pool's context when Start has run, so Drain can
+	// abort boots in flight.
+	fillCtx := ctx
+	if p.fillCtx != nil {
+		fillCtx = p.fillCtx
 	}
-	p.filling += need
 	p.mu.Unlock()
 
-	for i := 0; i < need; i++ {
-		// Parent the fill on the pool's context when Start has run, so Drain
-		// can abort boots in flight.
-		fillCtx := ctx
-		p.mu.Lock()
-		if p.fillCtx != nil {
-			fillCtx = p.fillCtx
-		}
-		p.mu.Unlock()
-
-		wg.Add(1)
-		p.fillsWG.Add(1)
-		go func() {
-			defer wg.Done()
-			defer p.fillsWG.Done()
-			p.fillOne(fillCtx)
-			p.mu.Lock()
-			p.filling--
-			p.mu.Unlock()
-		}()
-	}
+	wg.Add(1)
+	p.fillsWG.Add(1)
+	go func() {
+		defer wg.Done()
+		defer p.fillsWG.Done()
+		p.fillSlots(fillCtx)
+	}()
 	return wg
 }
 
+// fillSlots provisions empty slots one at a time until the pool is full, a fill
+// fails, or the pool shuts down. A failure ends the pass instead of retrying
+// immediately: the next reconcile tick picks the slot up again.
+func (p *WarmPool) fillSlots(ctx context.Context) {
+	for {
+		p.mu.Lock()
+		if p.disabled || len(p.warm)+p.filling >= p.size {
+			p.fillWorker = false
+			p.mu.Unlock()
+			return
+		}
+		p.filling++
+		p.mu.Unlock()
+
+		ok := p.fillOne(ctx)
+
+		p.mu.Lock()
+		p.filling--
+		p.mu.Unlock()
+
+		if !ok {
+			p.mu.Lock()
+			p.fillWorker = false
+			p.mu.Unlock()
+			return
+		}
+
+		// Space the boots. The container just built also took its own boot time,
+		// so consecutive starts stay apart even on a fast host.
+		select {
+		case <-ctx.Done():
+			p.mu.Lock()
+			p.fillWorker = false
+			p.mu.Unlock()
+			return
+		case <-time.After(p.fillGap):
+		}
+	}
+}
+
 // fillOne provisions one warm container and adds it to the pool.
-func (p *WarmPool) fillOne(ctx context.Context) {
+func (p *WarmPool) fillOne(ctx context.Context) bool {
 	createCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	info, err := p.provisioner(createCtx, WarmPoolParams{
@@ -510,7 +609,7 @@ func (p *WarmPool) fillOne(ctx context.Context) {
 	})
 	if err != nil {
 		log.Warn().Err(err).Msg("warm pool: provision failed")
-		return
+		return false
 	}
 	// A warm container is only useful once the in-container stream answers,
 	// and only if the image can be re-pointed at a session URL.
@@ -518,12 +617,12 @@ func (p *WarmPool) fillOne(ctx context.Context) {
 		if errors.Is(err, ErrNavigateUnsupported) {
 			p.terminate(ctx, info.ContainerID)
 			p.NotifyNavigateDisabled()
-			return
+			return false
 		}
 		log.Warn().Err(err).Str("container_id", info.ContainerID).
 			Msg("warm pool: navigate capability probe failed")
 		p.terminate(ctx, info.ContainerID)
-		return
+		return false
 	}
 	p.mu.Lock()
 	poolSize := 0
@@ -531,7 +630,7 @@ func (p *WarmPool) fillOne(ctx context.Context) {
 		// Shrink raced with a config change or disable: give it back.
 		p.mu.Unlock()
 		p.stop(ctx, info.ContainerID)
-		return
+		return true
 	}
 	p.warm = append(p.warm, &warmContainer{info: &warmContainerInfo{
 		SessionInfo: *info,
@@ -543,6 +642,7 @@ func (p *WarmPool) fillOne(ctx context.Context) {
 	p.mu.Unlock()
 	log.Info().Str("container_id", info.ContainerID).
 		Int("pool_size", poolSize).Msg("warm pool: container ready")
+	return true
 }
 
 // Drain stops every warm container, bounded by ctx, and stops the pool from

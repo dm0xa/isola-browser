@@ -210,6 +210,19 @@ RESOLVED_DOCKER_HOST="\$(resolve_docker_host || true)"
 if [[ -n "\$RESOLVED_DOCKER_HOST" ]]; then
   export DOCKER_HOST="\$RESOLVED_DOCKER_HOST"
 fi
+# Warm pool: take the two keys from .env when present, so the dev server keeps
+# the same pre-provisioned containers as the Compose stack instead of running
+# with the code defaults. Only these keys are read; .env stays out of the rest
+# of the helper's environment.
+if [[ -f $REPO_DIR/.env ]]; then
+  while IFS='=' read -r key value; do
+    case "\$key" in
+      WARM_POOL_ENABLED|WARM_POOL_SIZE)
+        if [[ -n "\$value" ]]; then export "\$key=\$value"; fi
+        ;;
+    esac
+  done < $REPO_DIR/.env
+fi
 export PORT="\${PORT:-$BACKEND_PORT}"
 export LOG_LEVEL="\${LOG_LEVEL:-debug}"
 export CORS_ORIGIN="\${CORS_ORIGIN:-http://localhost:5173,http://localhost:$BACKEND_PORT}"

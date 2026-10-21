@@ -81,6 +81,10 @@ type Handler struct {
 	// process instead of on every claim.
 	warmPinWarnOnce sync.Once
 
+	// resizeDisplayFn overrides the display-resize call used after a warm claim;
+	// nil means the orchestrator's own path. Tests record the call through it.
+	resizeDisplayFn func(ctx context.Context, host string, port, width, height int) error
+
 	// Resource-graph proxy limits. Fields rather than consts so tests can
 	// shrink them; New installs the production defaults.
 	graphRenderTimeout time.Duration
@@ -529,7 +533,8 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 // Eligibility mirrors what the pool bakes in at container creation, because
 // container env and /etc/hosts cannot be changed after launch:
 //   - isola transport only (the pool runs the Electron image);
-//   - exact resolution match (encoder bitrate is baked from the resolution);
+//   - a resolution that fits inside the pooled box — a smaller one is claimed and
+//     the display is reshaped to it after navigation;
 //   - the effective frame rate must match (the cap is baked);
 //   - default resolved theme (the window background is baked);
 //   - no Tor or explicit bandwidth override.
@@ -560,7 +565,7 @@ func (h *Handler) claimWarmContainer(
 		return nil, false
 	}
 
-	info := h.warm.Claim(ctx, resolution, theme, effectiveFPS)
+	info, baked := h.warm.Claim(ctx, resolution, theme, effectiveFPS)
 	if info == nil {
 		return nil, false
 	}
@@ -590,7 +595,57 @@ func (h *Handler) claimWarmContainer(
 	}
 	log.Printf("create session: warm container %s claimed for session %s (user %s, target %s)",
 		info.ContainerID[:12], sessionID, userID, targetURL)
+
+	// A claim can serve a resolution smaller than the pooled box: reshape the
+	// display now, before any viewer attaches, so the session runs at the size
+	// that was asked for. Clamped inside the launch resolution by the same path
+	// POST /resize uses, so the pixel budget never grows. A failure is cosmetic
+	// (the viewer resizes when it connects) and must not cost the claim.
+	if w, height, ok := warmResizeTarget(baked, resolution); ok {
+		rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := h.resizeDisplay(rctx, info.Host, info.Port, w, height)
+		cancel()
+		if err != nil {
+			log.Printf("create session: warm resize %s -> %s failed, keeping the pooled size: %v", baked, resolution, err)
+		} else {
+			log.Printf("create session: warm container %s resized %s -> %s", info.ContainerID[:12], baked, resolution)
+		}
+	}
 	return info, true
+}
+
+// warmResizeTarget reports whether a claimed warm container, built at baked,
+// must be reshaped for a session that asked for requested, and to which size.
+// Claim only accepts a request that fits inside the baked box, so this compares
+// the two pairs and ignores anything it cannot parse: leaving the container at
+// its pooled size is always safe.
+func warmResizeTarget(baked, requested string) (int, int, bool) {
+	if baked == "" || requested == "" || baked == requested {
+		return 0, 0, false
+	}
+	var bw, bh, rw, rh int
+	if _, err := fmt.Sscanf(baked, "%dx%d", &bw, &bh); err != nil {
+		return 0, 0, false
+	}
+	if _, err := fmt.Sscanf(requested, "%dx%d", &rw, &rh); err != nil {
+		return 0, 0, false
+	}
+	if rw <= 0 || rh <= 0 || rw > bw || rh > bh {
+		return 0, 0, false
+	}
+	return rw, rh, true
+}
+
+// resizeDisplay reshapes a claimed container's offscreen display. Indirected
+// through a field so tests can record the call without a Docker daemon.
+func (h *Handler) resizeDisplay(ctx context.Context, host string, port, width, height int) error {
+	if h.resizeDisplayFn != nil {
+		return h.resizeDisplayFn(ctx, host, port, width, height)
+	}
+	if h.orch == nil {
+		return fmt.Errorf("no orchestrator")
+	}
+	return h.orch.ResizeSessionDisplay(ctx, host, port, width, height)
 }
 
 func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {

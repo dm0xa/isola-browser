@@ -21,6 +21,8 @@ func newTestPool(t *testing.T, size int) (*WarmPool, *[]string, *[]string) {
 		BrowserTheme:    "dark",
 	}
 	p := NewWarmPool(nil, cfg)
+	// Tests must not pay the production spacing between fills.
+	p.fillGap = 0
 
 	var fakeMu sync.Mutex
 	created, terminated := &[]string{}, &[]string{}
@@ -64,7 +66,7 @@ func TestWarmPoolDisabledByDefault(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{WarmPoolEnabled: false, WarmPoolSize: 1, Resolution: "1920x1080", BrowserTheme: "dark"}
 	p := NewWarmPool(nil, cfg)
-	if got := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
 		t.Fatalf("Claim on disabled pool = %+v, want nil", got)
 	}
 }
@@ -78,16 +80,16 @@ func TestWarmPoolClaimMatchesExactParams(t *testing.T) {
 		t.Fatalf("provisioner calls = %d, want 1", len(*created))
 	}
 
-	// Wrong resolution must not claim and must not kill the container.
-	if got := p.Claim(context.Background(), "1280x720", "dark", 30); got != nil {
-		t.Fatalf("Claim with mismatched resolution = %+v, want nil", got)
-	}
-	// Wrong theme ditto.
-	if got := p.Claim(context.Background(), "1920x1080", "light", 30); got != nil {
+	// Wrong theme must not claim and must not kill the container.
+	if got, _ := p.Claim(context.Background(), "1920x1080", "light", 30); got != nil {
 		t.Fatalf("Claim with mismatched theme = %+v, want nil", got)
 	}
+	// A box larger than the pooled one cannot be served by this container.
+	if got, _ := p.Claim(context.Background(), "2560x1440", "dark", 30); got != nil {
+		t.Fatalf("Claim for a larger resolution = %+v, want nil", got)
+	}
 	// Matching params claim the container.
-	if got := p.Claim(context.Background(), "1920x1080", "dark", 30); got == nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got == nil {
 		t.Fatal("Claim with matching params = nil, want container")
 	}
 	if len(*terminated) != 0 {
@@ -119,6 +121,48 @@ func waitForPoolSize(t *testing.T, p *WarmPool, want int, timeout time.Duration)
 	}
 }
 
+func TestWarmPoolClaimAcceptsAFittingResolution(t *testing.T) {
+	t.Parallel()
+	p, _, terminated := newTestPool(t, 1)
+
+	p.fillOne(context.Background())
+
+	// A smaller request is served by this container: the caller reshapes the
+	// display with the session resize path. Claim reports the baked box so the
+	// caller knows whether a reshape is needed.
+	info, baked := p.Claim(context.Background(), "1728x1080", "dark", 30)
+	if info == nil {
+		t.Fatal("Claim for a fitting resolution = nil, want the pooled container")
+	}
+	if baked != "1920x1080" {
+		t.Fatalf("baked resolution = %q, want 1920x1080", baked)
+	}
+	if len(*terminated) != 0 {
+		t.Fatalf("terminated = %v, want none (claimed containers stay alive)", *terminated)
+	}
+}
+
+func TestWarmPoolClaimRejectsResolutionsItCannotServe(t *testing.T) {
+	t.Parallel()
+	p, _, terminated := newTestPool(t, 1)
+
+	p.fillOne(context.Background())
+
+	// Wider, taller, or unparsable: none of these can be clamped inside the
+	// baked box, so they must cold-start and leave the container pooled.
+	for _, res := range []string{"1920x1200", "2560x1440", "nonsense", ""} {
+		if got, _ := p.Claim(context.Background(), res, "dark", 30); got != nil {
+			t.Fatalf("Claim for %q = %+v, want nil", res, got)
+		}
+	}
+	if len(*terminated) != 0 {
+		t.Fatalf("terminated = %v, want none", *terminated)
+	}
+	if len(p.warm) != 1 {
+		t.Fatalf("pool = %d, want the container kept", len(p.warm))
+	}
+}
+
 func TestWarmPoolEmptyPoolClaimMisses(t *testing.T) {
 	t.Parallel()
 	p, _, terminated := newTestPool(t, 1)
@@ -130,7 +174,7 @@ func TestWarmPoolEmptyPoolClaimMisses(t *testing.T) {
 
 	p.reconcile(context.Background())
 
-	if got := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
 		t.Fatalf("Claim on empty pool = %+v, want nil", got)
 	}
 	if len(*terminated) != 0 {
@@ -148,7 +192,7 @@ func TestWarmPoolClaimDropsDeadContainer(t *testing.T) {
 	claimID := p.warm[0].info.ContainerID
 	*terminated = append(*terminated, claimID)
 
-	if got := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
 		t.Fatalf("Claim of dead container = %+v, want nil", got)
 	}
 	// The claim probe retries once, then tears the container down.
@@ -228,7 +272,7 @@ func TestWarmPoolDisableOnUnsupportedNavigate(t *testing.T) {
 	if !p.Disabled() {
 		t.Fatal("pool should be disabled after NotifyNavigateDisabled")
 	}
-	if got := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
 		t.Fatalf("Claim on disabled pool = %+v, want nil", got)
 	}
 }
@@ -271,7 +315,7 @@ func TestWarmPoolDrainStopsAll(t *testing.T) {
 	if !p.Disabled() {
 		t.Fatal("pool should be disabled after Drain")
 	}
-	if got := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
 		t.Fatalf("Claim after Drain = %+v, want nil", got)
 	}
 	// A second Drain is a no-op, not a double-stop of the same container.
@@ -332,6 +376,121 @@ func TestWarmPoolOrphanCollectorKeepsPooledContainers(t *testing.T) {
 
 	if len(*terminated) != 1 || (*terminated)[0] != "warm-orphan" {
 		t.Fatalf("terminated = %v, want only the untracked container", *terminated)
+	}
+}
+
+func TestWarmPoolOrphanCollectorMatchesTruncatedIDs(t *testing.T) {
+	t.Parallel()
+	p, _, terminated := newTestPool(t, 1)
+
+	p.fillOne(context.Background())
+	pooled := p.warm[0].info.ContainerID
+	// `docker ps --format '{{.ID}}'` reports a 12-character prefix while the
+	// create reported the full ID; the pool's own container must survive.
+	p.sweepLister = func(ctx context.Context) []string { return []string{pooled[:12], "warm-orphan"} }
+
+	p.collectOrphans(context.Background())
+
+	if len(*terminated) != 1 || (*terminated)[0] != "warm-orphan" {
+		t.Fatalf("terminated = %v, want only the untracked container", *terminated)
+	}
+}
+
+func TestWarmPoolOrphanCollectorMatchesTruncatedActiveIDs(t *testing.T) {
+	t.Parallel()
+	p, _, terminated := newTestPool(t, 1)
+	live := "64b17003e6e31dc34dfdf27f774ff285d2d3d73f60b29d8dd02851ceaf81fc9e"
+	p.sweepLister = func(ctx context.Context) []string { return []string{live[:12]} }
+	p.SetActiveContainers(func(ctx context.Context) (map[string]bool, error) {
+		return map[string]bool{live: true}, nil
+	})
+
+	p.collectOrphans(context.Background())
+
+	if len(*terminated) != 0 {
+		t.Fatalf("terminated = %v, want none (claimed container is in use)", *terminated)
+	}
+}
+
+func TestWarmPoolFillsSlotsOneAtATime(t *testing.T) {
+	t.Parallel()
+	p, _, _ := newTestPool(t, 3)
+
+	var mu sync.Mutex
+	inFlight, maxInFlight, seq := 0, 0, 0
+	release := make(chan struct{})
+	p.provisioner = func(ctx context.Context, params WarmPoolParams) (*SessionInfo, error) {
+		mu.Lock()
+		inFlight++
+		if inFlight > maxInFlight {
+			maxInFlight = inFlight
+		}
+		seq++
+		id := "warm-seq-" + string(rune('a'+seq-1))
+		mu.Unlock()
+
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		return &SessionInfo{SessionID: params.SessionID, ContainerID: id, Host: "127.0.0.1", Port: 5900}, nil
+	}
+
+	wg := p.replenish(context.Background())
+
+	// Wait until the first fill is inside the provisioner, then let all of them
+	// run: a size-3 pool must still only ever have one boot in flight.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		started := inFlight
+		mu.Unlock()
+		if started > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no fill started")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+	wg.Wait()
+
+	mu.Lock()
+	max := maxInFlight
+	mu.Unlock()
+	if max != 1 {
+		t.Fatalf("max concurrent fills = %d, want 1 (slots must fill one at a time)", max)
+	}
+	if len(p.warm) != 3 {
+		t.Fatalf("pool = %d containers, want 3", len(p.warm))
+	}
+}
+
+func TestWarmPoolStopsFillingAfterFailure(t *testing.T) {
+	t.Parallel()
+	p, _, _ := newTestPool(t, 3)
+	calls := 0
+	p.provisioner = func(ctx context.Context, params WarmPoolParams) (*SessionInfo, error) {
+		calls++
+		return nil, errors.New("no capacity")
+	}
+
+	p.replenish(context.Background()).Wait()
+
+	if calls != 1 {
+		t.Fatalf("provisioner calls = %d, want 1 (a failure ends the pass instead of retrying)", calls)
+	}
+	if len(p.warm) != 0 {
+		t.Fatalf("pool = %d containers, want 0", len(p.warm))
+	}
+	if p.fillWorker {
+		t.Fatal("fill worker still marked active after a failed pass")
 	}
 }
 
