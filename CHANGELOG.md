@@ -8,104 +8,86 @@ publishes the section matching the tag.
 
 ### Added
 
-- The landing page accepts `?q=`, so isola can be registered as a browser search
-  engine (`https://isola.example/?q=%s`): the text is prefilled into the address
-  box and normalised on submit like typed input, and adding `&autorun=1`
-  launches immediately. Both parameters are consumed from the URL, so a reload
-  never relaunches or re-prefills.
-- The sandbox viewport follows the viewer's capture box: entering fullscreen (or
-  resizing the window) now reshapes the remote browser instead of letterboxing
-  the launch geometry. `POST /api/sessions/{id}/resize` resizes the runner's
-  offscreen windows, re-keys the encoder and resets attached viewers onto the
-  new geometry (`stream_reset` reason `resize`); the viewer debounces the
-  request and reshapes inside the session's launch resolution, so the pixel
-  budget never grows.
-- The installer reports whether the host enforces an AppArmor/SELinux profile
-  for session containers; it never writes `ISOLA_REQUIRE_MAC` itself, so the
-  fail-closed default is left to the operator.
-- The service environment lives in `<install dir>/isola.env` on both systemd and
-  launchd installs; the LaunchAgent has it rendered into
-  `EnvironmentVariables`.
+- The landing page accepts `?q=` for registration as a browser search engine
+  (`/?q=%s`): the text is prefilled into the address box and normalised on
+  submit like typed input, and `&autorun=1` launches immediately. Both
+  parameters are consumed, so a reload never relaunches or re-prefills.
+- The sandbox viewport follows the viewer's capture box, so fullscreen and
+  window resizes reshape the remote browser instead of letterboxing it.
+  `POST /api/sessions/{id}/resize` resizes the runner's offscreen windows,
+  re-keys the encoder and resets attached viewers (`stream_reset` reason
+  `resize`); the viewer debounces the request, keeps the session's launch
+  resolution as the pixel budget, and sizes itself from the fullscreen element.
 
 ### Changed
 
-- The resource-graph renderer now batches same-colour shapes into one rasteriser
-  pass instead of resetting a canvas-sized mask per shape, and fits the result
-  into the requested `width`×`height` frame (capped at 8192 px per edge and
-  24 MP). A 200-entry `expand=all` render went from minutes to roughly 0.2 s,
-  `width`/`height` bound the image in both directions, and `expand=all` lists at
-  most 12 resources per type group plus a "show all N more" row, matching the
-  viewer.
-- Resource graph requests are validated by the API before they reach the
-  streamer, and a render is now bounded: at most two run concurrently per session
-  (`429 graph_render_busy`), each has a 45 s budget (`504 graph_render_timeout`),
-  and an image over 32 MiB is refused instead of buffered. A session whose
-  container is still starting returns the documented `409 container_not_ready`
-  rather than `404`. The `resource_graph` MCP tool enforces `scale` 1–4 locally,
-  applies the same 45 s deadline and caps the embedded PNG at 8 MiB.
-- The installer falls back to `~/.isola` when the invoking user cannot create
-  `/opt/isola`, so an unprivileged install works on any host without setting
-  `ISOLA_INSTALL_DIR`.
+- A warm claim now serves any resolution that fits inside the pooled box and
+  reshapes the display to it before the viewer attaches, so launches that adapt
+  the resolution to the window (the UI fits it to the viewer aspect) are warm
+  too. Larger resolutions, and a different theme or frame rate, still
+  cold-start.
+- The warm pool fills its slots one at a time, with a pause between boots,
+  instead of booting every container at once; a failed fill waits for the next
+  reconcile pass instead of retrying immediately.
+- `scripts/dev-rebuild.sh` reads `WARM_POOL_ENABLED` and `WARM_POOL_SIZE` from
+  `.env`, so the dev server keeps the same pre-started containers as Compose.
+- The resource-graph renderer batches same-colour shapes into one rasteriser
+  pass and fits the image into the requested `width`×`height` (8192 px per edge,
+  24 MP). A 200-entry `expand=all` render takes ~0.2 s, and expanded groups list
+  at most 12 resources plus a "show all N more" row.
+- Graph options are validated in the API (`pkg/graphopts`) and every render is
+  bounded: two in flight per session (`429 graph_render_busy`), 45 s
+  (`504 graph_render_timeout`), 32 MiB. A session whose container is starting
+  returns `409 container_not_ready`. The `resource_graph` MCP tool validates
+  `scale` locally, applies the same deadline and caps the PNG at 8 MiB.
 - The installer pulls the sandbox image for the installed release
-  (`ghcr.io/dm0xa/isola-browser:v<version>`) and only then falls back to the
-  floating `:electron` tag, keeping the binary and the streamer's ISOL wire
-  header / ABR ladder in step. `ISOLA_BROWSER_IMAGE_REMOTE` still pins one exact
-  reference; empty skips the registry.
-- Re-running the installer now regenerates the systemd unit / LaunchAgent and
-  restarts the service, so upgrades pick up new defaults instead of leaving a
-  stale unit in place. A unit without the installer marker is backed up first.
-- The LaunchAgent sets `PATH`, so the service can find the `docker` CLI.
-- The install no longer aborts on a missing controlling terminal: prompts take
-  their default instead of failing under `set -e`.
+  (`ghcr.io/dm0xa/isola-browser:v<version>`) and falls back to `:electron`,
+  keeping the binary and the streamer's ISOL wire header / ABR ladder in step.
+  `ISOLA_BROWSER_IMAGE_REMOTE` pins one reference; empty skips the registry.
+- The installer resolves its directory by writability (`/opt/isola`, else
+  `~/.isola`), reads the environment from `<install dir>/isola.env` for both
+  systemd and launchd, sets `PATH` in the LaunchAgent, and reports the host's
+  AppArmor/SELinux state without writing `ISOLA_REQUIRE_MAC`.
+- Re-running the installer regenerates the unit and restarts the service; a unit
+  without the installer marker is backed up first. The install no longer aborts
+  without a controlling terminal, taking prompt defaults instead.
+- The project moved to `github.com/dm0xa/isola-browser`; previous URLs redirect.
 
 ### Fixed
 
-- The streamer's network capture could race a viewer with the capture loop: an
-  entry's URL, error and body hash were read outside the lock while redirects,
-  tab reassignment and body hashing wrote them, which the race detector flagged
-  and a torn string header could turn into a crash. Wire messages are now built
-  under the lock and broadcast after it is released, so one slow viewer can no
-  longer stall capture either. CI runs the whole streamer suite with `-race`.
-- A request first seen at `responseReceived` (mid-navigation reconnect) now
-  enters the rolling capture window immediately, so a response that never emits
-  `loadingFinished`/`loadingFailed` is evicted and replayed like any other.
-- A tab strip with no active tab no longer resets attribution to `-1`, which
-  re-opened the phantom tab and re-ran the pre-strip backfill.
-- `failed=1` graphs keep the opened page as the origin instead of naming the
-  first failing host in the caption.
-- Console capture no longer drops a legitimate repeat of the same line, and its
-  dedupe map is bounded by the 300-line buffer instead of growing for the
-  session's lifetime. Lines carry a stable id, so re-publishing a corrected tab
-  attribution folds in place while two tabs' identical lines stay distinct.
-- Two concurrent resource-graph renders could kill the whole streamer, taking
-  every attached video stream with them: the font-face cache was an
-  unsynchronised map, and each cache entry was an `opentype.Face`, which is not
-  safe for concurrent use. Faces are now built per render from shared immutable
-  parsed fonts, and the graph/font tests run under the race detector in CI.
-- `GET /api/sessions/{id}/graph.png` no longer reports success for an image it
-  did not deliver: the body is read in full before the status line is written,
-  responses carry `Content-Length`, a truncated or failed render is `502`, and
-  the 15 s server write deadline no longer cuts off a large graph. Renderer
-  failures are no longer reported as `400 invalid_graph_options`, which is now
-  reserved for real option errors.
-- Installation aborted when the default install directory could not be created
-  by the invoking user.
-- The Network panel's CSV/TSV export now escapes a literal backslash and a lone
-  carriage return, the URL copy button says when the streamer clipped the URL,
-  copy confirmation is scoped to the node that was copied, and the graph's
-  notice/copy timers are cleared on unmount.
-- The resource graph no longer parses every URL up to 40 times per row on every
-  network event (`buildGraph` precomputes host and class once per entry), and
-  the minimap is painted into one canvas instead of a DOM rect per node.
-- Fullscreen filled the screen with black bands above and below the stream: the
-  viewer is now sized from the fullscreen element (100% height chain) instead of
-  `100vh`, which kept the pre-fullscreen height in some browsers, and the
-  fullscreen backdrop is painted with the app background instead of the UA's
-  black.
+- The warm pool's orphan sweep compared the 12-character `docker ps` ID with the
+  full create ID, so it removed the pooled containers it exists to protect. IDs
+  now match on prefix.
+- A live resize could feed the encoder frames of the previous geometry, which
+  corrupted the rest of the run (horizontal smearing). The pump now waits for
+  the composed surface to match the run's key.
+- Streamer network capture built wire messages outside the lock, racing
+  redirects, tab reassignment and body hashing. Messages are built under the
+  lock and broadcast after release, so a slow viewer cannot stall capture
+  either. CI runs the streamer suite with `-race`.
+- A request first seen at `responseReceived` now enters the rolling capture
+  window, so it is evicted and replayed like any other.
+- A tab strip with no active tab no longer resets attribution to `-1`.
+- `failed=1` graphs keep the opened page as the origin.
+- Console dedupe no longer drops a legitimate repeat and is bounded by the
+  300-line buffer. Lines carry a stable id, so a re-published attribution folds
+  in place while two tabs' identical lines stay distinct.
+- Concurrent graph renders could kill the streamer: the font-face cache was
+  unsynchronised and `opentype.Face` is not safe for concurrent use. Faces are
+  built per render from shared parsed fonts.
+- `GET /api/sessions/{id}/graph.png` reads the body in full before writing the
+  status and sends `Content-Length`; a truncated render is `502`, renderer
+  failures are no longer `400 invalid_graph_options`, and the 15 s write
+  deadline no longer cuts off a large graph.
+- The network export escapes a literal backslash and a lone carriage return,
+  the URL copy reports a clipped URL, copy confirmation is scoped to the copied
+  node, and the graph's notice/copy timers are cleared on unmount.
+- `buildGraph` parses each URL once instead of up to 40 times per row per
+  network event, and the minimap paints into a single canvas.
 - `scripts/dev-rebuild.sh` stops a backend started from an absolute path as well
-  as `./isola-su`, and allows 30 s for `/health`, so a completed start is no
-  longer reported as a failure. The Docker socket is taken from the active
-  context, so colima and OrbStack are preferred over an unrelated daemon.
+  as `./isola-su`, waits 30 s for `/health`, and takes the Docker socket from
+  the active context, so colima and OrbStack are preferred over an unrelated
+  daemon.
 
 ## [1.1.1] - 2026-10-21
 
@@ -200,7 +182,8 @@ publishes the section matching the tag.
 Initial release: a Go control plane that boots a disposable Docker sandbox
 running offscreen Chromium.
 
-[1.1.1]: https://github.com/dm0xa/isola/compare/v1.1.0...v1.1.1
-[1.1.0]: https://github.com/dm0xa/isola/compare/v1.0.1...v1.1.0
-[1.0.1]: https://github.com/dm0xa/isola/compare/v1.0.0...v1.0.1
-[1.0.0]: https://github.com/dm0xa/isola/releases/tag/v1.0.0
+[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/dm0xa/isola-browser/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/dm0xa/isola-browser/compare/v1.0.1...v1.1.0
+[1.0.1]: https://github.com/dm0xa/isola-browser/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/dm0xa/isola-browser/releases/tag/v1.0.0
