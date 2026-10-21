@@ -19,6 +19,11 @@
 #
 # A candidate wins only when a daemon actually answers on it, so a stopped
 # Docker Desktop socket can never be chosen over a live Podman machine.
+#
+# The CLI's *active context* is tried before the candidate list, because that is
+# the daemon the user's own `docker ps` talks to: with colima and Docker Desktop
+# both installed, a path-only guess can land on the other daemon, which holds
+# none of the user's images or networks.
 # ──────────────────────────────────────────────────────────────────────
 
 # candidate_sockets prints every socket path worth trying, best first.
@@ -37,6 +42,11 @@ candidate_sockets() {
   # Podman's "Docker API" symlink — convenient, but stale after a sandboxed
   # podman run, so it is only ever a candidate, never a default.
   printf '%s\n' "${HOME}/.podman/podman-machine-default-api.sock"
+  # Colima and OrbStack sockets. Fallbacks only: resolve_docker_host tries the
+  # active docker context first, so a colima-backed CLI is never overridden by
+  # a different daemon that merely happens to be running.
+  printf '%s\n' "${HOME}/.colima/default/docker.sock"
+  printf '%s\n' "${HOME}/.orbstack/run/docker.sock"
   # Docker Desktop (macOS), then stock docker.
   printf '%s\n' "${HOME}/.docker/run/docker.sock"
   printf '%s\n' "/var/run/docker.sock"
@@ -78,6 +88,17 @@ docker_socket_responds() {
   probe_docker_host "unix://$sock"
 }
 
+# current_context_socket prints the unix socket of the CLI's active docker
+# context, or nothing (exit 1). `docker context inspect` reports what the user's
+# own `docker ps` uses, independently of any DOCKER_HOST in this shell.
+current_context_socket() {
+  local host
+  command -v docker >/dev/null 2>&1 || return 1
+  host=$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null) || return 1
+  [[ -n "$host" && "$host" == unix:///* ]] || return 1
+  printf '%s\n' "${host#unix://}"
+}
+
 # resolve_docker_host prints the DOCKER_HOST value to export (unix:///path),
 # or nothing (exit 1) when no socket is usable.
 resolve_docker_host() {
@@ -85,6 +106,13 @@ resolve_docker_host() {
 
   if [[ -n "${DOCKER_HOST:-}" ]] && probe_docker_host "$DOCKER_HOST"; then
     printf '%s\n' "$DOCKER_HOST"
+    return 0
+  fi
+
+  # The active context is what the user's shell talks to. A stopped daemon still
+  # loses, because the probe has to answer before the socket is accepted.
+  if sock=$(current_context_socket) && docker_socket_responds "$sock"; then
+    printf 'unix://%s\n' "$sock"
     return 0
   fi
 

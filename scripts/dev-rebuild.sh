@@ -17,7 +17,8 @@ set -euo pipefail
 #     4. build backend   (backend/cmd/single-user  →  backend/isola-su)
 #     5. ensure /tmp/isola_jwt_secret.env exists (generate if missing)
 #     6. ensure /tmp/isola_start_su.sh exists  (sources secret + env, never leaks tokens to cmdline/ps)
-#     7. stop any running ./isola-su
+#     7. stop any running isola-su (./isola-su, or the absolute path the
+#        start-helper execs — see ISOLA_SU_PATTERN below)
 #     8. launch new backend via the start-helper (log → /tmp/isola-backend.log)
 #     9. wait for GET /health == "ok"  on  http://127.0.0.1:8080
 # ──────────────────────────────────────────────────────────────────────
@@ -44,6 +45,18 @@ START_HELPER_FILE="/tmp/start_isola_su.sh"
 BACKEND_LOG_FILE="/tmp/isola-backend.log"
 ISOLA_DATA_DIR="/tmp/isola-data"
 BACKEND_PORT=8080
+# Health-check budget in 0.5s ticks. 20 ticks (10s) was thin
+# enough that a slow podman/colima round-trip in startup reported a false
+# "never returned ok" while the server came up seconds later; 60 ticks (30s)
+# still fails fast on a genuinely broken build.
+HEALTH_WAIT_TICKS=60
+
+# Matches the relative launch form (./isola-su) AND the absolute path the
+# start-helper `exec`s. A bare './isola-su' pattern matched only the former, so a
+# backend started by this script looked "not running" on the next run and was
+# left alive holding :8080 — the new instance then failed its own health check.
+# An ERE path boundary keeps isola-streamer / isola-st* out of the match.
+ISOLA_SU_PATTERN='(^|/)isola-su($| )'
 
 tput()  { command -v tput >/dev/null 2>&1 && command tput "$@" || true; }
 COLS=${COLUMNS:-$(tput cols 2>/dev/null || echo 72)}
@@ -211,20 +224,20 @@ success "start-helper written ($(wc -l < "$START_HELPER_FILE") lines)."
 # ── 7. stop any running isola-su  ─────────────────────────────────
 echo
 info "[7/9] stopping any running isola-su process..."
-EXISTING_PIDS=$(pgrep -f './isola-su' 2>/dev/null || true)
+EXISTING_PIDS=$(pgrep -f "$ISOLA_SU_PATTERN" 2>/dev/null || true)
 if [[ -z "$EXISTING_PIDS" ]]; then
   info "no running isola-su — nothing to stop."
 else
   warn "found running isola-su PID(s): $(echo "$EXISTING_PIDS" | paste -sd, -)"
   # SIGTERM first, retry with SIGKILL after 3s.
-  pkill -TERM -f './isola-su' 2>/dev/null || true
+  pkill -TERM -f "$ISOLA_SU_PATTERN" 2>/dev/null || true
   for i in 1 2 3; do
     sleep 1
-    if ! pgrep -f './isola-su' >/dev/null 2>&1; then break; fi
+    if ! pgrep -f "$ISOLA_SU_PATTERN" >/dev/null 2>&1; then break; fi
   done
-  if pgrep -f './isola-su' >/dev/null 2>&1; then
+  if pgrep -f "$ISOLA_SU_PATTERN" >/dev/null 2>&1; then
     warn "SIGTERM not enough — sending SIGKILL..."
-    pkill -KILL -f './isola-su' 2>/dev/null || true
+    pkill -KILL -f "$ISOLA_SU_PATTERN" 2>/dev/null || true
     sleep 1
   fi
   success "old isola-su stopped."
@@ -244,7 +257,7 @@ info "backend PID = $BACKEND_PID"
 echo
 info "[9/9] waiting for http://127.0.0.1:${BACKEND_PORT}/health to return 'ok'..."
 HEALTH_OK=0
-for i in $(seq 1 20); do
+for i in $(seq 1 "$HEALTH_WAIT_TICKS"); do
   if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
     error "backend process exited before reaching healthy state."
     echo "--- last 40 lines of $BACKEND_LOG_FILE ---"
@@ -259,7 +272,10 @@ for i in $(seq 1 20); do
 done
 
 if [[ "$HEALTH_OK" -ne 1 ]]; then
-  die "/health never returned 'ok' — check log: tail -n 100 $BACKEND_LOG_FILE"
+  error "/health did not return 'ok' within ~$(( HEALTH_WAIT_TICKS / 2 ))s (process is alive)."
+  echo "--- last 40 lines of $BACKEND_LOG_FILE ---"
+  tail -n 40 "$BACKEND_LOG_FILE"
+  die "not healthy — inspect the log above (tail -f $BACKEND_LOG_FILE)."
 fi
 success "/health = ok (waited ~$(( (i-1) / 2 ))s)."
 
@@ -271,6 +287,6 @@ printf "
   ${YELLOW}health${NC}                       curl http://localhost:${BACKEND_PORT}/health
   ${YELLOW}backend pid${NC}                  $BACKEND_PID
   ${YELLOW}log tail${NC}                     tail -f $BACKEND_LOG_FILE
-  ${YELLOW}stop backend${NC}                 pkill -TERM -f './isola-su'
+  ${YELLOW}stop backend${NC}                 pkill -TERM -f '${ISOLA_SU_PATTERN}'
   ${YELLOW}rerun rebuild${NC}                bash $SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")
 \n"

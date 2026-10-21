@@ -102,6 +102,10 @@ publishes the section matching the tag.
   `100vh`, which kept the pre-fullscreen height in some browsers, and the
   fullscreen backdrop is painted with the app background instead of the UA's
   black.
+- `scripts/dev-rebuild.sh` stops a backend started from an absolute path as well
+  as `./isola-su`, and allows 30 s for `/health`, so a completed start is no
+  longer reported as a failure. The Docker socket is taken from the active
+  context, so colima and OrbStack are preferred over an unrelated daemon.
 
 ## [1.1.1] - 2026-10-21
 
