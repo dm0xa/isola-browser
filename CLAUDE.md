@@ -143,6 +143,11 @@ tree.
 - **Update the docs with the code.** Behavior, config, API, security, and
   deployment changes should update the matching `docs/*.md`, keeping `README.md`
   consistent with them.
+- **Changelog.** Every user-facing change gets an entry under `## [Unreleased]`
+  in `CHANGELOG.md`. `release.yml` publishes the section matching the tag as the
+  GitHub release body (`scripts/changelog-section.mjs`) — GitHub's own
+  `generate_release_notes` cannot work here because commits go straight to
+  `main`, so it would only emit a compare link.
 - **Style.** Go: `gofmt`, small focused packages under `backend/pkg/`, constructor
   funcs returning `*T`. Frontend: strict TypeScript, function components with
   hooks, Tailwind for styling — do not add a state or data-fetching library.

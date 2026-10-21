@@ -28,10 +28,16 @@ this clone they are skipped.
 
 ## Releasing
 
-Push a `vX.Y.Z` tag. The `release` workflow derives the binary version from the
-tag (no source-file bump is needed) and builds the platform archives plus
-`checksums.txt`; `publish-browser-image` tags the sandbox image with the pushed
-tag.
+1. Add the changes under `## [Unreleased]` in [`CHANGELOG.md`](./CHANGELOG.md).
+2. Rename that heading to the version being released
+   (`## [X.Y.Z] - YYYY-MM-DD`), leave an empty `## [Unreleased]` above it, and
+   commit.
+3. Push a `vX.Y.Z` tag.
+
+The `release` workflow derives the binary version from the tag (no source-file
+bump is needed), builds the platform archives plus `checksums.txt`, and
+publishes the changelog section matching the tag as the release body;
+`publish-browser-image` tags the sandbox image with the pushed tag.
 
 ## What not to commit
 
