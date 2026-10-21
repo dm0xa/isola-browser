@@ -80,6 +80,29 @@ docker compose logs -f
 3. Sessions are time-limited (see `session` [in Configuration](configuration.md#session)). The default session is 10 minutes, extendable in 5-minute steps up to a 30-minute maximum.
 4. Closing a session destroys its container. Nothing persists.
 
+### Optional: Launch from the URL bar
+
+Isola's landing page reads a `q` parameter, so it can be registered as a browser
+search engine ("site search" in Chrome, a keyword bookmark in Firefox) and used
+straight from the address bar:
+
+```
+https://isola.example/?q=%s
+```
+
+The text is prefilled into the address box, where **Open →** normalises it the
+same way as typed input: a URL opens that site, anything else becomes a
+DuckDuckGo search. Add `autorun=1` to launch without waiting for the keystroke:
+
+```
+https://isola.example/?q=%s&autorun=1
+```
+
+`autorun` provisions a session as soon as the page loads, so point it at an
+entry you trust yourself to follow — every visit costs a container. Both
+parameters are removed from the address bar once read, so reloading the viewer
+or the landing page cannot relaunch or re-prefill.
+
 ## Optional: Customize
 
 Copy the example environment file and edit it. Every variable is documented inline; anything you leave unset keeps its default.

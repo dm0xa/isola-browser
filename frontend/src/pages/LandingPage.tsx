@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useConfig } from '../hooks/useConfig';
 import { useTheme } from '../lib/ThemeContext';
@@ -106,6 +106,32 @@ export default function LandingPage() {
   const [torEnabled, setTorEnabled] = useState(() => localStorage.getItem('isola_tor') === 'true');
   const transport = 'isola';
 
+  // Every launch path funnels through here — the address box, the app tiles and
+  // the ?q= deep link — so the stored launch config and the /run navigation
+  // cannot drift apart.
+  const launchTarget = useCallback(
+    (target: string, tor = torEnabled) => {
+      const launchConfig = {
+        url: target,
+        resolution,
+        browser_type: browserType,
+        browser_theme: theme,
+        tor_enabled: tor,
+        transport,
+        // Per-tab CDP capture (network/console/cookies) only exists on the
+        // isola transport; the viewer's network panel is gated on this flag.
+        network_monitor: true,
+      };
+      try {
+        sessionStorage.setItem('isola_launch_config', JSON.stringify(launchConfig));
+      } catch {
+        /* sessionStorage unavailable — fall through with URL query only */
+      }
+      navigate(`/run?url=${encodeURIComponent(target)}`, { replace: true });
+    },
+    [navigate, resolution, browserType, theme, torEnabled, transport],
+  );
+
   useEffect(() => {
     localStorage.setItem('isola_resolution', resolution);
   }, [resolution]);
@@ -194,28 +220,34 @@ export default function LandingPage() {
     }
   }, [searchParams]);
 
+  // `?q=` makes isola usable as a browser search engine:
+  //   https://isola.example/?q=%s
+  // The text lands in the address box and is normalised on submit exactly like
+  // typed input, so a pasted URL opens as a site and anything else becomes a
+  // search. `&autorun=1` skips the keystroke and launches immediately. Both
+  // params are consumed from the address bar so a reload (or a copied URL)
+  // cannot relaunch or re-prefill.
+  const q = searchParams.get('q');
+  const autorun = searchParams.get('autorun') === '1';
+  const consumedQ = useRef(false);
+  useEffect(() => {
+    if (q === null || consumedQ.current) return;
+    consumedQ.current = true;
+    const next = new URLSearchParams(searchParams);
+    next.delete('q');
+    next.delete('autorun');
+    setSearchParams(next, { replace: true });
+    const target = q.trim();
+    if (!target) return;
+    if (autorun) launchTarget(normalizeUrl(target));
+    else setUrl(target);
+  }, [q, autorun, searchParams, setSearchParams, launchTarget]);
+
   const handleLaunch = (e: React.FormEvent) => {
     e.preventDefault();
     const target = normalizeUrl(url);
     if (!target) return;
-
-    const launchConfig = {
-      url: target,
-      resolution,
-      browser_type: browserType,
-      browser_theme: theme,
-      tor_enabled: torEnabled,
-      transport,
-      // Per-tab CDP capture (network/console/cookies) only exists on the
-      // isola transport; the viewer's network panel is gated on this flag.
-      network_monitor: true,
-    };
-    try {
-      sessionStorage.setItem('isola_launch_config', JSON.stringify(launchConfig));
-    } catch {
-      /* sessionStorage unavailable — fall through with URL query only */
-    }
-    navigate(`/run?url=${encodeURIComponent(target)}`, { replace: true });
+    launchTarget(target);
   };
 
   const menuItemClass = (active: boolean) =>
@@ -418,22 +450,7 @@ export default function LandingPage() {
             {me.apps.map((app) => {
               const launch = (e: React.MouseEvent) => {
                 e.preventDefault();
-                const target = normalizeUrl(app.url);
-                const launchConfig = {
-                  url: target,
-                  resolution,
-                  browser_type: browserType,
-                  browser_theme: theme,
-                  tor_enabled: false,
-                  transport,
-                  network_monitor: true,
-                };
-                try {
-                  sessionStorage.setItem('isola_launch_config', JSON.stringify(launchConfig));
-                } catch {
-                  /* fall through with URL query only */
-                }
-                navigate(`/run?url=${encodeURIComponent(target)}`, { replace: true });
+                launchTarget(normalizeUrl(app.url), false);
               };
               return (
                 <a

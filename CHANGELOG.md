@@ -8,6 +8,11 @@ publishes the section matching the tag.
 
 ### Added
 
+- The landing page accepts `?q=`, so isola can be registered as a browser search
+  engine (`https://isola.example/?q=%s`): the text is prefilled into the address
+  box and normalised on submit like typed input, and adding `&autorun=1`
+  launches immediately. Both parameters are consumed from the URL, so a reload
+  never relaunches or re-prefills.
 - The sandbox viewport follows the viewer's capture box: entering fullscreen (or
   resizing the window) now reshapes the remote browser instead of letterboxing
   the launch geometry. `POST /api/sessions/{id}/resize` resizes the runner's
