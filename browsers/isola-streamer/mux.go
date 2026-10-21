@@ -62,6 +62,7 @@ func setupMux(port string, wsHandler http.HandlerFunc) (net.Listener, error) {
 	mux.HandleFunc("/audio", audioToggleHandler)
 	mux.HandleFunc("/navigate", navigateHandler)
 	mux.HandleFunc("/network", networkDumpHandler)
+	mux.HandleFunc("/graph.png", graphHandler)
 	mux.HandleFunc("/links", linksHandler)
 	mux.HandleFunc("/snapshot", snapshotHandler)
 	mux.HandleFunc("/screenshot", screenshotHandler)
