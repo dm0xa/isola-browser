@@ -71,6 +71,8 @@ docker compose up --build -d
 docker compose logs -f
 ```
 
+> **On macOS** the Compose stack works with Docker Desktop, but the sandbox refuses to start without an enforcing MAC policy and Docker Desktop's Linux VM has neither AppArmor nor SELinux. Start the stack with `ISOLA_REQUIRE_MAC=0 docker compose up --build`; on a Linux host leave it at the default `1`. For a binary install, set `ISOLA_REQUIRE_MAC=0` in `isola.env` (the installer warns when no LSM is present).
+
 ## Your First Session
 
 1. On the landing page, enter a URL and start a session. Isola provisions a container, boots the browser, and connects the stream.

@@ -38,7 +38,7 @@ docker exec <container-id> curl -s localhost:5900/healthz         # "ok"
 | :--- | :--- |
 | Docker Compose | `docker compose logs -f isola` |
 | systemd (installer) | `journalctl -u isola -f` |
-| LaunchAgent, macOS (installer) | `tail -f $ISOLA_INSTALL_DIR/isola.log` (default `/opt/isola/isola.log`) |
+| LaunchAgent, macOS (installer) | `tail -f "<install dir>/isola.log"` (default `/opt/isola/isola.log`, or `~/.isola/isola.log` when `/opt/isola` is not writable) |
 | `scripts/dev-rebuild.sh` | `tail -f /tmp/isola-backend.log` |
 
 `LOG_LEVEL=debug` raises verbosity above the default `info` (`debug`, `info`, `warn`, `error`) — see [Configuration](configuration.md#logging).
@@ -81,7 +81,7 @@ docker run --rm --cap-add NET_ADMIN --network browser-net \
 The entrypoint fails closed with `exit 2` and a `FATAL:` line naming the cause:
 
 - `FATAL: cannot determine default gateway for session service ports` — the image has no `ip` binary to read the default route (`iproute2` is missing). Current images include it; a locally built image predating that needs a rebuild.
-- `FATAL: no enforcing MAC policy confines this container` — the host runs no AppArmor/SELinux profile. See [Deployment → Host Requirements](deployment.md#host-requirements).
+- `FATAL: no enforcing MAC policy confines this container` — the host runs no AppArmor/SELinux profile. See [Deployment → Host Requirements](deployment.md#host-requirements). Hosts without an LSM (Docker Desktop's Linux VM, for example) hit this by design: enable an LSM, or opt out with `ISOLA_REQUIRE_MAC=0` — in `isola.env` for a service install, exported in the shell for a hand-run binary, or in front of `docker compose up`.
 
 Expected container-log noise that is **not** fatal: `Fontconfig error: No writable cache directories` and `Failed to create /home/isolauser/.cache for shader cache`, from the read-only rootfs plus tmpfs home.
 

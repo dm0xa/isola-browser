@@ -4,6 +4,39 @@ Notable changes to isola, in
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. `release.yml`
 publishes the section matching the tag.
 
+## [Unreleased]
+
+### Added
+
+- The installer reports whether the host enforces an AppArmor/SELinux profile
+  for session containers; it never writes `ISOLA_REQUIRE_MAC` itself, so the
+  fail-closed default is left to the operator.
+- The service environment lives in `<install dir>/isola.env` on both systemd and
+  launchd installs; the LaunchAgent has it rendered into
+  `EnvironmentVariables`.
+
+### Changed
+
+- The installer falls back to `~/.isola` when the invoking user cannot create
+  `/opt/isola`, so an unprivileged install works on any host without setting
+  `ISOLA_INSTALL_DIR`.
+- The installer pulls the sandbox image for the installed release
+  (`ghcr.io/dm0xa/isola-browser:v<version>`) and only then falls back to the
+  floating `:electron` tag, keeping the binary and the streamer's ISOL wire
+  header / ABR ladder in step. `ISOLA_BROWSER_IMAGE_REMOTE` still pins one exact
+  reference; empty skips the registry.
+- Re-running the installer now regenerates the systemd unit / LaunchAgent and
+  restarts the service, so upgrades pick up new defaults instead of leaving a
+  stale unit in place. A unit without the installer marker is backed up first.
+- The LaunchAgent sets `PATH`, so the service can find the `docker` CLI.
+- The install no longer aborts on a missing controlling terminal: prompts take
+  their default instead of failing under `set -e`.
+
+### Fixed
+
+- Installation aborted when the default install directory could not be created
+  by the invoking user.
+
 ## [1.1.1] - 2026-10-21
 
 ### Added
