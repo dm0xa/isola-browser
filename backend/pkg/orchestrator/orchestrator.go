@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -578,19 +579,38 @@ func (o *Orchestrator) TerminateSession(ctx context.Context, containerID string)
 }
 
 // ResizeSessionDisplay asks isola-streamer to apply a capture resize.
-func (o *Orchestrator) ResizeSessionDisplay(ctx context.Context, containerID string, width, height int) error {
+//
+// It talks to the streamer's HTTP port directly, like the audio toggle: the
+// sandbox image is minimal and ships no curl, so shelling out inside the
+// container is not an option.
+func (o *Orchestrator) ResizeSessionDisplay(ctx context.Context, containerHost string, containerPort, width, height int) error {
 	if width <= 0 || height <= 0 {
 		return fmt.Errorf("invalid resize target: %dx%d", width, height)
 	}
-
-	log.Info().Str("container_id", containerID[:12]).Int("width", width).Int("height", height).Msg("resize: notifying isola-streamer")
-	resizeCmd := o.dockerCmd(ctx, "exec", containerID, "curl", "-s", "-X", "POST",
-		fmt.Sprintf("http://127.0.0.1:5900/resize?width=%d&height=%d", width, height))
-	resizeOut, resizeErr := resizeCmd.CombinedOutput()
-	if resizeErr != nil {
-		return fmt.Errorf("docker exec resize: %w: %s", resizeErr, string(resizeOut))
+	if containerHost == "" || containerPort == 0 {
+		return fmt.Errorf("streamer address unknown")
 	}
-	log.Info().Str("container_id", containerID[:12]).Msg("resize: isola resize ok")
+
+	log.Info().Str("container_host", containerHost).Int("port", containerPort).Int("width", width).Int("height", height).Msg("resize: notifying isola-streamer")
+	url := fmt.Sprintf("http://%s/resize?width=%d&height=%d",
+		net.JoinHostPort(containerHost, fmt.Sprintf("%d", containerPort)), width, height)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return fmt.Errorf("resize returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	log.Info().Str("container_host", containerHost).Msg("resize: isola resize ok")
 	return nil
 }
 

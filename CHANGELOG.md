@@ -8,6 +8,13 @@ publishes the section matching the tag.
 
 ### Added
 
+- The sandbox viewport follows the viewer's capture box: entering fullscreen (or
+  resizing the window) now reshapes the remote browser instead of letterboxing
+  the launch geometry. `POST /api/sessions/{id}/resize` resizes the runner's
+  offscreen windows, re-keys the encoder and resets attached viewers onto the
+  new geometry (`stream_reset` reason `resize`); the viewer debounces the
+  request and reshapes inside the session's launch resolution, so the pixel
+  budget never grows.
 - The installer reports whether the host enforces an AppArmor/SELinux profile
   for session containers; it never writes `ISOLA_REQUIRE_MAC` itself, so the
   fail-closed default is left to the operator.
@@ -36,6 +43,11 @@ publishes the section matching the tag.
 
 - Installation aborted when the default install directory could not be created
   by the invoking user.
+- Fullscreen filled the screen with black bands above and below the stream: the
+  viewer is now sized from the fullscreen element (100% height chain) instead of
+  `100vh`, which kept the pre-fullscreen height in some browsers, and the
+  fullscreen backdrop is painted with the app background instead of the UA's
+  black.
 
 ## [1.1.1] - 2026-10-21
 

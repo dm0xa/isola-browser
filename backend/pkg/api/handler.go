@@ -848,7 +848,7 @@ func (h *Handler) ResizeSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if session.ContainerID == "" {
+	if session.ContainerHost == "" || session.ContainerPort == 0 {
 		respondError(w, http.StatusConflict, "container_not_ready")
 		return
 	}
@@ -870,7 +870,7 @@ func (h *Handler) ResizeSession(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	if err := h.orch.ResizeSessionDisplay(ctx, session.ContainerID, effectiveW, effectiveH); err != nil {
+	if err := h.orch.ResizeSessionDisplay(ctx, session.ContainerHost, session.ContainerPort, effectiveW, effectiveH); err != nil {
 		log.Printf("resize session: orchestrator error: %v", err)
 		respondError(w, http.StatusInternalServerError, "resize_failed")
 		return

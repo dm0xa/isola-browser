@@ -30,6 +30,24 @@ export function ViewerDebugOverlay(props: ViewerDebugOverlayProps) {
     quality, rendererStallVisible, rendererStalledSec,
   } = props;
   if (!enabled) return null;
+  // Layout facts for "the viewer does not fill the screen" reports: the
+  // viewport the page is actually laid out in, the physical screen, whether the
+  // browser is really in element fullscreen, the app's painted height and the
+  // capture element's box. A fullscreen viewer whose `view` is smaller than
+  // `screen` is a browser/top-layer problem; one where `view` == `screen` shows
+  // any remaining bars as the letterbox of the remote capture's aspect ratio.
+  const view = `${window.innerWidth}x${window.innerHeight}`;
+  const outer = `${window.outerWidth}x${window.outerHeight}`;
+  const screenSize = window.screen ? `${window.screen.width}x${window.screen.height}` : '?';
+  // avail* excludes the OS menu bar / dock, so a viewport that matches it but
+  // not `screen` means the app is inside a window-managed (not fullscreen) box.
+  const avail = window.screen ? `${window.screen.availWidth}x${window.screen.availHeight}` : '?';
+  const fs = !!document.fullscreenElement;
+  const rootEl = document.getElementById('root');
+  const appEl = rootEl?.firstElementChild as HTMLElement | null;
+  const toolbarTop = Math.round(appEl?.firstElementChild?.getBoundingClientRect().top ?? -1);
+  const capEl = document.querySelector<HTMLVideoElement | HTMLCanvasElement>('#vnc-container video, #vnc-container canvas');
+  const capBox = capEl ? `${capEl.clientWidth}x${capEl.clientHeight}` : '?';
   return (
         <div
           className="absolute bottom-3 right-3 z-40 rounded-lg border border-cyan-500/20 bg-slate-950/70 px-3 py-2 text-[11px] font-mono text-cyan-100 shadow-lg backdrop-blur min-w-[14rem] max-w-[min(24rem,calc(100vw-1.5rem))] opacity-60 hover:opacity-100 transition-opacity duration-200"
@@ -63,6 +81,20 @@ export function ViewerDebugOverlay(props: ViewerDebugOverlayProps) {
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
+          </div>
+          <div className="mb-1 text-[10px] text-cyan-400">
+            <span className="font-bold">view</span> {view}
+            {' · '}<span className="font-bold">outer</span> {outer}
+            {' · '}<span className="font-bold">fs</span> {fs ? 'yes' : 'no'}
+          </div>
+          <div className="mb-1 text-[10px] text-cyan-400">
+            <span className="font-bold">screen</span> {screenSize}
+            {' · '}<span className="font-bold">avail</span> {avail}
+          </div>
+          <div className="mb-2 text-[10px] text-cyan-400">
+            <span className="font-bold">root</span> {rootEl?.clientHeight ?? 0}px
+            {' · '}<span className="font-bold">toolbar top</span> {toolbarTop}px
+            {' · '}<span className="font-bold">capture box</span> {capBox}
           </div>
           {/* Latency + FPS — surfaced prominently here so the toolbar stays clean */}
           <div className="flex items-baseline gap-3 mb-2 text-base">

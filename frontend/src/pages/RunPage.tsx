@@ -8,6 +8,7 @@ import { storeSessionToken } from '../lib/sessionToken';
 import { getIsolaTabs, getMaxSessions } from '../lib/config';
 import { MAX_CAPACITY_RETRIES, capacityRetryDelayMs, isCapacityLimit } from '../lib/launchRetry';
 import { sessionCreateAuthHeaders } from '../lib/createAuth';
+import { fitResolutionToAspect } from '../lib/resolution';
 
 type LaunchConfig = {
   url?: string;
@@ -33,27 +34,6 @@ function viewerAspect(): number {
   const chrome = VIEWER_TOOLBAR_PX + (getIsolaTabs() ? ISOLA_TABBAR_PX : 0);
   const height = window.innerHeight - chrome;
   return width > 0 && height > 0 ? width / height : 0;
-}
-
-// Reshape a WxH resolution to `aspect`, staying inside the original box so the
-// pixel budget implied by the user's pick (720p vs 1080p) is preserved. Even
-// dimensions only: H.264 4:2:0 cannot encode odd ones.
-function fitResolutionToAspect(resolution: string, aspect: number): string {
-  const match = /^(\d+)x(\d+)$/.exec(resolution.trim());
-  if (!match || !Number.isFinite(aspect) || aspect <= 0) return resolution;
-  const maxWidth = Number(match[1]);
-  const maxHeight = Number(match[2]);
-  if (maxWidth < 2 || maxHeight < 2) return resolution;
-  let width = maxWidth;
-  let height = Math.round(width / aspect);
-  if (height > maxHeight) {
-    height = maxHeight;
-    width = Math.round(height * aspect);
-  }
-  width -= width % 2;
-  height -= height % 2;
-  if (width < 2 || height < 2) return resolution;
-  return `${width}x${height}`;
 }
 
 export default function RunPage() {

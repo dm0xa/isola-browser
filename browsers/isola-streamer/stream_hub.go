@@ -524,6 +524,76 @@ func (h *streamHub) requestKeyframe(sub *streamSub) {
 	log.Printf("ws: forced keyframe at %d kbps (client request)", key.kbps)
 }
 
+// resizeAll re-keys every encoder run to a new producer geometry.
+//
+// The composed surface follows the producer by itself — composeLocked resizes
+// it when frames arrive at the new size — but an ffmpeg run's output size is
+// fixed in its argv and the run key carries width/height. A viewport resize is
+// therefore a replacement run per configuration, with every viewer reset onto
+// it, exactly like a forced keyframe.
+//
+// A run that cannot be started leaves its viewers on the old geometry: a
+// resize must never take a session down.
+func (h *streamHub) resizeAll(width, height int) {
+	if width <= 0 || height <= 0 {
+		return
+	}
+	h.mu.Lock()
+	type replacement struct {
+		old   *streamRun
+		fresh *streamRun
+	}
+	var plan []replacement
+	for key, run := range h.runs {
+		if run.stopping || (key.width == width && key.height == height) {
+			continue
+		}
+		newKey := key
+		newKey.width, newKey.height = width, height
+
+		// Two configurations that differed only in geometry collapse onto one
+		// new key here; share the replacement instead of spawning twice.
+		fresh := h.runs[newKey]
+		startPumps := false
+		if fresh == nil || fresh.stopping {
+			fresh = h.spawnLocked(newKey, "resize")
+			if fresh == nil {
+				log.Printf("ws: resize to %dx%d failed for kbps=%d scale=%.2f; keeping the old encoder",
+					width, height, key.kbps, key.scale)
+				continue
+			}
+			h.runs[newKey] = fresh
+			startPumps = true
+		}
+		run.stopping = true
+		delete(h.runs, key)
+		for s := range run.subs {
+			delete(run.subs, s)
+			s.run = fresh
+			s.awaitingKey = true
+			fresh.subs[s] = struct{}{}
+			s.enqueueControl(
+				map[string]any{"type": msgTypeStreamReset, "reason": "resize"},
+				fresh.initMessage(),
+			)
+		}
+		if startPumps {
+			fresh.startPumps()
+		}
+		plan = append(plan, replacement{old: run, fresh: fresh})
+	}
+	h.mu.Unlock()
+
+	// The old runs' pumps may still be draining; stop them outside the lock so
+	// viewers already reading the replacement are not held up.
+	for _, p := range plan {
+		h.stop(p.old)
+	}
+	if len(plan) > 0 {
+		log.Printf("ws: encoder re-keyed to %dx%d (%d run(s))", width, height, len(plan))
+	}
+}
+
 // shutdown stops every run. It is called when the session's broadcaster is
 // replaced.
 func (h *streamHub) shutdown() {

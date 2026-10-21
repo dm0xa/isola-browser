@@ -15,6 +15,7 @@ import { ViewerToolbar } from './viewer/ViewerToolbar';
 import { ViewerStreamShell } from './viewer/ViewerStreamShell';
 import { ViewerDebugOverlay } from './viewer/ViewerDebugOverlay';
 import { buildDebugInfo, copyTextToClipboard, formatDebugInfo } from './viewer/debugInfo';
+import { captureResolutionFor, parseResolution } from '../lib/resolution';
 
 export default function ViewerPage() {
   const CONNECTING_STALL_TIMEOUT_MS = 12000;
@@ -218,7 +219,10 @@ export default function ViewerPage() {
     if (document.fullscreenElement) {
       void document.exitFullscreen();
     } else {
-      void document.documentElement.requestFullscreen();
+      // Refused in iframes without allow="fullscreen" and on browsers with no
+      // element fullscreen (iOS Safari); the button then simply does nothing
+      // instead of leaving an unhandled rejection in the console.
+      void document.documentElement.requestFullscreen().catch(() => {});
     }
   }, []);
 
@@ -237,6 +241,82 @@ export default function ViewerPage() {
   useEffect(() => {
     isolaRef.current.setTabBarHost(isFullscreen ? tabBarSlotRef.current : null);
   }, [isFullscreen]);
+
+  // ── Match the sandbox viewport to the capture box ──────────────────────
+  // The capture draws with object-fit: contain, so a box whose aspect ratio
+  // differs from the sandbox's — fullscreen always does, and so does a window
+  // drag — is letterboxed. Ask the backend to reshape the sandbox instead, so
+  // the page reflows like a real maximised browser. Debounced, because every
+  // accepted resize replaces the encoder, and skipped while the network panel
+  // is docked: its insets shrink the capture element without changing the
+  // user's window.
+  const resizeBudgetRef = useRef('');
+  // The geometry the sandbox is believed to have, so a measurement that would
+  // not change it (a few pixels of drag, or the launch size itself) costs
+  // nothing.
+  const sandboxGeometryRef = useRef<{ width: number; height: number } | null>(null);
+  const resizeSessionRef = useRef('');
+  useEffect(() => {
+    if (!id || viewOnly || shadow) return;
+    if (resizeSessionRef.current !== id) {
+      // A restart navigates to a new session id with a possibly different
+      // launch resolution: the budget and the baseline belong to that session.
+      resizeSessionRef.current = id;
+      resizeBudgetRef.current = '';
+      sandboxGeometryRef.current = null;
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const request = () => {
+      if (netPanel !== 'off') return;
+      const launch = sessionConfigRef.current.resolution;
+      const box = document.querySelector<HTMLVideoElement | HTMLCanvasElement>(
+        '#vnc-container video, #vnc-container canvas',
+      );
+      if (!launch || !box) return;
+      if (!resizeBudgetRef.current) {
+        // The launch resolution is the pixel budget; it must never shrink from
+        // our own resizes, or toggling fullscreen back and forth would degrade
+        // the picture a step at a time.
+        resizeBudgetRef.current = launch;
+        sandboxGeometryRef.current = parseResolution(launch);
+      }
+      const current = sandboxGeometryRef.current;
+      if (!current) return;
+      const target = captureResolutionFor(
+        resizeBudgetRef.current,
+        current,
+        box.clientWidth,
+        box.clientHeight,
+      );
+      if (!target) return;
+      sandboxGeometryRef.current = target;
+      const token = sessionTokenRef.current;
+      void api
+        .post(
+          `/api/sessions/${id}/resize`,
+          target,
+          token ? { headers: { 'X-Session-Token': token } } : undefined,
+        )
+        .catch(() => {
+          // A refused resize keeps the geometry the sandbox already has; forget
+          // the request so the next measurement can retry it.
+          if (sandboxGeometryRef.current === target) sandboxGeometryRef.current = current;
+        });
+    };
+
+    const schedule = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(request, 600);
+    };
+
+    schedule();
+    window.addEventListener('resize', schedule);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener('resize', schedule);
+    };
+  }, [id, viewOnly, shadow, isFullscreen, isConnected, netPanel]);
 
   const toggleAudio = useCallback(async () => {
     if (!id) return;
@@ -969,5 +1049,8 @@ export default function ViewerPage() {
     toolbarAndCanvas
   );
 
-  return <div className="flex flex-col h-screen bg-zinc-200 dark:bg-gray-950 relative">{wrapped}</div>;
+  // h-full, not h-screen: in fullscreen the app must fill the top-layer
+  // element's height, and 100vh can keep the windowed height (leaving black
+  // bands above and below the stream). The 100% chain is set in index.css.
+  return <div className="flex flex-col h-full bg-zinc-200 dark:bg-gray-950 relative">{wrapped}</div>;
 }

@@ -96,10 +96,10 @@ TOKEN=<session_token>
 # Extend the TTL (returns expiry, remaining minutes, viewer count)
 curl -s -X PATCH http://localhost:8080/api/sessions/$ID -H "X-Session-Token: $TOKEN"
 
-# Change resolution
+# Change resolution (resizes the sandbox viewport; attached viewers reset)
 curl -s -X POST http://localhost:8080/api/sessions/$ID/resize \
   -H "X-Session-Token: $TOKEN" -H "Content-Type: application/json" \
-  -d '{"resolution": "1920x1080"}'
+  -d '{"width": 1698, "height": 1018}'
 
 # Toggle audio
 curl -s -X POST http://localhost:8080/api/sessions/$ID/audio \
@@ -109,6 +109,13 @@ curl -s -X POST http://localhost:8080/api/sessions/$ID/audio \
 # Terminate
 curl -s -X DELETE http://localhost:8080/api/sessions/$ID -H "X-Session-Token: $TOKEN"
 ```
+
+A resize changes the **sandbox viewport**, not just the encoder: the page reflows
+to the new shape, and attached viewers receive a `stream_reset`
+(`reason: "resize"`) followed by a fresh `stream_init`. Both dimensions must be
+at least 64 and cannot exceed the session's launch resolution, so a request
+reshapes that pixel budget rather than growing it. The viewer issues this
+automatically when fullscreen or a window resize changes its capture box.
 
 ## Resource graph image
 

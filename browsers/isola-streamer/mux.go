@@ -80,15 +80,29 @@ func setupMux(port string, wsHandler http.HandlerFunc) (net.Listener, error) {
 		heightStr := r.URL.Query().Get("height")
 		width, errW := strconv.Atoi(widthStr)
 		height, errH := strconv.Atoi(heightStr)
-		if errW != nil || errH != nil || width <= 0 || height <= 0 {
+		if errW != nil || errH != nil || width <= 0 || height <= 0 ||
+			width > maxSurfaceDim || height > maxSurfaceDim {
 			http.Error(w, "invalid dimensions", http.StatusBadRequest)
 			return
 		}
+		// Even dimensions only: H.264 4:2:0 cannot encode odd ones.
+		width &^= 1
+		height &^= 1
 		currentMu.Lock()
 		currentWidth = width
 		currentHeight = height
 		currentMu.Unlock()
-		log.Printf("mux: resize to %dx%d (new viewers will use new dimensions)", width, height)
+		// The runner owns the surface, so resize its offscreen windows first:
+		// by the time the encoders are re-keyed below, frames at the new
+		// geometry are already on their way.
+		notified := writeCtrlCommand(map[string]any{
+			"cmd": "resize", "width": width, "height": height,
+		})
+		// Every attached viewer decodes an encoder whose output size was fixed
+		// when it spawned, so each run is replaced and its viewers reset onto
+		// the new geometry (stream_reset reason=resize).
+		hubFor(globalBroadcaster).resizeAll(width, height)
+		log.Printf("mux: resize to %dx%d (runner notified=%v)", width, height, notified)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})

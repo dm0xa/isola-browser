@@ -16,9 +16,32 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* The viewer fills the window with height:100% rather than 100vh (see
+   ViewerPage). 100vh keeps the pre-fullscreen height in some browsers, which
+   left the app centred inside the fullscreen element with black bands above
+   and below it. */
+html,
+body,
+#root {
+  height: 100%;
+}
+
 :root {
   --vnc-container-bg: #f4f4f5;
+  /* Matches the viewer root (zinc-200) and the capture letterbox fill. */
+  --app-bg: #e4e4e7;
 }
 :root.dark {
   --vnc-container-bg: #030712;
+  --app-bg: #030712;
+}
+
+/* Fullscreen paints a black ::backdrop behind the top-layer element; match it
+   to the app so any uncovered edge reads as the app, not as a black bar. */
+html:fullscreen,
+html:fullscreen body {
+  background: var(--app-bg);
+}
+::backdrop {
+  background: var(--app-bg);
 }

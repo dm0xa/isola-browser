@@ -35,6 +35,11 @@ const { themeColours, fillPageCanvas } = require('./theme');
 const START_URL = process.env.START_URL || 'https://example.com';
 const RESOLUTION = process.env.RESOLUTION || '1280x720';
 const FPS = parseInt(process.env.ISOLA_FPS || '30', 10);
+// Bounds for a live viewport resize, mirroring the streamer's maxSurfaceDim and
+// the backend's 64px floor. Anything outside them is refused rather than fed to
+// the compositor.
+const MIN_DIM = 64;
+const MAX_DIM = 8192;
 // Keepalive nudge rate for the compositor. A static page must not be force-
 // repainted at the capture frame rate, so this defaults well below it. It is
 // also the worst-case delay before a click's damage reaches the streamer on
@@ -1042,6 +1047,20 @@ function handleCtrlCommand(line) {
     case 'get_tabs':
       broadcastTabs();
       break;
+    case 'resize': {
+      // Live viewport resize (viewer fullscreen / window drag). Bound and even
+      // the request here as well as in the streamer: an odd or absurd size
+      // would corrupt the H.264 encode the whole session shares.
+      const nw = parseInt(cmd.width, 10) & ~1;
+      const nh = parseInt(cmd.height, 10) & ~1;
+      if (Number.isFinite(nw) && Number.isFinite(nh) &&
+          nw >= MIN_DIM && nh >= MIN_DIM && nw <= MAX_DIM && nh <= MAX_DIM) {
+        handleResize(nw, nh);
+      } else {
+        console.warn(`[electron] resize refused: ${cmd.width}x${cmd.height}`);
+      }
+      break;
+    }
     case 'capture':
       // Viewer-count gate from the streamer: with nobody attached there is
       // nothing to encode, so stop composing and shipping frames.
