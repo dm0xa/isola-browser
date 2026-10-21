@@ -464,6 +464,40 @@ export function applyExpansion(full: GraphData, expansion: GraphExpansion): Grap
   };
 }
 
+/** Every host opened, every type group open and fully expanded. */
+function expandAllState(data: GraphData): GraphExpansion {
+  const hosts = new Set<string>();
+  const groups = new Set<string>();
+  const all = new Set<string>();
+  const hostIdByHostname = new Map<string, string>();
+  for (const n of data.nodes) {
+    if (n.kind === 'host') {
+      hosts.add(n.id);
+      hostIdByHostname.set(n.host, n.id);
+    }
+  }
+
+  const classesByHost = new Map<string, Set<ResourceClass>>();
+  for (const n of data.nodes) {
+    if (n.kind !== 'resource') continue;
+    const hostId = hostIdByHostname.get(n.host);
+    if (!hostId) continue;
+    const classes = classesByHost.get(hostId) ?? new Set<ResourceClass>();
+    classes.add(n.resourceClass || 'other');
+    classesByHost.set(hostId, classes);
+  }
+
+  for (const [hostId, classes] of classesByHost) {
+    hosts.add(hostId);
+    for (const cls of classes) {
+      const gid = groupNodeId(hostId, cls);
+      groups.add(gid);
+      all.add(gid);
+    }
+  }
+  return { hosts, groups, all };
+}
+
 // Nodes and edges that stay lit while `focusId` is hovered or pinned.
 // Immediate neighbours in both directions, plus every ancestor back to the
 // entry. Stopping at one hop left the path from `[request]` faded whenever
@@ -761,23 +795,7 @@ const Z_MAX = 4;
 const clampZ = (z: number) => Math.max(Z_MIN, Math.min(Z_MAX, z));
 
 const LS_GRAPH_DIRECTION = 'isola-graph-direction';
-const LS_GRAPH_EXPANSION = 'isola-graph-expansion';
-const LOD_ZOOM = 0.55;
-const READABLE_ZOOM = 0.75;
-
-function readGraphExpansion(): GraphExpansion {
-  try {
-    const raw = localStorage.getItem(LS_GRAPH_EXPANSION);
-    if (!raw) return { hosts: new Set(), groups: new Set(), all: new Set() };
-    const parsed = JSON.parse(raw) as { hosts?: unknown; groups?: unknown };
-    const toSet = (v: unknown): ReadonlySet<string> => new Set(
-      Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [],
-    );
-    return { hosts: toSet(parsed.hosts), groups: toSet(parsed.groups), all: new Set() };
-  } catch {
-    return { hosts: new Set(), groups: new Set(), all: new Set() };
-  }
-}
+const LOD_ZOOM = 0.5;
 
 function toggled(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
   const next = new Set(set);
@@ -795,13 +813,78 @@ function removed(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-/** Nested <svg> watermark with the Isola logo, for stamping into PNG exports. */
-function buildLogoStamp(): SVGSVGElement {
-  const size = 132; // logical px in export space (scaled ×eff at raster time)
-  const margin = 28;
+/** Gap kept around the graph, and the room the watermark needs inside it. */
+const EXPORT_PAD = 72;
+const LOGO_SIZE = 56;
+const LOGO_MARGIN = 12;
+/** Advance of one character at the caption's 11px monospace size. */
+const CAPTION_CH = 7.4;
+
+/**
+ * One-line provenance for the exported image: what was captured, how much of
+ * it, which filters were on, and when. A PNG outlives the session it came from.
+ */
+export function exportCaption(input: {
+  origin: string;
+  requests: number;
+  hosts: number;
+  resources: number;
+  failed: number;
+  types: readonly string[];
+  failedOnly: boolean;
+  at: Date;
+}): string {
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const parts: string[] = [];
+  if (input.origin) parts.push(input.origin);
+  parts.push(plural(input.requests, 'request', 'requests'));
+  parts.push(plural(input.hosts, 'host', 'hosts'));
+  parts.push(plural(input.resources, 'resource', 'resources'));
+  if (input.failed > 0) parts.push(`${input.failed} failed`);
+  if (input.types.length > 0) parts.push(input.types.join(' + '));
+  if (input.failedOnly) parts.push('failed only');
+  parts.push(`${input.at.toISOString().slice(0, 16).replace('T', ' ')}Z`);
+  return parts.join(' · ');
+}
+
+/**
+ * Frame geometry for the PNG export: the content box that is actually painted,
+ * padded. Card widths are estimates and labels/rings can spill past them, so a
+ * frame derived from the layout's nominal totals cropped the right and bottom
+ * edges of the image.
+ */
+export function exportFrame(
+  bbox: { x: number; y: number; width: number; height: number } | null,
+  fallback: { w: number; h: number },
+  pad = EXPORT_PAD,
+): { w: number; h: number; dx: number; dy: number } {
+  const measured = bbox
+    && Number.isFinite(bbox.x) && Number.isFinite(bbox.y)
+    && Number.isFinite(bbox.width) && Number.isFinite(bbox.height)
+    && (bbox.width > 0 || bbox.height > 0)
+    ? bbox
+    : null;
+  const x = measured?.x ?? 0;
+  const y = measured?.y ?? 0;
+  const contentW = measured?.width ?? fallback.w;
+  const contentH = measured?.height ?? fallback.h;
+  return {
+    w: Math.max(1, Math.round(contentW + pad * 2)),
+    h: Math.max(1, Math.round(contentH + pad * 2)),
+    dx: pad - x,
+    dy: pad - y,
+  };
+}
+
+/** Nested <svg> watermark with the Isola logo, stamped into the export's padding. */
+function buildLogoStamp(frameW: number, frameH: number): SVGSVGElement {
+  const size = LOGO_SIZE; // logical px in export space (scaled ×eff at raster time)
+  // `LOGO_SIZE + LOGO_MARGIN` stays inside EXPORT_PAD, so the mark sits in the
+  // padding band instead of covering the graph the way a corner stamp did.
+  const inset = size + LOGO_MARGIN;
   const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('x', String(margin));
-  svg.setAttribute('y', String(margin));
+  svg.setAttribute('x', String(Math.max(LOGO_MARGIN, frameW - inset)));
+  svg.setAttribute('y', String(Math.max(LOGO_MARGIN, frameH - inset)));
   svg.setAttribute('width', String(size));
   svg.setAttribute('height', String(size));
   svg.setAttribute('viewBox', ISOLA_LOGO_VIEWBOX);
@@ -825,6 +908,28 @@ function buildLogoStamp(): SVGSVGElement {
   ISOLA_LOGO_TOP_PATHS.forEach(append);
   svg.appendChild(g);
   return svg;
+}
+
+/** Caption + watermark, drawn in the export's bottom padding. */
+function buildExportFooter(
+  frameW: number,
+  frameH: number,
+  caption: string,
+  color: string,
+): SVGGElement {
+  const footer = document.createElementNS(SVG_NS, 'g');
+  if (caption) {
+    const text = document.createElementNS(SVG_NS, 'text');
+    text.setAttribute('x', String(EXPORT_PAD));
+    text.setAttribute('y', String(frameH - 30));
+    text.setAttribute('font-size', '12');
+    text.setAttribute('font-family', 'ui-monospace, SFMono-Regular, Menlo, monospace');
+    text.setAttribute('fill', color);
+    text.textContent = caption;
+    footer.appendChild(text);
+  }
+  footer.appendChild(buildLogoStamp(frameW, frameH));
+  return footer;
 }
 
 interface View {
@@ -854,7 +959,6 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [size, setSize] = useState({ w: 800, h: 500 });
-  const [measured, setMeasured] = useState(false);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -883,10 +987,13 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   const [direction, setDirection] = useState<LayoutDirection>(() => {
     try { return localStorage.getItem(LS_GRAPH_DIRECTION) === 'vertical' ? 'vertical' : 'horizontal'; } catch { return 'horizontal'; }
   });
-  const [expansion, setExpansion] = useState<GraphExpansion>(readGraphExpansion);
+  const [expansion, setExpansion] = useState<GraphExpansion>(() => ({
+    hosts: new Set(),
+    groups: new Set(),
+    all: new Set(),
+  }));
   const [onlyFailed, setOnlyFailed] = useState(false);
   const [notice, setNotice] = useState('');
-  const [frameNonce, setFrameNonce] = useState(0);
   const autoExpandedOriginRef = useRef<string | null>(null);
   const minimapRef = useRef<HTMLDivElement>(null);
   const minimapDragRef = useRef(false);
@@ -903,16 +1010,6 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   const pinchRef = useRef<{ dist: number; mx: number; my: number; px: number; py: number; z: number } | null>(null);
   const userAdjustedRef = useRef(false);
   const lastFitKeyRef = useRef('');
-  const frameTargetRef = useRef<string | null>(null);
-  const lastFrameNonceRef = useRef(0);
-
-  // An explicit disclosure action should land on the branch it opened, at a
-  // readable zoom — not on the far edge of the whole chain.
-  const frameReadable = useCallback((targetId?: string) => {
-    frameTargetRef.current = targetId ?? null;
-    userAdjustedRef.current = true;
-    setFrameNonce((n) => n + 1);
-  }, []);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -921,7 +1018,6 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
       for (const e of entries) {
         const cr = e.contentRect;
         setSize({ w: cr.width, h: cr.height });
-        setMeasured(true);
       }
     });
     ro.observe(el);
@@ -952,27 +1048,14 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     };
   }, [entries, originHost, size.w, size.h, direction, typeFilter, onlyFailed, expansion]);
 
-  // The page the user opened is the one branch worth opening automatically.
+  // Opening a page (or navigating to another origin) starts from the same
+  // summary: the opened page's host is expanded, every type group is closed.
   useEffect(() => {
     const originId = fullGraph.originId;
     if (!originId || autoExpandedOriginRef.current === originId) return;
     autoExpandedOriginRef.current = originId;
-    setExpansion((prev) => (prev.hosts.has(originId)
-      ? prev
-      : { ...prev, hosts: new Set(prev.hosts).add(originId) }));
-    // First view is the opened page, not a tiny whole-chain overview; Fit is
-    // right there when the user wants the entire chain.
-    frameReadable(originId);
-  }, [fullGraph.originId, frameReadable]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(LS_GRAPH_EXPANSION, JSON.stringify({
-        hosts: [...expansion.hosts],
-        groups: [...expansion.groups],
-      }));
-    } catch {}
-  }, [expansion.hosts, expansion.groups]);
+    setExpansion({ hosts: new Set([originId]), groups: new Set(), all: new Set() });
+  }, [fullGraph.originId]);
 
   const failedAvailable = useMemo(
     () => fullGraph.nodes.some((n) => n.kind === 'resource' && n.failed),
@@ -993,30 +1076,35 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
       else next.add(cls);
       return next;
     });
-    frameReadable();
-  }, [frameReadable]);
+    setSelectedId(null);
+    userAdjustedRef.current = true;
+  }, []);
 
   const clearTypes = useCallback(() => {
     setTypeFilter(new Set());
-    frameReadable();
-  }, [frameReadable]);
+    setSelectedId(null);
+    userAdjustedRef.current = true;
+  }, []);
 
   const toggleHost = useCallback((id: string) => {
     setExpansion((prev) => ({ ...prev, hosts: toggled(prev.hosts, id) }));
-    setSelectedId(id);
-    frameReadable(id);
-  }, [frameReadable]);
+    setSelectedId(null);
+    userAdjustedRef.current = true;
+  }, []);
 
   const toggleGroup = useCallback((id: string) => {
+    const open = expansion.groups.has(id);
     setExpansion((prev) => {
       if (prev.groups.has(id)) {
         return { ...prev, groups: removed(prev.groups, id), all: removed(prev.all, id) };
       }
       return { ...prev, groups: new Set(prev.groups).add(id) };
     });
-    setSelectedId(id);
-    frameReadable(id);
-  }, [frameReadable]);
+    // Opening a group keeps its ancestors and revealed files lit while the
+    // rest fades; closing it removes the fade.
+    setSelectedId(open ? null : id);
+    userAdjustedRef.current = true;
+  }, [expansion.groups]);
 
   const expandGroup = useCallback((id: string) => {
     setExpansion((prev) => ({
@@ -1025,14 +1113,14 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
       all: new Set(prev.all).add(id),
     }));
     setSelectedId(id);
-    frameReadable(id);
-  }, [frameReadable]);
+    userAdjustedRef.current = true;
+  }, []);
 
   const previewGroup = useCallback((id: string) => {
     setExpansion((prev) => ({ ...prev, all: removed(prev.all, id) }));
     setSelectedId(id);
-    frameReadable(id);
-  }, [frameReadable]);
+    userAdjustedRef.current = true;
+  }, []);
 
   const collapseAll = useCallback(() => {
     setExpansion({ hosts: new Set(), groups: new Set(), all: new Set() });
@@ -1041,11 +1129,18 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     lastFitKeyRef.current = '';
   }, []);
 
+  const expandAll = useCallback(() => {
+    setExpansion(expandAllState(graph));
+    setSelectedId(null);
+    userAdjustedRef.current = false;
+    lastFitKeyRef.current = '';
+  }, [graph]);
+
   const toggleFailed = useCallback(() => {
     setOnlyFailed((v) => !v);
-    frameReadable();
-    lastFitKeyRef.current = '';
-  }, [frameReadable]);
+    setSelectedId(null);
+    userAdjustedRef.current = true;
+  }, []);
 
   const flashNotice = useCallback((message: string) => {
     setNotice(message);
@@ -1091,71 +1186,6 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     fit();
   }, [fit, layout.nodes.length, layout.totalW, layout.totalH, size.w, size.h]);
 
-  // Disclosure actions set the flag above; frame the branch that changed at a
-  // readable zoom. Centring the target's subtree is what keeps a click near
-  // the right edge of a long host chain from leaving the new rows off-screen.
-  useEffect(() => {
-    if (!measured) return;
-    if (frameNonce === lastFrameNonceRef.current) return;
-    lastFrameNonceRef.current = frameNonce;
-    const targetId = frameTargetRef.current;
-    frameTargetRef.current = null;
-    if (contentW <= 0 || contentH <= 0 || size.w <= 0 || size.h <= 0) return;
-
-    const raw = Math.min(size.w / contentW, size.h / contentH, 1.15);
-    let z = clampZ(Math.max(raw, READABLE_ZOOM));
-    let x = Math.max(12, (size.w - contentW * z) / 2);
-    let y = Math.max(12, (size.h - contentH * z) / 2);
-
-    const target = targetId ? layout.nodes.find((n) => n.id === targetId) : null;
-    if (target) {
-      const outgoing = new Map<string, LayoutNode[]>();
-      for (const e of layout.edges) {
-        // Host→host trigger edges belong to the chain, not to the branch the
-        // user opened; including them would frame half the graph again.
-        if (e.to.node.kind === 'host' || e.to.node.kind === 'root') continue;
-        const list = outgoing.get(e.from.id);
-        if (list) list.push(e.to);
-        else outgoing.set(e.from.id, [e.to]);
-      }
-
-      let minX = target.x;
-      let minY = target.y;
-      let maxX = target.x + target.w;
-      let maxY = target.y + target.h;
-      const stack: LayoutNode[] = [target];
-      const seen = new Set<string>([target.id]);
-      while (stack.length > 0) {
-        const current = stack.pop()!;
-        for (const child of outgoing.get(current.id) || []) {
-          if (seen.has(child.id)) continue;
-          seen.add(child.id);
-          stack.push(child);
-          minX = Math.min(minX, child.x);
-          minY = Math.min(minY, child.y);
-          maxX = Math.max(maxX, child.x + child.w);
-          maxY = Math.max(maxY, child.y + child.h);
-        }
-      }
-
-      const boxW = Math.max(1, maxX - minX);
-      const boxH = Math.max(1, maxY - minY);
-      const pad = 32;
-      const branchFit = Math.min((size.w - pad * 2) / boxW, (size.h - pad * 2) / boxH, 1.15);
-      z = clampZ(Math.max(branchFit, READABLE_ZOOM));
-
-      // Centre a branch that fits. A branch taller/wider than the viewport is
-      // anchored at the clicked node instead, so its first rows stay visible
-      // and panning reveals the rest.
-      const fitsW = boxW * z <= size.w - pad * 2;
-      const fitsH = boxH * z <= size.h - pad * 2;
-      x = fitsW ? (size.w - boxW * z) / 2 - minX * z : pad - target.x * z;
-      y = fitsH ? (size.h - boxH * z) / 2 - minY * z : pad - target.y * z;
-    }
-
-    setV({ z, x, y });
-  }, [frameNonce, measured, layout, contentW, contentH, size.w, size.h, setV]);
-
   const setZoom = useCallback((z: number) => {
     const v = viewRef.current;
     const nz = clampZ(z);
@@ -1182,9 +1212,22 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     });
   }, [setV]);
 
+  // Numbers for the exported image's caption. They describe the graph the user
+  // is looking at (filters included), not the raw capture.
+  const exportStats = useMemo(() => {
+    const resources = graph.nodes.filter((n) => n.kind === 'resource');
+    return {
+      origin: originHost || (graph.originId ? graph.originId.replace(/^host:/, '') : ''),
+      requests: graph.nodes.find((n) => n.kind === 'root')?.count ?? 0,
+      hosts: graph.nodes.filter((n) => n.kind === 'host').length,
+      resources: resources.length,
+      failed: resources.filter((n) => n.failed).length,
+    };
+  }, [graph, originHost]);
+
   // Export the WHOLE graph (not just the visible viewport) as a hi-res PNG.
   // The live <svg> already contains every node/edge, so we clone it, neutralise
-  // the pan/zoom transform, resize the frame to the full content box, and
+  // the pan/zoom transform, resize the frame to the painted content box, and
   // rasterise it at a multiple of the logical size.
   const downloadPng = useCallback(async (scale = 3) => {
     if (layout.nodes.length === 0 || exporting) return;
@@ -1197,9 +1240,26 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
       if (!live) return;
       // Clone the live SVG as it is, including a pinned node's fade. Clearing
       // the selection first exported every node at full strength.
-      const pad = 48;
-      const w = Math.round(layout.totalW + pad * 2);
-      const h = Math.round(layout.totalH + pad * 2);
+      //
+      // The frame comes from the content group's real bounding box, not from
+      // layout.totalW/totalH: card widths are estimates, labels and selection
+      // rings can spill past them, and the graph is pannable, so the nominal
+      // totals could leave the right/bottom edge (or a panned view) cropped.
+      const content = live.querySelector<SVGGElement>('g');
+      let bbox: { x: number; y: number; width: number; height: number } | null = null;
+      try { bbox = content ? content.getBBox() : null; } catch { bbox = null; }
+      const frame = exportFrame(bbox, { w: layout.totalW, h: layout.totalH });
+      const caption = exportCaption({
+        ...exportStats,
+        types: [...typeFilter].map((cls) => CLASS_NAME[cls]),
+        failedOnly: onlyFailed,
+        at: new Date(),
+      });
+      // The caption runs along the bottom edge and must end before the mark, so
+      // a narrow graph widens to fit rather than clipping its own provenance.
+      const captionW = Math.ceil(caption.length * CAPTION_CH);
+      const w = Math.max(frame.w, EXPORT_PAD + captionW + 16 + LOGO_SIZE + LOGO_MARGIN);
+      const h = frame.h;
 
       const clone = live.cloneNode(true) as SVGSVGElement;
       clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
@@ -1208,8 +1268,9 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
       clone.setAttribute('viewBox', `0 0 ${w} ${h}`);
       clone.style.overflow = 'hidden';
 
-      // Deterministic export framing: drop the interactive pan/zoom transform.
-      clone.querySelector('g')?.setAttribute('transform', `translate(${pad}, ${pad})`);
+      // Deterministic export framing: drop the interactive pan/zoom transform
+      // and shift the measured box into the padded frame.
+      clone.querySelector('g')?.setAttribute('transform', `translate(${frame.dx}, ${frame.dy})`);
       // Background layers were sized to the viewport — stretch them to the frame.
       clone.querySelectorAll<SVGRectElement>('rect[data-export-bg]').forEach((r) => {
         r.setAttribute('width', String(w));
@@ -1219,8 +1280,9 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
       clone.querySelectorAll<SVGElement>('[style]').forEach((el) => {
         el.style.transition = 'none';
       });
-      // Watermark: Isola logo in the top-left corner (appended last → paints on top).
-      clone.appendChild(buildLogoStamp());
+      // Watermark and caption live in the bottom padding (appended last → they
+      // paint on top of the stretched background, never over a node).
+      clone.appendChild(buildExportFooter(w, h, caption, pal.neutral));
 
       const xml = new XMLSerializer().serializeToString(clone);
       const svgUrl = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml;charset=utf-8' }));
@@ -1257,7 +1319,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     } finally {
       setExporting(false);
     }
-  }, [layout.nodes.length, layout.totalW, layout.totalH, exporting, pal.canvas]);
+  }, [layout.nodes.length, layout.totalW, layout.totalH, exporting, pal.canvas, pal.neutral, exportStats, typeFilter, onlyFailed]);
 
   // Non-passive wheel: zoom to cursor.
   useEffect(() => {
@@ -1425,9 +1487,11 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
 
   const compact = size.w < 640;
   const tiny = size.w < 430;
+  const hasExpansion = expansion.hosts.size > 0 || expansion.groups.size > 0;
+  const canGroup = groupByType && graph.nodes.some((n) => n.kind === 'resource');
   const focusNode = focusId ? layout.nodes.find((n) => n.id === focusId) : null;
-  // Below the LOD threshold resource cards lose their labels and badges; the
-  // tooltip and a hover still expose the full detail.
+  // Screen-only shorthand: below 50% resources collapse to empty class bars.
+  // The PNG exporter sets `exporting`, which forces full cards for every node.
   const overview = view.z < LOD_ZOOM && !exporting;
 
   const nodeDim = (n: LayoutNode): number => {
@@ -1516,7 +1580,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
         style={{ cursor: 'pointer', transition: 'opacity 150ms ease' }}
         onMouseEnter={() => { cancelHoverClear(); setHoverId(n.id); }}
         onMouseLeave={() => scheduleHoverClear(n.id)}
-        onClick={() => { setSelectedId((s) => (s === n.id ? null : n.id)); onSelect?.(null); }}
+        onClick={() => { setSelectedId((s) => (s === n.id ? null : n.id)); }}
       >
         <g className="rg-node" style={{ filter: selected ? 'drop-shadow(0 0 12px rgba(34, 211, 238, 0.5))' : 'drop-shadow(0 0 8px rgba(34, 211, 238, 0.3))' }}>
           {selected && (
@@ -1772,7 +1836,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
         style={{ cursor: 'pointer', transition: 'opacity 150ms ease' }}
         onMouseEnter={() => { cancelHoverClear(); setHoverId(n.id); }}
         onMouseLeave={() => scheduleHoverClear(n.id)}
-        onClick={() => { setSelectedId((s) => (s === n.id ? null : n.id)); onSelect?.(node.host); }}
+        onClick={() => { setSelectedId((s) => (s === n.id ? null : n.id)); }}
       >
         {!detailed ? (
           <rect
@@ -1812,6 +1876,10 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
 
   const tooltip = (() => {
     if (!focusNode) return null;
+    // A pinned resource keeps its tooltip open for the copy buttons. A pinned
+    // group only shows its card while hovered, so it cannot cover the rows it
+    // just revealed.
+    if (hoverId !== focusNode.id && focusNode.node.kind !== 'resource') return null;
     const { node } = focusNode;
     const isRootNode = node.kind === 'root';
     const isHost = node.kind === 'host';
@@ -1852,8 +1920,26 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
           {isHost && node.id === viewGraph.originId && (
             <span className="text-[9px] font-semibold tracking-wider text-cyan-600/70 dark:text-cyan-400/70">ORIGIN</span>
           )}
-          <span className="ml-auto text-[10px] font-medium text-zinc-500 dark:text-slate-400">
-            {isGroup ? `${node.count} res` : isMore ? (node.moreAction === 'expand' ? `+${node.count}` : `${node.count}`) : `×${node.count}`}
+          <span className="ml-auto flex items-center gap-1.5">
+            {(isResource || isHost || isGroup) && node.host && (
+              <button
+                type="button"
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  onSelect?.(node.host);
+                }}
+                title={`Show only ${node.host}`}
+                aria-label={`Show only ${node.host}`}
+                className="pointer-events-auto inline-flex h-4 w-4 items-center justify-center rounded border border-zinc-300 text-zinc-500 transition-colors hover:bg-zinc-200 hover:text-cyan-600 dark:border-white/10 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-cyan-400"
+              >
+                <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3Z" />
+                </svg>
+              </button>
+            )}
+            <span className="text-[10px] font-medium text-zinc-500 dark:text-slate-400">
+              {isGroup ? `${node.count} res` : isMore ? (node.moreAction === 'expand' ? `+${node.count}` : `${node.count}`) : `×${node.count}`}
+            </span>
           </span>
         </div>
         <div className="mt-1.5 break-words text-[11.5px] font-semibold leading-tight text-zinc-900 dark:text-slate-100">
@@ -2117,18 +2203,32 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
         )}
 
         <div className="ml-auto flex items-center gap-0.5">
-          {groupByType && (expansion.hosts.size > 0 || expansion.groups.size > 0) && (
-            <button
-              onClick={collapseAll}
-              className="mr-1 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-zinc-500 transition-colors hover:bg-black/5 hover:text-zinc-900 dark:text-slate-400 dark:hover:bg-white/8 dark:hover:text-slate-100"
-              title="Collapse all hosts and type groups"
-            >
-              <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="m7 14 5-5 5 5" />
-                <path d="m7 20 5-5 5 5" />
-              </svg>
-              {!compact && 'collapse'}
-            </button>
+          {canGroup && (
+            <div className="mr-1 inline-flex overflow-hidden rounded-md border border-zinc-300 dark:border-white/10" role="group" aria-label="Graph expansion">
+              <button
+                onClick={collapseAll}
+                disabled={!hasExpansion}
+                aria-label="Collapse all hosts and groups"
+                title="Collapse all hosts and groups"
+                className="px-1.5 py-0.5 text-zinc-500 transition-colors hover:bg-black/5 hover:text-zinc-900 disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100 dark:disabled:hover:text-slate-400"
+              >
+                <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M7 4l5 5 5-5" />
+                  <path d="M7 20l5-5 5 5" />
+                </svg>
+              </button>
+              <button
+                onClick={expandAll}
+                aria-label="Expand all hosts and groups"
+                title="Expand all hosts and groups"
+                className="border-l border-zinc-300 px-1.5 py-0.5 text-zinc-500 transition-colors hover:bg-black/5 hover:text-zinc-900 dark:border-white/10 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100"
+              >
+                <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M7 9l5-5 5 5" />
+                  <path d="M7 15l5 5 5-5" />
+                </svg>
+              </button>
+            </div>
           )}
           <div className="mr-1 inline-flex overflow-hidden rounded-md border border-zinc-300 dark:border-white/10" role="group" aria-label="Layout direction">
             {(['horizontal', 'vertical'] as const).map((dir) => {
@@ -2163,7 +2263,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
               {(view.z * 100).toFixed(0)}%
             </span>
           )}
-          {([0.5, 0.75, 1] as const).map((z) => {
+          {([0.25, 0.5, 0.75, 1] as const).map((z) => {
             const on = Math.abs(view.z - z) < 0.005;
             return (
               <button
@@ -2238,6 +2338,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
             if (Math.hypot(e.clientX - rect.left - start.x, e.clientY - rect.top - start.y) > 4) return;
           }
           setSelectedId(null);
+          setHoverId(null);
         }}
         onDoubleClick={(e) => {
           if (!(e.target as Element).closest('[data-node]')) {

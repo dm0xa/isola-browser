@@ -7,6 +7,8 @@ import {
   applyExpansion,
   buildGraph,
   EMPTY_EXPANSION,
+  exportCaption,
+  exportFrame,
   focusEmphasis,
   GROUP_PREVIEW,
   layoutGraph,
@@ -303,6 +305,194 @@ describe('graphOriginHost', () => {
   });
 });
 
+describe('disclosure click stability', () => {
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class {
+      private cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+      observe() {
+        this.cb([
+          { contentRect: { width: 1200, height: 500 } } as ResizeObserverEntry,
+        ], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() {}
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the zoom and pan when a type group is clicked', async () => {
+    const entries: NetEntry[] = [
+      { id: 'doc', url: 'https://example.com/', m: 'GET', s: 200, t: 'Document' },
+      ...Array.from({ length: 20 }, (_, i): NetEntry => ({
+        id: `s${i}`,
+        url: `https://example.com/app-${i}.js`,
+        m: 'GET',
+        s: 200,
+        t: 'Script',
+      })),
+    ];
+    const view = render(createElement(ResourceGraph, { entries, originHost: 'example.com' }));
+    const graphTransform = () => view.container
+      .querySelector('svg.absolute > g[transform]')
+      ?.getAttribute('transform');
+
+    await waitFor(() => {
+      if (!view.container.querySelector('[aria-label^="Script on example.com"]')) {
+        throw new Error('type group not open');
+      }
+    });
+    // Let the one-time initial framing settle before taking the baseline.
+    await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+    const before = graphTransform();
+
+    fireEvent.click(view.container.querySelector('[aria-label^="Script on example.com"]')!);
+    await waitFor(() => {
+      if (view.container.querySelectorAll('g[data-node]').length < 10) {
+        throw new Error('group did not expand');
+      }
+    });
+
+    expect(graphTransform()).toBe(before);
+  });
+
+  it('selects a resource without filtering; the tooltip funnel filters', async () => {
+    const onSelect = vi.fn();
+    const entries: NetEntry[] = [
+      { id: 'doc', url: 'https://example.com/', m: 'GET', s: 200, t: 'Document' },
+      { id: 'app', url: 'https://example.com/app.js', m: 'GET', s: 200, t: 'Script' },
+    ];
+    const view = render(createElement(ResourceGraph, {
+      entries,
+      originHost: 'example.com',
+      onSelect,
+    }));
+
+    await waitFor(() => {
+      if (!view.container.querySelector('[aria-label^="Script on example.com"]')) {
+        throw new Error('type group not open');
+      }
+    });
+    fireEvent.click(view.container.querySelector('[aria-label^="Script on example.com"]')!);
+
+    let resource: Element | undefined;
+    await waitFor(() => {
+      resource = [...view.container.querySelectorAll('g[data-node]')]
+        .find((g) => g.textContent?.includes('app.js'));
+      if (!resource) throw new Error('resource not open');
+    });
+
+    fireEvent.click(resource!);
+    expect(onSelect).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTitle('Show only example.com'));
+    expect(onSelect).toHaveBeenCalledWith('example.com');
+  });
+
+  it('opens with only the origin host expanded and every type group collapsed', async () => {
+    const entries: NetEntry[] = [
+      { id: 'doc', url: 'https://example.com/', m: 'GET', s: 200, t: 'Document' },
+      { id: 'app', url: 'https://example.com/app.js', m: 'GET', s: 200, t: 'Script' },
+      { id: 'hero', url: 'https://example.com/hero.png', m: 'GET', s: 200, t: 'Image' },
+    ];
+    const view = render(createElement(ResourceGraph, { entries, originHost: 'example.com' }));
+
+    await waitFor(() => {
+      if (!view.container.querySelector('[aria-label^="Script on example.com"]')) {
+        throw new Error('type groups not open');
+      }
+    });
+
+    expect(view.container.querySelector('[aria-label^="example.com:"]')?.getAttribute('aria-expanded'))
+      .toBe('true');
+    expect(view.container.querySelector('[aria-label^="Script on example.com"]')?.getAttribute('aria-expanded'))
+      .toBe('false');
+    expect(view.container.querySelector('[aria-label^="Image on example.com"]')?.getAttribute('aria-expanded'))
+      .toBe('false');
+    expect([...view.container.querySelectorAll('g[data-node]')]
+      .some((g) => g.textContent?.includes('app.js'))).toBe(false);
+  });
+
+  it('expands and collapses everything from the toolbar icons', async () => {
+    const entries: NetEntry[] = [
+      { id: 'doc', url: 'https://example.com/', m: 'GET', s: 200, t: 'Document' },
+      { id: 'app', url: 'https://example.com/app.js', m: 'GET', s: 200, t: 'Script' },
+      { id: 'hero', url: 'https://example.com/hero.png', m: 'GET', s: 200, t: 'Image' },
+    ];
+    const view = render(createElement(ResourceGraph, { entries, originHost: 'example.com' }));
+
+    await waitFor(() => {
+      if (!view.container.querySelector('[aria-label^="Script on example.com"]')) {
+        throw new Error('type groups not open');
+      }
+    });
+    const hasResource = (needle: string) => [...view.container.querySelectorAll('g[data-node]')]
+      .some((g) => g.textContent?.includes(needle));
+    expect(hasResource('app.js')).toBe(false);
+
+    fireEvent.click(screen.getByLabelText('Expand all hosts and groups'));
+    await waitFor(() => {
+      if (!hasResource('app.js')) throw new Error('expand all did not open resources');
+    });
+
+    fireEvent.click(screen.getByLabelText('Collapse all hosts and groups'));
+    await waitFor(() => {
+      if (hasResource('app.js')) throw new Error('collapse all did not close resources');
+    });
+  });
+
+  it('fades siblings while a group is open and clears the fade on the empty canvas', async () => {
+    const entries: NetEntry[] = [
+      { id: 'doc', url: 'https://example.com/', m: 'GET', s: 200, t: 'Document' },
+      { id: 'app', url: 'https://example.com/app.js', m: 'GET', s: 200, t: 'Script' },
+      { id: 'vendor', url: 'https://example.com/vendor.js', m: 'GET', s: 200, t: 'Script' },
+      { id: 'hero', url: 'https://example.com/hero.png', m: 'GET', s: 200, t: 'Image' },
+      { id: 'logo', url: 'https://example.com/logo.png', m: 'GET', s: 200, t: 'Image' },
+    ];
+    const view = render(createElement(ResourceGraph, { entries, originHost: 'example.com' }));
+
+    await waitFor(() => {
+      if (!view.container.querySelector('[aria-label^="Script on example.com"]')) {
+        throw new Error('type groups not open');
+      }
+    });
+    fireEvent.click(view.container.querySelector('[aria-label^="Script on example.com"]')!);
+    await waitFor(() => {
+      const files = [...view.container.querySelectorAll('g[data-node]')];
+      if (!files.some((g) => g.textContent?.includes('app.js'))) {
+        throw new Error('group did not expand');
+      }
+    });
+
+    const scriptGroup = () => view.container.querySelector('[aria-label^="Script on example.com"]');
+    const imageGroup = () => view.container.querySelector('[aria-label^="Image on example.com"]');
+    const appFile = () => [...view.container.querySelectorAll('g[data-node]')]
+      .find((g) => g.textContent?.includes('app.js'));
+
+    expect(scriptGroup()?.getAttribute('opacity')).toBe('1');
+    expect(appFile()?.getAttribute('opacity')).toBe('1');
+    expect(imageGroup()?.getAttribute('opacity')).toBe('0.14');
+
+    // A pinned group's card is hover-only: it must disappear when the pointer
+    // leaves so it cannot cover the rows it just revealed.
+    fireEvent.mouseEnter(scriptGroup()!);
+    expect(view.container.querySelector('[data-graph-tooltip]')).not.toBeNull();
+    fireEvent.mouseLeave(scriptGroup()!);
+    await new Promise<void>((resolve) => { setTimeout(resolve, 260); });
+    expect(view.container.querySelector('[data-graph-tooltip]')).toBeNull();
+    expect(imageGroup()?.getAttribute('opacity')).toBe('0.14');
+
+    fireEvent.click(view.container.querySelector('.relative.flex-1')!);
+
+    expect(scriptGroup()?.getAttribute('opacity')).toBe('1');
+    expect(imageGroup()?.getAttribute('opacity')).toBe('1');
+  });
+});
+
 // The tooltip's copy buttons used to lose their click to the canvas' pointer
 // capture, and a hover-only card vanished before the pointer could reach them.
 // Pinning the node keeps the card open here; the pointerdown assertion covers
@@ -372,5 +562,90 @@ describe('tooltip copy buttons', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(sha));
     expect(capture).not.toHaveBeenCalled();
     expect(button).toHaveTextContent('✓');
+  });
+});
+
+describe('exportFrame', () => {
+  it('frames the painted box, which can be wider than the nominal layout', () => {
+    // A label or selection ring spilling past the estimated card size used to be
+    // cropped, because the frame came from layout.totalW.
+    const frame = exportFrame({ x: 120, y: 30, width: 900, height: 400 }, { w: 747, h: 405 });
+
+    expect(frame.w).toBe(900 + 72 * 2);
+    expect(frame.h).toBe(400 + 72 * 2);
+    expect(frame.w).toBeGreaterThanOrEqual(747 + 72 * 2);
+    // Content with a non-zero origin is shifted into the padded frame.
+    expect(frame.dx).toBe(72 - 120);
+    expect(frame.dy).toBe(72 - 30);
+  });
+
+  it('falls back to the layout size when no box can be measured', () => {
+    expect(exportFrame(null, { w: 800, h: 500 })).toEqual({
+      w: 800 + 72 * 2,
+      h: 500 + 72 * 2,
+      dx: 72,
+      dy: 72,
+    });
+  });
+
+  it('ignores empty or non-finite boxes', () => {
+    const empty = exportFrame({ x: 0, y: 0, width: 0, height: 0 }, { w: 800, h: 500 });
+    const broken = exportFrame({ x: Number.NaN, y: 0, width: 10, height: 10 }, { w: 800, h: 500 });
+
+    expect(empty.w).toBe(800 + 72 * 2);
+    expect(broken.w).toBe(800 + 72 * 2);
+    expect(broken.dx).toBe(72);
+  });
+});
+
+describe('exportCaption', () => {
+  const at = new Date('2026-10-21T10:45:00Z');
+
+  it('leads with the origin and ends with the capture time', () => {
+    const caption = exportCaption({
+      origin: 'duckduckgo.com',
+      requests: 77,
+      hosts: 12,
+      resources: 165,
+      failed: 2,
+      types: [],
+      failedOnly: false,
+      at,
+    });
+
+    expect(caption).toBe(
+      'duckduckgo.com · 77 requests · 12 hosts · 165 resources · 2 failed · 2026-10-21 10:45Z',
+    );
+  });
+
+  it('singularises counts and hides a zero failure count', () => {
+    const caption = exportCaption({
+      origin: 'example.se',
+      requests: 1,
+      hosts: 1,
+      resources: 1,
+      failed: 0,
+      types: [],
+      failedOnly: false,
+      at,
+    });
+
+    expect(caption).toBe('example.se · 1 request · 1 host · 1 resource · 2026-10-21 10:45Z');
+  });
+
+  it('records active filters so a filtered image cannot pass for the whole page', () => {
+    const caption = exportCaption({
+      origin: 'example.se',
+      requests: 4,
+      hosts: 2,
+      resources: 4,
+      failed: 1,
+      types: ['Script', 'Font'],
+      failedOnly: true,
+      at,
+    });
+
+    expect(caption).toContain('Script + Font');
+    expect(caption).toContain('failed only');
   });
 });
