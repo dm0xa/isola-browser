@@ -49,6 +49,7 @@ debug-*
 .vite/
 # Cursor MCP config holds a live Bearer token — never commit it.
 .cursor/
+.zed
 
 # Logs
 *.log
