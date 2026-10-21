@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,6 +90,16 @@ type screenshotParams struct {
 	SessionID string `json:"session_id"`
 	Format    string `json:"format,omitempty" jsonschema:"png or jpeg (default png)"`
 	Quality   int    `json:"quality,omitempty" jsonschema:"JPEG quality 1-100 (default 85)"`
+}
+
+type resourceGraphParams struct {
+	SessionID  string `json:"session_id" jsonschema:"Isola session UUID"`
+	Theme      string `json:"theme,omitempty" jsonschema:"Image theme: dark (default) or light"`
+	Direction  string `json:"direction,omitempty" jsonschema:"Flow direction: horizontal (default) or vertical"`
+	Expand     string `json:"expand,omitempty" jsonschema:"origin (default: the opened host's type groups), all (every group and resource), or collapsed (hosts only)"`
+	Types      string `json:"types,omitempty" jsonschema:"Comma-separated resource types to keep: document,script,stylesheet,image,font,xhr,media,other"`
+	FailedOnly bool   `json:"failed_only,omitempty" jsonschema:"Only draw failed requests"`
+	Scale      int    `json:"scale,omitempty" jsonschema:"Raster scale 1-4 (default 2)"`
 }
 
 func (s *Service) toolCreateSession(ctx context.Context, _ *mcp.CallToolRequest, p *createSessionParams) (*mcp.CallToolResult, any, error) {
@@ -326,6 +338,67 @@ func (s *Service) toolScreenshot(ctx context.Context, _ *mcp.CallToolRequest, p 
 	return textResult(string(body))
 }
 
+func (s *Service) toolResourceGraph(ctx context.Context, _ *mcp.CallToolRequest, p *resourceGraphParams) (*mcp.CallToolResult, any, error) {
+	if p == nil || strings.TrimSpace(p.SessionID) == "" {
+		return nil, nil, fmt.Errorf("session_id is required")
+	}
+	if err := s.ensureSession(ctx, p.SessionID); err != nil {
+		return nil, nil, err
+	}
+
+	q := url.Values{}
+	set := func(key, value string) {
+		if v := strings.TrimSpace(value); v != "" {
+			q.Set(key, strings.ToLower(v))
+		}
+	}
+	set("theme", p.Theme)
+	set("direction", p.Direction)
+	set("expand", p.Expand)
+	set("type", p.Types)
+	if p.FailedOnly {
+		q.Set("failed", "1")
+	}
+	if p.Scale > 0 {
+		q.Set("scale", strconv.Itoa(p.Scale))
+	}
+	graphPath := "/graph.png"
+	if enc := q.Encode(); enc != "" {
+		graphPath += "?" + enc
+	}
+
+	body, _, err := s.streamerGET(ctx, p.SessionID, graphPath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// The PNG travels as an image block so a client can render it; the text
+	// block carries the metadata a client without image support can quote.
+	theme := strings.ToLower(strings.TrimSpace(p.Theme))
+	if theme == "" {
+		theme = "dark"
+	}
+	meta := map[string]any{
+		"format": "png",
+		"bytes":  len(body),
+		"theme":  theme,
+	}
+	if cfg, err := png.DecodeConfig(bytes.NewReader(body)); err == nil {
+		meta["width"] = cfg.Width
+		meta["height"] = cfg.Height
+	}
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: string(metaJSON)},
+			&mcp.ImageContent{Data: body, MIMEType: "image/png"},
+		},
+	}, nil, nil
+}
+
 func (s *Service) toolGetNetwork(ctx context.Context, _ *mcp.CallToolRequest, p *getNetworkParams) (*mcp.CallToolResult, any, error) {
 	if p == nil || p.SessionID == "" {
 		return nil, nil, fmt.Errorf("session_id is required")
@@ -443,6 +516,10 @@ func registerTools(server *mcp.Server, svc *Service) {
 		Name:        "get_network",
 		Description: "Network log (optional type, host_contains, limit filters). Full streamer window when unfiltered.",
 	}, svc.toolGetNetwork)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "resource_graph",
+		Description: "Render the captured network as a resource-graph PNG (hosts → resource types → files) and return it as an image block. theme=dark|light, direction=horizontal|vertical, expand=origin|all|collapsed, types=<comma list>, failed_only, scale=1-4.",
+	}, svc.toolResourceGraph)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_links",
 		Description: "List the links (href + text) on the active page so the agent can navigate. Optional limit and host_contains filter; returns the page url and title too.",

@@ -85,6 +85,21 @@ func newFakeStreamer() (*httptest.Server, *streamerHits) {
 			},
 		})
 	})
+	mux.HandleFunc("/graph.png", func(w http.ResponseWriter, r *http.Request) {
+		hits.inc("/graph.png")
+		w.Header().Set("Content-Type", "image/png")
+		w.Write([]byte{
+			0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+			0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+			0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+			0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+			0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
+			0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+			0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+			0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+			0x42, 0x60, 0x82,
+		})
+	})
 	mux.HandleFunc("/links", func(w http.ResponseWriter, r *http.Request) {
 		record("/links", w, map[string]any{
 			"url":   "https://example.com/",
@@ -182,7 +197,7 @@ func TestMCPAllToolsAgainstFakeStreamer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantTools := []string{"create_session", "navigate", "inspect_session", "snapshot", "screenshot", "click", "type", "get_network", "get_links", "close_session"}
+	wantTools := []string{"create_session", "navigate", "inspect_session", "snapshot", "screenshot", "click", "type", "get_network", "resource_graph", "get_links", "close_session"}
 	if len(tools.Tools) != len(wantTools) {
 		t.Fatalf("tools = %d, want %d", len(tools.Tools), len(wantTools))
 	}
@@ -235,6 +250,16 @@ func TestMCPAllToolsAgainstFakeStreamer(t *testing.T) {
 	}
 	if hits.count("/network") < 2 {
 		t.Fatalf("network hits = %d, want >=2 (inspect_session + get_network)", hits.count("/network"))
+	}
+
+	graphBody := callToolText(t, mcpSess, "resource_graph", map[string]any{
+		"session_id": sessionID, "theme": "light", "expand": "all", "scale": 1,
+	})
+	if !strings.Contains(graphBody, `"format":"png"`) || !strings.Contains(graphBody, `"theme":"light"`) {
+		t.Fatalf("resource_graph body: %s", graphBody)
+	}
+	if hits.count("/graph.png") != 1 {
+		t.Fatalf("graph hits = %d, want 1", hits.count("/graph.png"))
 	}
 
 	linksBody := callToolText(t, mcpSess, "get_links", map[string]any{"session_id": sessionID, "limit": 10})

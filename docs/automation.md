@@ -39,6 +39,7 @@ Every request must send `Authorization: Bearer <token>`. Session ownership is ke
 | `click`           | Click by `ref` from the latest snapshot.                                                                                               |
 | `type`            | Type text; optional `ref` to focus first.                                                                                              |
 | `get_network`     | Network log; optional `type`, `host_contains`, `limit` filters.                                                                        |
+| `resource_graph`  | Render the capture as a resource-graph PNG (hosts → resource types → files); `theme`, `direction`, `expand`, `types`, `failed_only`, `scale`. Returns the image plus a metadata block. |
 | `get_links`       | Links on the active page (`href` + text, plus page url/title); optional `limit`, `host_contains`. Each link carries a snapshot `ref` when it can be matched, so `click` and `navigate` are interchangeable. |
 | `close_session`   | Terminate the session and destroy the container.                                                                                       |
 
@@ -49,6 +50,7 @@ Every request must send `Authorization: Bearer <token>`. Session ownership is ke
 | `create_session` | `url`; `tor` (default false) routes the session through Tor — the browser has no unproxied egress, so startup waits for a live circuit; `tor_country` (e.g. `se` or `se,no`) pins Tor exits to those ISO 3166-1 alpha-2 countries and requires `tor`; `wait_ready` (default true); `wait_document` (default true). Returns `session_id`, `tor_enabled`, `tor_country` (the effective pin), `automation_ready`, `document_seen`, and `inspect` when checks succeed. |
 | `navigate`       | `session_id`, `url`; `wait_document` (default true). Retries while the control socket is not ready (HTTP 503).                                                    |
 | `get_network`    | `type` (e.g. `Document`), `host_contains`, `limit`.                                                                                                               |
+| `resource_graph` | `theme` `dark` (default) or `light`; `direction` `horizontal`/`vertical`; `expand` `origin` (default) / `all` / `collapsed`; `types` comma list (`document`, `script`, `stylesheet`, `image`, `font`, `xhr`, `media`, `other`); `failed_only`; `scale` 1–4. Returns an image block with the PNG and a text block carrying `format`, `bytes`, `theme`, `width`, `height`. |
 | `get_links`      | `limit` (default 200, max 1000), `host_contains`. Returns `{url, title, count, links:[{href, text, ref}]}`; `href` values are absolute. `ref` is present when the link maps to a snapshot node (refresh happens automatically), so you can `click` the `ref` or `navigate` to the `href`. |
 | `screenshot`     | `format` `png` or `jpeg`; `quality` 1–100 for JPEG (default 85). Response includes `data_base64`, `mime`, `width`, `height`.                                      |
 | `click` / `type` | `ref` from the **latest** `snapshot` (call `snapshot` again after navigation).                                                                                    |
@@ -106,6 +108,9 @@ get_network     {"session_id":"9f1c2b3d-...","type":"Document","limit":5}
 
 screenshot      {"session_id":"9f1c2b3d-...","format":"jpeg","quality":70}
   → {"format":"jpeg","mime":"image/jpeg","width":1280,"height":720,"data_base64":"/9j/4AAQSk..."}
+
+resource_graph  {"session_id":"9f1c2b3d-...","theme":"light","expand":"all"}
+  → {"format":"png","bytes":184213,"theme":"light","width":2412,"height":986} + image/png block
 
 close_session   {"session_id":"9f1c2b3d-..."}
   → terminated
