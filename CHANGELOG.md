@@ -10,6 +10,8 @@ than reconstructing it at tag time.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-21
+
 ### Added
 
 - Configurable network capture window: `session.network_log_max_entries`
@@ -100,7 +102,8 @@ than reconstructing it at tag time.
 Initial release: a Go control plane that boots a disposable Docker sandbox
 running offscreen Chromium.
 
-[Unreleased]: https://github.com/dm0xa/isola/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/dm0xa/isola/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/dm0xa/isola/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/dm0xa/isola/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/dm0xa/isola/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/dm0xa/isola/releases/tag/v1.0.0
