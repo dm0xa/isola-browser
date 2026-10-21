@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image/png"
 	"net/http"
@@ -17,11 +18,37 @@ import (
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/dm0xa/isola/backend/pkg/graphopts"
 	"github.com/dm0xa/isola/backend/pkg/models"
 )
 
 type Service struct {
 	deps Deps
+
+	// Resource-graph limits, overridable in tests. Zero means the package
+	// defaults.
+	graphTimeout  time.Duration
+	graphMaxBytes int64
+}
+
+// graphLimits resolves the resource-graph deadline and payload cap.
+func (s *Service) graphLimits() (time.Duration, int64) {
+	timeout, maxBytes := s.graphTimeout, s.graphMaxBytes
+	if timeout <= 0 {
+		timeout = graphRenderTimeout
+	}
+	if maxBytes <= 0 {
+		maxBytes = maxGraphBytes
+	}
+	return timeout, maxBytes
+}
+
+// byteLimitLabel renders a byte limit for an error message.
+func byteLimitLabel(n int64) string {
+	if n >= 1<<20 {
+		return fmt.Sprintf("%d MiB", n>>20)
+	}
+	return fmt.Sprintf("%d bytes", n)
 }
 
 func textResult(s string) (*mcp.CallToolResult, any, error) {
@@ -338,6 +365,16 @@ func (s *Service) toolScreenshot(ctx context.Context, _ *mcp.CallToolRequest, p 
 	return textResult(string(body))
 }
 
+const (
+	// graphRenderTimeout matches the REST proxy budget (pkg/api): the streamer
+	// does the same work whichever path asks for it.
+	graphRenderTimeout = 45 * time.Second
+	// maxGraphBytes caps the PNG embedded in one JSON-RPC response. The SDK
+	// base64-encodes it, so 8 MiB becomes ~10.7 MiB on the wire and is held by
+	// both the control plane and the agent.
+	maxGraphBytes = 8 << 20
+)
+
 func (s *Service) toolResourceGraph(ctx context.Context, _ *mcp.CallToolRequest, p *resourceGraphParams) (*mcp.CallToolResult, any, error) {
 	if p == nil || strings.TrimSpace(p.SessionID) == "" {
 		return nil, nil, fmt.Errorf("session_id is required")
@@ -346,10 +383,18 @@ func (s *Service) toolResourceGraph(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, nil, err
 	}
 
+	scale := p.Scale
+	if scale == 0 {
+		scale = graphopts.DefaultScale
+	}
+	if scale < graphopts.MinScale || scale > graphopts.MaxScale {
+		return nil, nil, fmt.Errorf("scale must be %d-%d", graphopts.MinScale, graphopts.MaxScale)
+	}
+
 	q := url.Values{}
 	set := func(key, value string) {
 		if v := strings.TrimSpace(value); v != "" {
-			q.Set(key, strings.ToLower(v))
+			q.Set(key, v)
 		}
 	}
 	set("theme", p.Theme)
@@ -359,29 +404,29 @@ func (s *Service) toolResourceGraph(ctx context.Context, _ *mcp.CallToolRequest,
 	if p.FailedOnly {
 		q.Set("failed", "1")
 	}
-	if p.Scale > 0 {
-		q.Set("scale", strconv.Itoa(p.Scale))
-	}
-	graphPath := "/graph.png"
-	if enc := q.Encode(); enc != "" {
-		graphPath += "?" + enc
-	}
+	q.Set("scale", strconv.Itoa(scale))
 
-	body, _, err := s.streamerGET(ctx, p.SessionID, graphPath)
+	opts, err := graphopts.Parse(q)
 	if err != nil {
+		return nil, nil, err
+	}
+	graphPath := "/graph.png?" + opts.Query().Encode()
+
+	timeout, maxBytes := s.graphLimits()
+	body, _, err := s.streamerGETLimited(ctx, p.SessionID, graphPath, timeout, maxBytes)
+	if err != nil {
+		if errors.Is(err, ErrResponseTooLarge) {
+			return nil, nil, fmt.Errorf("resource graph exceeds the %s limit; retry with scale=1 or expand=collapsed", byteLimitLabel(maxBytes))
+		}
 		return nil, nil, err
 	}
 
 	// The PNG travels as an image block so a client can render it; the text
 	// block carries the metadata a client without image support can quote.
-	theme := strings.ToLower(strings.TrimSpace(p.Theme))
-	if theme == "" {
-		theme = "dark"
-	}
 	meta := map[string]any{
 		"format": "png",
 		"bytes":  len(body),
-		"theme":  theme,
+		"theme":  opts.Theme,
 	}
 	if cfg, err := png.DecodeConfig(bytes.NewReader(body)); err == nil {
 		meta["width"] = cfg.Width

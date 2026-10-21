@@ -125,7 +125,6 @@ var graphThemes = map[string]graphTheme{
 var (
 	fontOnce   sync.Once
 	fontParsed map[string]*opentype.Font
-	fontFaces  = map[string]font.Face{}
 )
 
 func loadFonts() {
@@ -146,11 +145,19 @@ func loadFonts() {
 	})
 }
 
-func face(kind string, size float64) font.Face {
+// face returns a font face for this canvas.
+//
+// Faces are never shared between renders: opentype.Face is documented as not
+// safe for concurrent use (it keeps a glyph cache), and net/http serves each
+// /graph.png request in its own goroutine. A package-level face cache was
+// therefore both a map race and a concurrent glyph-cache corruption. Parsed
+// fonts are immutable and safe to share, so every canvas builds its own faces
+// from the same parsed fonts — cheap, and warm for the rest of that render.
+func (c *gCanvas) face(kind string, size float64) font.Face {
 	loadFonts()
 	px := math.Max(6, math.Round(size))
 	key := fmt.Sprintf("%s:%.0f", kind, px)
-	if f, ok := fontFaces[key]; ok {
+	if f, ok := c.faces[key]; ok {
 		return f
 	}
 	parsed := fontParsed[kind]
@@ -161,7 +168,10 @@ func face(kind string, size float64) font.Face {
 	if err != nil {
 		f, _ = opentype.NewFace(fontParsed["regular"], &opentype.FaceOptions{Size: px, DPI: 72})
 	}
-	fontFaces[key] = f
+	if c.faces == nil {
+		c.faces = map[string]font.Face{}
+	}
+	c.faces[key] = f
 	return f
 }
 
@@ -196,6 +206,8 @@ func fitText(f font.Face, s string, maxW float64) string {
 type gCanvas struct {
 	img   *image.RGBA
 	scale float64
+	// faces is this render's font cache; see face().
+	faces map[string]font.Face
 }
 
 func (c *gCanvas) px(v float64) float64 { return v * c.scale }
@@ -513,11 +525,11 @@ func renderEmptyGraph(opts graphOptions, theme graphTheme, now time.Time) image.
 	img := image.NewRGBA(image.Rect(0, 0, int(w*opts.Scale), int(h*opts.Scale)))
 	c := &gCanvas{img: img, scale: opts.Scale}
 	c.fillRect(0, 0, w, h, theme.Canvas)
-	c.text(face("bold", 14*opts.Scale), 32, 96, theme.Label, "No requests captured yet")
-	c.text(face("regular", 11*opts.Scale), 32, 120, theme.Neutral,
+	c.text(c.face("bold", 14*opts.Scale), 32, 96, theme.Label, "No requests captured yet")
+	c.text(c.face("regular", 11*opts.Scale), 32, 120, theme.Neutral,
 		"Open a page in the session, then request this image again.")
 	if opts.Caption {
-		c.text(face("mono", 10*opts.Scale), 32, 168, theme.Neutral, captionLine("", graphStats{}, opts.Theme, now))
+		c.text(c.face("mono", 10*opts.Scale), 32, 168, theme.Neutral, captionLine("", graphStats{}, opts.Theme, now))
 	}
 	return img
 }
@@ -585,7 +597,7 @@ func paintGraph(layout graphLayout, stats graphStats, origin string, opts graphO
 			}, 1, theme.ColumnLine, 2, 6)
 			if col.Label {
 				label := fmt.Sprintf("L%d", col.Depth)
-				f := face("monob", 9*opts.Scale)
+				f := c.face("monob", 9*opts.Scale)
 				c.text(f, graphPad+col.X-14-c.textW(f, label)/2, graphPad+col.Top-22, theme.ColumnLabel, label)
 			}
 			continue
@@ -596,7 +608,7 @@ func paintGraph(layout graphLayout, stats graphStats, origin string, opts graphO
 		}, 1, theme.ColumnLine, 2, 6)
 		if col.Label {
 			label := fmt.Sprintf("L%d", col.Depth)
-			f := face("monob", 9*opts.Scale)
+			f := c.face("monob", 9*opts.Scale)
 			c.text(f, graphPad+col.X-14-c.textW(f, label)/2, graphPad+col.Top-32, theme.ColumnLabel, label)
 		}
 	}
@@ -621,10 +633,10 @@ func paintGraph(layout graphLayout, stats graphStats, origin string, opts graphO
 		}
 	}
 
-	labelBold := face("bold", 12.5*opts.Scale)
-	smallFace := face("regular", 11.5*opts.Scale)
-	monoFace := face("mono", 10*opts.Scale)
-	monoBold := face("monob", 9*opts.Scale)
+	labelBold := c.face("bold", 12.5*opts.Scale)
+	smallFace := c.face("regular", 11.5*opts.Scale)
+	monoFace := c.face("mono", 10*opts.Scale)
+	monoBold := c.face("monob", 9*opts.Scale)
 
 	for i := range layout.Nodes {
 		n := &layout.Nodes[i]
@@ -708,10 +720,10 @@ func paintGraph(layout graphLayout, stats graphStats, origin string, opts graphO
 	}
 
 	if opts.Caption {
-		c.text(face("mono", 10*opts.Scale), graphPad, h-graphFooter/2+3,
+		c.text(c.face("mono", 10*opts.Scale), graphPad, h-graphFooter/2+3,
 			theme.Neutral, captionLine(origin, stats, opts.Theme, now))
 		mark := "isola"
-		mf := face("bold", 12*opts.Scale)
+		mf := c.face("bold", 12*opts.Scale)
 		c.text(mf, w-graphPad-c.textW(mf, mark), h-graphFooter/2+4, theme.Neutral, mark)
 	}
 	return img

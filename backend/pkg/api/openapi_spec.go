@@ -312,7 +312,7 @@ func getOpenAPISpec() []byte {
       "get": {
         "tags": ["Sessions"],
         "summary": "Render the captured network as a resource-graph PNG",
-        "description": "Renders the session's network log as a PNG: hosts, resource-type groups and files, laid out left-to-right (or top-to-bottom). The image is produced by the streamer, which holds the capture, and is never cached. Requires owner authorization (X-Session-Token).",
+        "description": "Renders the session's network log as a PNG: hosts, resource-type groups and files, laid out left-to-right (or top-to-bottom). The image is produced by the streamer, which holds the capture, and is never cached. Every option is validated before proxying; renders are limited to 2 in flight per session (429) and 45 seconds (504). Requires owner authorization (X-Session-Token).",
         "operationId": "getResourceGraph",
         "security": [{ "sessionToken": [] }],
         "parameters": [
@@ -323,8 +323,8 @@ func getOpenAPISpec() []byte {
           { "name": "type", "in": "query", "schema": { "type": "string" }, "description": "Comma-separated resource types to keep: document,script,stylesheet,image,font,xhr,media,other" },
           { "name": "failed", "in": "query", "schema": { "type": "string", "enum": ["0", "1"] }, "description": "Draw only failed requests" },
           { "name": "scale", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 4, "default": 2 }, "description": "Raster scale" },
-          { "name": "width", "in": "query", "schema": { "type": "integer", "default": 1400 }, "description": "Layout width hint used to wrap long sibling runs" },
-          { "name": "height", "in": "query", "schema": { "type": "integer", "default": 900 }, "description": "Layout height hint used to wrap long sibling runs" },
+          { "name": "width", "in": "query", "schema": { "type": "integer", "minimum": 320, "maximum": 8000, "default": 1400 }, "description": "Layout width hint used to wrap long sibling runs" },
+          { "name": "height", "in": "query", "schema": { "type": "integer", "minimum": 320, "maximum": 8000, "default": 900 }, "description": "Layout height hint used to wrap long sibling runs" },
           { "name": "origin", "in": "query", "schema": { "type": "string" }, "description": "Override the host the graph starts from" },
           { "name": "caption", "in": "query", "schema": { "type": "string", "enum": ["0", "1"], "default": "1" }, "description": "Draw the provenance caption (origin, counts, theme, UTC time)" }
         ],
@@ -332,8 +332,11 @@ func getOpenAPISpec() []byte {
           "200": { "description": "PNG image", "content": { "image/png": { "schema": { "type": "string", "format": "binary" } } } },
           "400": { "description": "Invalid graph options", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "403": { "description": "Not authorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-          "404": { "description": "Session not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
-          "409": { "description": "Session container is not ready", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+          "404": { "description": "Session not found or no longer active", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "409": { "description": "Session container is not ready (session is still starting)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "429": { "description": "A graph render is already running for this session (graph_render_busy)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "502": { "description": "Render failed or the image exceeded the output limit (graph_render_failed)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "504": { "description": "Render timed out (graph_render_timeout)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
     },

@@ -24,6 +24,13 @@ publishes the section matching the tag.
 
 ### Changed
 
+- Resource graph requests are validated by the API before they reach the
+  streamer, and a render is now bounded: at most two run concurrently per session
+  (`429 graph_render_busy`), each has a 45 s budget (`504 graph_render_timeout`),
+  and an image over 32 MiB is refused instead of buffered. A session whose
+  container is still starting returns the documented `409 container_not_ready`
+  rather than `404`. The `resource_graph` MCP tool enforces `scale` 1–4 locally,
+  applies the same 45 s deadline and caps the embedded PNG at 8 MiB.
 - The installer falls back to `~/.isola` when the invoking user cannot create
   `/opt/isola`, so an unprivileged install works on any host without setting
   `ISOLA_INSTALL_DIR`.
@@ -41,6 +48,17 @@ publishes the section matching the tag.
 
 ### Fixed
 
+- Two concurrent resource-graph renders could kill the whole streamer, taking
+  every attached video stream with them: the font-face cache was an
+  unsynchronised map, and each cache entry was an `opentype.Face`, which is not
+  safe for concurrent use. Faces are now built per render from shared immutable
+  parsed fonts, and the graph/font tests run under the race detector in CI.
+- `GET /api/sessions/{id}/graph.png` no longer reports success for an image it
+  did not deliver: the body is read in full before the status line is written,
+  responses carry `Content-Length`, a truncated or failed render is `502`, and
+  the 15 s server write deadline no longer cuts off a large graph. Renderer
+  failures are no longer reported as `400 invalid_graph_options`, which is now
+  reserved for real option errors.
 - Installation aborted when the default install directory could not be created
   by the invoking user.
 - Fullscreen filled the screen with black bands above and below the stream: the

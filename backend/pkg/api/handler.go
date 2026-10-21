@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -14,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dm0xa/isola/backend/pkg/config"
+	"github.com/dm0xa/isola/backend/pkg/graphopts"
 	isomw "github.com/dm0xa/isola/backend/pkg/middleware"
 	"github.com/dm0xa/isola/backend/pkg/models"
 	"github.com/dm0xa/isola/backend/pkg/orchestrator"
@@ -77,11 +80,27 @@ type Handler struct {
 	// warmPinWarnOnce logs the DNS-pin downgrade for warm claims once per
 	// process instead of on every claim.
 	warmPinWarnOnce sync.Once
+
+	// Resource-graph proxy limits. Fields rather than consts so tests can
+	// shrink them; New installs the production defaults.
+	graphRenderTimeout time.Duration
+	maxGraphBytes      int64
+	maxGraphInFlight   int
+
+	// graphInFlight counts in-flight renders per session so one caller cannot
+	// run several renders at once inside a memory-capped sandbox.
+	graphMu         sync.Mutex
+	graphInFlightBy map[uuid.UUID]int
 }
 
 // New creates a new Handler.
 func New(store *store.Store, cache *store.MemCache, orch *orchestrator.Orchestrator, cfg *config.Config) *Handler {
-	return &Handler{store: store, cache: cache, orch: orch, cfg: cfg}
+	return &Handler{
+		store: store, cache: cache, orch: orch, cfg: cfg,
+		graphRenderTimeout: defaultGraphRenderTimeout,
+		maxGraphBytes:      defaultMaxGraphBytes,
+		maxGraphInFlight:   defaultMaxGraphInFlight,
+	}
 }
 
 // SetWarmPool attaches the warm-container pool. Optional — when unset every
@@ -890,16 +909,83 @@ func (h *Handler) ResizeSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+const (
+	// defaultGraphRenderTimeout bounds one graph render end to end. It stays
+	// below the 60 s API-group timeout that internal/app installs, so the
+	// handler reports 504 graph_render_timeout instead of the request being cut
+	// off by the middleware.
+	defaultGraphRenderTimeout = 45 * time.Second
+	// defaultMaxGraphBytes caps one PNG. A real capture renders a few MB; the
+	// cap turns a runaway render into 502 instead of buffering without bound.
+	defaultMaxGraphBytes = 32 << 20
+	// defaultMaxGraphInFlight serialises renders per session. Render cost grows
+	// with the capture size and the sandbox is memory-capped, so concurrent
+	// renders are what push it into the OOM killer.
+	defaultMaxGraphInFlight = 2
+)
+
+// acquireGraphSlot reserves one render slot for a session.
+func (h *Handler) acquireGraphSlot(id uuid.UUID) bool {
+	if h.maxGraphInFlight <= 0 {
+		return true
+	}
+	h.graphMu.Lock()
+	defer h.graphMu.Unlock()
+	if h.graphInFlightBy == nil {
+		h.graphInFlightBy = make(map[uuid.UUID]int)
+	}
+	if h.graphInFlightBy[id] >= h.maxGraphInFlight {
+		return false
+	}
+	h.graphInFlightBy[id]++
+	return true
+}
+
+// releaseGraphSlot returns a slot taken by acquireGraphSlot.
+func (h *Handler) releaseGraphSlot(id uuid.UUID) {
+	if h.maxGraphInFlight <= 0 {
+		return
+	}
+	h.graphMu.Lock()
+	defer h.graphMu.Unlock()
+	if n := h.graphInFlightBy[id] - 1; n > 0 {
+		h.graphInFlightBy[id] = n
+	} else {
+		delete(h.graphInFlightBy, id)
+	}
+}
+
 // GetResourceGraph handles GET /api/sessions/{id}/graph.png.
 //
 // The graph is rendered by the streamer, which holds the network log, and this
 // handler only proxies it: the control plane never has the captured requests.
-// Query parameters (theme, direction, expand, type, failed, scale, width,
-// height, origin, caption) are passed through untouched; the streamer owns
-// their validation and returns 400 with a reason when one is invalid.
+// Options are validated here (see pkg/graphopts) and forwarded as a canonical
+// query, so the renderer never sees an unchecked value. The response is
+// buffered before the status line is written: a mid-transfer failure must not
+// look like a complete PNG.
 func (h *Handler) GetResourceGraph(w http.ResponseWriter, r *http.Request) {
-	session, ok := h.ownedRunningSession(w, r)
+	session, ok := h.resolveSession(w, r)
 	if !ok {
+		return
+	}
+
+	// A session that is still starting exists and the caller proved ownership,
+	// so the documented answer is 409, not 404. A finished session answers 404
+	// before ownership is checked: finalization deletes its control token, so
+	// asking for it would only turn a clean 404 into a misleading 403.
+	switch session.Status {
+	case models.SessionStatusRunning:
+		if !h.authorizeOwner(w, r, session) {
+			return
+		}
+	case models.SessionStatusProvisioning:
+		if !h.authorizeOwner(w, r, session) {
+			return
+		}
+		respondError(w, http.StatusConflict, "container_not_ready")
+		return
+	default:
+		respondError(w, http.StatusNotFound, "session_not_found")
 		return
 	}
 
@@ -909,11 +995,26 @@ func (h *Handler) GetResourceGraph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstream := "http://" + addr + "/graph.png"
-	if r.URL.RawQuery != "" {
-		upstream += "?" + r.URL.RawQuery
+	opts, err := graphopts.Parse(r.URL.Query())
+	if err != nil {
+		respondErrorMessage(w, http.StatusBadRequest, "invalid_graph_options", err.Error())
+		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+
+	if !h.acquireGraphSlot(session.ID) {
+		w.Header().Set("Retry-After", "1")
+		respondError(w, http.StatusTooManyRequests, "graph_render_busy")
+		return
+	}
+	slotHeld := true
+	defer func() {
+		if slotHeld {
+			h.releaseGraphSlot(session.ID)
+		}
+	}()
+
+	upstream := "http://" + addr + "/graph.png?" + opts.Query().Encode()
+	ctx, cancel := context.WithTimeout(r.Context(), h.graphRenderTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstream, nil)
 	if err != nil {
@@ -922,6 +1023,11 @@ func (h *Handler) GetResourceGraph(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			log.Printf("resource graph: render timed out after %v", h.graphRenderTimeout)
+			respondError(w, http.StatusGatewayTimeout, "graph_render_timeout")
+			return
+		}
 		log.Printf("resource graph: streamer request: %v", err)
 		respondError(w, http.StatusBadGateway, "graph_render_failed")
 		return
@@ -930,17 +1036,65 @@ func (h *Handler) GetResourceGraph(w http.ResponseWriter, r *http.Request) {
 
 	if resp.StatusCode >= 300 {
 		reason, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		respondErrorMessage(w, http.StatusBadRequest, "invalid_graph_options", strings.TrimSpace(string(reason)))
+		drainBody(resp.Body)
+		switch {
+		case resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity:
+			respondErrorMessage(w, http.StatusBadRequest, "invalid_graph_options", strings.TrimSpace(string(reason)))
+		case resp.StatusCode == http.StatusTooManyRequests:
+			w.Header().Set("Retry-After", "1")
+			respondError(w, http.StatusTooManyRequests, "graph_render_busy")
+		default:
+			log.Printf("resource graph: streamer returned %d: %s", resp.StatusCode, strings.TrimSpace(string(reason)))
+			respondErrorMessage(w, http.StatusBadGateway, "graph_render_failed",
+				fmt.Sprintf("renderer returned HTTP %d", resp.StatusCode))
+		}
 		return
 	}
 
+	// Buffer before committing the status: a truncated read becomes a 502, not
+	// a 200 that a client cannot tell from a complete image. The limit also
+	// caps what one render can pin in the control plane.
+	var buf bytes.Buffer
+	n, err := io.Copy(&buf, io.LimitReader(resp.Body, h.maxGraphBytes+1))
+	if err != nil {
+		log.Printf("resource graph: read body: %v", err)
+		respondError(w, http.StatusBadGateway, "graph_render_failed")
+		return
+	}
+	if n > h.maxGraphBytes {
+		log.Printf("resource graph: response exceeded %d bytes", h.maxGraphBytes)
+		respondErrorMessage(w, http.StatusBadGateway, "graph_render_failed",
+			fmt.Sprintf("rendered image exceeds %d MiB; retry with a smaller scale or expand=collapsed", h.maxGraphBytes>>20))
+		return
+	}
+
+	// The render is finished; free the slot before writing to the client so a
+	// slow reader cannot block this session's next render.
+	h.releaseGraphSlot(session.ID)
+	slotHeld = false
+
 	// The image is a snapshot of a live capture: never cache it.
 	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 	setSensitiveNoStore(w)
-	w.WriteHeader(http.StatusOK)
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		log.Printf("resource graph: copy body: %v", err)
+	// A large capture can outlast the server's 15 s write deadline. Extend it
+	// for this route only: the render is already bounded by graphRenderTimeout
+	// and the body is complete, so a bounded extra window delivers the image
+	// whole without leaving the connection open indefinitely.
+	writeDeadline := time.Now().Add(h.graphRenderTimeout + 30*time.Second)
+	if err := http.NewResponseController(w).SetWriteDeadline(writeDeadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		log.Printf("resource graph: extend write deadline: %v", err)
 	}
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		log.Printf("resource graph: write body: %v", err)
+	}
+}
+
+// drainBody reads a bounded remainder of an upstream body so the connection
+// can be reused instead of dropped after an error response.
+func drainBody(body io.Reader) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, 32<<10))
 }
 
 // ToggleAudio handles POST /api/sessions/{id}/audio to toggle Opus audio capture on/off.
@@ -1549,26 +1703,50 @@ func (h *Handler) ensureControlToken(ctx context.Context, session *models.Sessio
 // caller owns. It writes the error response itself, so a handler only has to
 // return when ok is false.
 func (h *Handler) ownedRunningSession(w http.ResponseWriter, r *http.Request) (*models.Session, bool) {
+	session, ok := h.resolveSession(w, r)
+	if !ok {
+		return nil, false
+	}
+	// Status first: a non-running session answers 404 without revealing whether
+	// the caller holds its token.
+	if session.Status != models.SessionStatusRunning {
+		respondError(w, http.StatusNotFound, "session_not_found")
+		return nil, false
+	}
+	if !h.authorizeOwner(w, r, session) {
+		return nil, false
+	}
+	return session, true
+}
+
+// resolveSession parses {id} and loads the row, writing the error itself.
+func (h *Handler) resolveSession(w http.ResponseWriter, r *http.Request) (*models.Session, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "invalid_session_id")
 		return nil, false
 	}
 	session, err := h.store.Sessions.GetSession(r.Context(), id)
-	if err != nil || session == nil || session.Status != models.SessionStatusRunning {
+	if err != nil || session == nil {
 		respondError(w, http.StatusNotFound, "session_not_found")
 		return nil, false
 	}
+	return session, true
+}
+
+// authorizeOwner proves the caller holds the session's control token, writing
+// the error itself.
+func (h *Handler) authorizeOwner(w http.ResponseWriter, r *http.Request, session *models.Session) bool {
 	ownerAuthorized, err := h.authorizeSessionOwner(r, session)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "internal_error")
-		return nil, false
+		return false
 	}
 	if !ownerAuthorized {
 		respondError(w, http.StatusForbidden, "session_does_not_belong_to_you")
-		return nil, false
+		return false
 	}
-	return session, true
+	return true
 }
 
 func (h *Handler) authorizeSessionOwner(r *http.Request, session *models.Session) (bool, error) {
@@ -1665,6 +1843,10 @@ func errorMessageForCode(code string) string {
 		return "Session container is not ready"
 	case "graph_render_failed":
 		return "Failed to render the resource graph"
+	case "graph_render_busy":
+		return "A resource graph render is already running for this session"
+	case "graph_render_timeout":
+		return "Resource graph render timed out"
 	case "invalid_graph_options":
 		return "Invalid resource graph options"
 	case "audio_toggle_failed":

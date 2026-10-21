@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,14 @@ import (
 
 	"github.com/dm0xa/isola/backend/pkg/store"
 )
+
+// defaultStreamerTimeout bounds one streamer HTTP call. Without it a wedged
+// renderer pins the MCP handler until the client gives up.
+const defaultStreamerTimeout = 15 * time.Second
+
+// ErrResponseTooLarge reports that a streamer response exceeded the caller's
+// byte budget. Callers turn it into an actionable tool error.
+var ErrResponseTooLarge = errors.New("streamer response too large")
 
 func controlTokenKey(sessionID string) string {
 	return fmt.Sprintf("session:%s:control_token", sessionID)
@@ -33,11 +42,24 @@ func (s *Service) containerAddr(ctx context.Context, sessionID string) (string, 
 }
 
 func (s *Service) streamerGET(ctx context.Context, sessionID, path string) ([]byte, int, error) {
+	return s.streamerGETLimited(ctx, sessionID, path, defaultStreamerTimeout, 0)
+}
+
+// streamerGETLimited is streamerGET with an explicit deadline and byte cap.
+// maxBytes <= 0 means unbounded.
+func (s *Service) streamerGETLimited(ctx context.Context, sessionID, path string, timeout time.Duration, maxBytes int64) ([]byte, int, error) {
 	addr, err := s.containerAddr(ctx, sessionID)
 	if err != nil {
 		return nil, 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addr+path, nil)
+
+	reqCtx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		reqCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "http://"+addr+path, nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -46,7 +68,16 @@ func (s *Service) streamerGET(ctx context.Context, sessionID, path string) ([]by
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+
+	var body []byte
+	if maxBytes > 0 {
+		body, err = io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+		if err == nil && int64(len(body)) > maxBytes {
+			return body, resp.StatusCode, fmt.Errorf("%w: %s exceeds %d bytes", ErrResponseTooLarge, path, maxBytes)
+		}
+	} else {
+		body, err = io.ReadAll(resp.Body)
+	}
 	if err != nil {
 		return nil, resp.StatusCode, err
 	}

@@ -136,11 +136,16 @@ curl -s "http://localhost:8080/api/sessions/$ID/graph.png?failed=1&type=script,s
   -H "X-Session-Token: $TOKEN" -o failures.png
 ```
 
-The response is `Content-Type: image/png` with `Cache-Control: no-store` — a
-live capture is never cached. A failed render returns
-`502 graph_render_failed`; an unknown or out-of-range option returns
-`400 invalid_graph_options`, whose message carries the renderer's own reason
-(for example `theme must be dark or light`).
+The response is `Content-Type: image/png` with `Cache-Control: no-store` and a
+`Content-Length` — a live capture is never cached, and a truncated render is an
+error rather than a short image. Options are validated by the API before
+proxying: an unknown or out-of-range option returns
+`400 invalid_graph_options`, whose message carries the reason (for example
+`theme must be dark or light`). A failed render, or an image larger than 32 MiB,
+returns `502 graph_render_failed`; a render that exceeds 45 seconds returns
+`504 graph_render_timeout`. Renders are serialised per session — at most two run
+at once, and a further concurrent request gets `429 graph_render_busy` with
+`Retry-After`.
 
 | Parameter | Values | Default | Meaning |
 | :--- | :--- | :--- | :--- |
@@ -155,8 +160,9 @@ live capture is never cached. A failed render returns
 | `caption` | `0`, `1` | `1` | Draw the provenance line (origin, counts, theme, UTC time). |
 
 A session whose container is still starting returns `409`
-(`container_not_ready`). MCP clients get the same image from the
-`resource_graph` tool ([Automation → tools](automation.md#tools)).
+(`container_not_ready`); a terminated session returns `404`. MCP clients get the
+same image from the `resource_graph` tool
+([Automation → tools](automation.md#tools)).
 
 ## Shares
 
