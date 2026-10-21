@@ -458,7 +458,11 @@
     state.clock = setInterval(() => {
       state.remaining = Math.max(0, state.remaining - 1);
       updateClock();
-      if (state.remaining === 0) stopClock();
+      if (state.remaining === 0) {
+        stopClock();
+        // Production redirects to the new-session page when the clock expires.
+        endSession();
+      }
     }, 1000);
   }
 
