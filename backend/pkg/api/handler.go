@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 	"net"
@@ -104,6 +105,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Patch("/sessions/{id}", h.ExtendSession)
 		r.Post("/sessions/{id}/resize", h.ResizeSession)
 		r.Post("/sessions/{id}/audio", h.ToggleAudio)
+		r.Get("/sessions/{id}/graph.png", h.GetResourceGraph)
 		r.Delete("/sessions/{id}", h.DeleteSession)
 
 		// Share management for a session
@@ -842,24 +844,8 @@ func ClampResizeRequest(reqWidth, reqHeight int, sessionResolution string) (int,
 
 // ResizeSession handles POST /api/sessions/{id}/resize.
 func (h *Handler) ResizeSession(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid_session_id")
-		return
-	}
-
-	session, err := h.store.Sessions.GetSession(r.Context(), id)
-	if err != nil || session == nil || session.Status != models.SessionStatusRunning {
-		respondError(w, http.StatusNotFound, "session_not_found")
-		return
-	}
-	ownerAuthorized, err := h.authorizeSessionOwner(r, session)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "internal_error")
-		return
-	}
-	if !ownerAuthorized {
-		respondError(w, http.StatusForbidden, "session_does_not_belong_to_you")
+	session, ok := h.ownedRunningSession(w, r)
+	if !ok {
 		return
 	}
 	if session.ContainerID == "" {
@@ -902,6 +888,59 @@ func (h *Handler) ResizeSession(w http.ResponseWriter, r *http.Request) {
 		"height":           effectiveH,
 		"clamped":          clamped,
 	})
+}
+
+// GetResourceGraph handles GET /api/sessions/{id}/graph.png.
+//
+// The graph is rendered by the streamer, which holds the network log, and this
+// handler only proxies it: the control plane never has the captured requests.
+// Query parameters (theme, direction, expand, type, failed, scale, width,
+// height, origin, caption) are passed through untouched; the streamer owns
+// their validation and returns 400 with a reason when one is invalid.
+func (h *Handler) GetResourceGraph(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.ownedRunningSession(w, r)
+	if !ok {
+		return
+	}
+
+	addr, err := h.cache.Get(r.Context(), fmt.Sprintf("session:%s", session.ID.String()))
+	if err != nil || addr == "" {
+		respondError(w, http.StatusConflict, "container_not_ready")
+		return
+	}
+
+	upstream := "http://" + addr + "/graph.png"
+	if r.URL.RawQuery != "" {
+		upstream += "?" + r.URL.RawQuery
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstream, nil)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("resource graph: streamer request: %v", err)
+		respondError(w, http.StatusBadGateway, "graph_render_failed")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		reason, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		respondErrorMessage(w, http.StatusBadRequest, "invalid_graph_options", strings.TrimSpace(string(reason)))
+		return
+	}
+
+	// The image is a snapshot of a live capture: never cache it.
+	w.Header().Set("Content-Type", "image/png")
+	setSensitiveNoStore(w)
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		log.Printf("resource graph: copy body: %v", err)
+	}
 }
 
 // ToggleAudio handles POST /api/sessions/{id}/audio to toggle Opus audio capture on/off.
@@ -1506,6 +1545,32 @@ func (h *Handler) ensureControlToken(ctx context.Context, session *models.Sessio
 	return token, nil
 }
 
+// ownedRunningSession resolves the {id} path parameter to a running session the
+// caller owns. It writes the error response itself, so a handler only has to
+// return when ok is false.
+func (h *Handler) ownedRunningSession(w http.ResponseWriter, r *http.Request) (*models.Session, bool) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid_session_id")
+		return nil, false
+	}
+	session, err := h.store.Sessions.GetSession(r.Context(), id)
+	if err != nil || session == nil || session.Status != models.SessionStatusRunning {
+		respondError(w, http.StatusNotFound, "session_not_found")
+		return nil, false
+	}
+	ownerAuthorized, err := h.authorizeSessionOwner(r, session)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "internal_error")
+		return nil, false
+	}
+	if !ownerAuthorized {
+		respondError(w, http.StatusForbidden, "session_does_not_belong_to_you")
+		return nil, false
+	}
+	return session, true
+}
+
 func (h *Handler) authorizeSessionOwner(r *http.Request, session *models.Session) (bool, error) {
 	token := extractSessionToken(r)
 	if token == "" {
@@ -1598,6 +1663,10 @@ func errorMessageForCode(code string) string {
 		return "Failed to resize session"
 	case "container_not_ready":
 		return "Session container is not ready"
+	case "graph_render_failed":
+		return "Failed to render the resource graph"
+	case "invalid_graph_options":
+		return "Invalid resource graph options"
 	case "audio_toggle_failed":
 		return "Failed to toggle audio"
 	case "audio_unsupported":

@@ -308,6 +308,35 @@ func getOpenAPISpec() []byte {
         }
       }
     },
+    "/api/sessions/{id}/graph.png": {
+      "get": {
+        "tags": ["Sessions"],
+        "summary": "Render the captured network as a resource-graph PNG",
+        "description": "Renders the session's network log as a PNG: hosts, resource-type groups and files, laid out left-to-right (or top-to-bottom). The image is produced by the streamer, which holds the capture, and is never cached. Requires owner authorization (X-Session-Token).",
+        "operationId": "getResourceGraph",
+        "security": [{ "sessionToken": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Session ID" },
+          { "name": "theme", "in": "query", "schema": { "type": "string", "enum": ["dark", "light"], "default": "dark" }, "description": "Image theme" },
+          { "name": "direction", "in": "query", "schema": { "type": "string", "enum": ["horizontal", "vertical"], "default": "horizontal" }, "description": "Flow direction" },
+          { "name": "expand", "in": "query", "schema": { "type": "string", "enum": ["origin", "all", "collapsed"], "default": "origin" }, "description": "origin = the opened host's type groups, all = every group and resource, collapsed = hosts only" },
+          { "name": "type", "in": "query", "schema": { "type": "string" }, "description": "Comma-separated resource types to keep: document,script,stylesheet,image,font,xhr,media,other" },
+          { "name": "failed", "in": "query", "schema": { "type": "string", "enum": ["0", "1"] }, "description": "Draw only failed requests" },
+          { "name": "scale", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 4, "default": 2 }, "description": "Raster scale" },
+          { "name": "width", "in": "query", "schema": { "type": "integer", "default": 1400 }, "description": "Layout width hint used to wrap long sibling runs" },
+          { "name": "height", "in": "query", "schema": { "type": "integer", "default": 900 }, "description": "Layout height hint used to wrap long sibling runs" },
+          { "name": "origin", "in": "query", "schema": { "type": "string" }, "description": "Override the host the graph starts from" },
+          { "name": "caption", "in": "query", "schema": { "type": "string", "enum": ["0", "1"], "default": "1" }, "description": "Draw the provenance caption (origin, counts, theme, UTC time)" }
+        ],
+        "responses": {
+          "200": { "description": "PNG image", "content": { "image/png": { "schema": { "type": "string", "format": "binary" } } } },
+          "400": { "description": "Invalid graph options", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "Not authorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Session not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "409": { "description": "Session container is not ready", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
     "/api/sessions/{id}/shares": {
       "get": {
         "tags": ["Shares"],

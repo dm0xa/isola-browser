@@ -23,6 +23,7 @@ Base URL for a local deployment: `http://localhost:8080`.
 | `PATCH` | `/api/sessions/{id}` | session | Extend the session TTL. |
 | `POST` | `/api/sessions/{id}/resize` | session | Change the capture resolution. |
 | `POST` | `/api/sessions/{id}/audio` | session | Toggle audio capture. |
+| `GET` | `/api/sessions/{id}/graph.png` | session | Render the captured network as a resource-graph PNG (`theme`, `direction`, `expand`, `type`, `failed`, `scale`). |
 | `DELETE` | `/api/sessions/{id}` | session | Terminate the session. |
 | `POST` | `/api/sessions/{id}/shares` | session | Create a view-only share link. |
 | `GET` | `/api/sessions/{id}/shares` | session | List share links. |
@@ -108,6 +109,39 @@ curl -s -X POST http://localhost:8080/api/sessions/$ID/audio \
 # Terminate
 curl -s -X DELETE http://localhost:8080/api/sessions/$ID -H "X-Session-Token: $TOKEN"
 ```
+
+## Resource graph image
+
+`GET /api/sessions/{id}/graph.png` renders the session's captured network as a
+PNG: the opened host, its resource-type groups, and the files behind them. The
+image is produced by the streamer (which holds the capture) and is never cached,
+so it always reflects the current window.
+
+```bash
+# Light theme, every host and group expanded, 3× raster
+curl -s "http://localhost:8080/api/sessions/$ID/graph.png?theme=light&expand=all&scale=3" \
+  -H "X-Session-Token: $TOKEN" -o graph.png
+
+# Only the failing scripts and stylesheets, flowing top to bottom
+curl -s "http://localhost:8080/api/sessions/$ID/graph.png?failed=1&type=script,stylesheet&direction=vertical" \
+  -H "X-Session-Token: $TOKEN" -o failures.png
+```
+
+| Parameter | Values | Default | Meaning |
+| :--- | :--- | :--- | :--- |
+| `theme` | `dark`, `light` | `dark` | Image palette. |
+| `direction` | `horizontal`, `vertical` | `horizontal` | Flow of the request chain. |
+| `expand` | `origin`, `all`, `collapsed` | `origin` | `origin` shows the opened host's type groups, `all` opens every group to its files, `collapsed` draws hosts only. |
+| `type` | comma list of `document`, `script`, `stylesheet`, `image`, `font`, `xhr`, `media`, `other` | all | Keep only these resource types. |
+| `failed` | `0`, `1` | `0` | Draw only failed requests. |
+| `scale` | `1`–`4` | `2` | Raster scale (1× is logical size). |
+| `width`, `height` | 320–8000 | `1400`, `900` | Layout hints that decide where long sibling runs wrap. |
+| `origin` | hostname | the opened page | Start the graph from another host. |
+| `caption` | `0`, `1` | `1` | Draw the provenance line (origin, counts, theme, UTC time). |
+
+Invalid options return `400` with the streamer's reason; a session whose
+container is still starting returns `409` (`container_not_ready`). The same
+image is available to MCP clients as the `resource_graph` tool.
 
 ## Shares
 
