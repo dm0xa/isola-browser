@@ -50,6 +50,28 @@ func TestResizeRekeysEncoder(t *testing.T) {
 	waitForFanout(t, 1, 1)
 }
 
+// TestFrameMatchesRun pins the invariant that keeps a re-keyed encoder sane: a
+// run may only be fed frames composed at its own geometry. Feeding anything
+// else shifts every row of ffmpeg's raw input and corrupts the rest of the run.
+func TestFrameMatchesRun(t *testing.T) {
+	key := runKey{width: 1024, height: 768}
+	cases := []struct {
+		stride, height uint32
+		want           bool
+	}{
+		{1024 * 4, 768, true},
+		{1280 * 4, 768, false}, // the pre-resize surface
+		{1024 * 4, 720, false},
+		{1024*4 + 64, 768, false}, // padded stride is not this run's geometry
+	}
+	for _, c := range cases {
+		if got := frameMatchesRun(c.stride, c.height, key); got != c.want {
+			t.Errorf("frameMatchesRun(stride=%d, height=%d) = %v, want %v",
+				c.stride, c.height, got, c.want)
+		}
+	}
+}
+
 // TestResizeValidation pins the boundaries the runner and encoder rely on:
 // odd sizes are rounded down (H.264 4:2:0 cannot encode them) and anything
 // outside the supported range is refused instead of reaching the encoder.

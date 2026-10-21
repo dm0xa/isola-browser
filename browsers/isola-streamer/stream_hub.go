@@ -129,6 +129,9 @@ type streamRun struct {
 	// started records that the pumps were launched; a run killed before that
 	// point has nothing to wait for in stop().
 	started bool
+	// geometryWaitLogged is set once when the frame pump starts waiting for a
+	// producer geometry that matches this run's key. Owned by that pump alone.
+	geometryWaitLogged bool
 
 	codec     string
 	encW      int
@@ -675,6 +678,15 @@ func (r *streamRun) startPumps() {
 	}()
 }
 
+// frameMatchesRun reports whether a composed surface of (stride, height) is the
+// geometry this run's encoder was started with. The pump must never feed a
+// frame of any other shape: ffmpeg's raw input has a fixed row length, so a
+// wider or taller frame shifts every row after the first and corrupts the
+// encode for the rest of the run's life.
+func frameMatchesRun(stride, height uint32, key runKey) bool {
+	return int(stride) == key.width*4 && int(height) == key.height
+}
+
 // pumpFrames feeds the run's ffmpeg at the encode rate, from the broadcaster's
 // composed surface. Damage updates are merged centrally, so this side only has
 // to copy the finished image and hand it over. Snapshot buffers are recycled,
@@ -744,6 +756,21 @@ func (r *streamRun) pumpFrames(wg *sync.WaitGroup) {
 		// Re-arm the buffers when the surface geometry changes (first frame,
 		// resize, producer restart).
 		if stride, height, ok := r.bc.SurfaceDims(); ok {
+			// The encoder's input geometry is fixed in its argv. Writing a frame
+			// of any other shape shifts every row after the first in the raw
+			// BGRA stream, which corrupts the encode for the rest of the run's
+			// life — so wait for the producer to reach this run's geometry. A
+			// viewport resize re-keys the run, and the runner's first frame at
+			// the new size is a full repaint, so the wait is a frame or two.
+			if !frameMatchesRun(stride, height, r.key) {
+				if !r.geometryWaitLogged {
+					r.geometryWaitLogged = true
+					log.Printf("ws: waiting for producer geometry %dx%d (surface is %dx%d)",
+						r.key.width, r.key.height, int(stride)/4, height)
+				}
+				r.skippedTicks.Add(1)
+				return
+			}
 			if want := int(stride) * int(height); want != surfaceSize {
 				surfaceSize = want
 				// Buffers sized for the old geometry are unusable.
