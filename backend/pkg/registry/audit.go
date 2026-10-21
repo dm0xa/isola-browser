@@ -6,7 +6,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/dm0xa/isola/backend/pkg/plugin"
+	"github.com/dm0xa/isola-browser/backend/pkg/plugin"
 )
 
 // zerologAuditLogger writes audit events as structured zerolog entries. It

@@ -9,7 +9,7 @@
 package modulesdk
 
 import (
-	"github.com/dm0xa/isola/backend/pkg/plugin"
+	"github.com/dm0xa/isola-browser/backend/pkg/plugin"
 )
 
 // APIVersion is the host↔module contract version this SDK implements.

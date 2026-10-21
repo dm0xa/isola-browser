@@ -1,7 +1,7 @@
 # Contributing
 
 Isola is MIT. Issues and pull requests are welcome on
-[dm0xa/isola](https://github.com/dm0xa/isola).
+[dm0xa/isola-browser](https://github.com/dm0xa/isola-browser).
 
 ## How to run it
 

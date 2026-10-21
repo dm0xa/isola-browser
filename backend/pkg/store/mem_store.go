@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
-	"github.com/dm0xa/isola/backend/pkg/models"
+	"github.com/dm0xa/isola-browser/backend/pkg/models"
 )
 
 // MemStore is an in-memory session store implementing SessionStoreInterface.

@@ -1,5 +1,5 @@
 # Builds the release binaries + checksums that scripts/install.sh downloads from
-# https://github.com/dm0xa/isola/releases/latest/download
+# https://github.com/dm0xa/isola-browser/releases/latest/download
 #
 #   isola-<os>-<arch>-v<version>.tar.gz   (contains the `isola` binary)
 #   checksums.txt                         (<sha256>  <archive>)
@@ -64,9 +64,9 @@ jobs:
           BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           go build -trimpath \
             -ldflags "-s -w \
-              -X github.com/dm0xa/isola/backend/pkg/version.Version=${VERSION} \
-              -X github.com/dm0xa/isola/backend/pkg/version.Commit=${COMMIT} \
-              -X github.com/dm0xa/isola/backend/pkg/version.BuildTime=${BUILD_TIME}" \
+              -X github.com/dm0xa/isola-browser/backend/pkg/version.Version=${VERSION} \
+              -X github.com/dm0xa/isola-browser/backend/pkg/version.Commit=${COMMIT} \
+              -X github.com/dm0xa/isola-browser/backend/pkg/version.BuildTime=${BUILD_TIME}" \
             -o ../dist/isola ./cmd/single-user
 
       - name: Package

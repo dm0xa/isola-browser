@@ -51,8 +51,8 @@ A **16 GB / 8 vCPU** host comfortably runs about **5 concurrent sessions**. The 
 ## Run It
 
 ```bash
-git clone https://github.com/dm0xa/isola.git
-cd isola
+git clone https://github.com/dm0xa/isola-browser.git
+cd isola-browser
 docker compose up --build
 ```
 

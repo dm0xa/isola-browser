@@ -9,9 +9,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
-	"github.com/dm0xa/isola/backend/pkg/modulesdk"
-	"github.com/dm0xa/isola/backend/pkg/plugin"
-	"github.com/dm0xa/isola/backend/pkg/registry"
+	"github.com/dm0xa/isola-browser/backend/pkg/modulesdk"
+	"github.com/dm0xa/isola-browser/backend/pkg/plugin"
+	"github.com/dm0xa/isola-browser/backend/pkg/registry"
 )
 
 // adapters bridges one module's contract endpoints to the in-process plugin

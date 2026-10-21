@@ -8,7 +8,7 @@ Isola's threat model is a hostile page inside a disposable container. See
 Please do **not** open a public issue for a security bug.
 
 Report it privately via GitHub Security Advisories on
-[dm0xa/isola](https://github.com/dm0xa/isola/security/advisories/new).
+[dm0xa/isola-browser](https://github.com/dm0xa/isola-browser/security/advisories/new).
 
 Include a short description, impact, and steps to reproduce. We will
 acknowledge the report and work on a fix before any public disclosure.

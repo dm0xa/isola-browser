@@ -14,7 +14,7 @@ WebSocket relay (H.264), and destroys it on close. No VNC, no WebRTC.
 
 | Path | What it is |
 | :--- | :--- |
-| `backend/` | Go control plane. Module `github.com/dm0xa/isola/backend`. `cmd/server` = API-only binary, `cmd/single-user` = API + embedded UI; both are thin wrappers around `internal/app.Run`, which owns middleware and jobs. Logic in `pkg/`: API, orchestrator, WebSocket relay, store, config, MCP. |
+| `backend/` | Go control plane. Module `github.com/dm0xa/isola-browser/backend`. `cmd/server` = API-only binary, `cmd/single-user` = API + embedded UI; both are thin wrappers around `internal/app.Run`, which owns middleware and jobs. Logic in `pkg/`: API, orchestrator, WebSocket relay, store, config, MCP. |
 | `frontend/` | React 18 + Vite + TypeScript + Tailwind UI, embedded into the Go binary. **No store library** — component state plus module-level singletons, and plain `fetch`/axios polling (`react-query` is mounted at the root but unused). |
 | `browsers/` | Sandbox images. `isola-streamer/` is its own Go module (capture, encode, CDP, input; port 5900 in-container). `electron-runner/` holds the Electron/Chromium glue. `browser-node-electron/` builds `isola-browser:electron`. **Build context is `./browsers`**, not the repo root. |
 | `deploy/` | Local full stack (nginx + Vite + backend). |

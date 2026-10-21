@@ -9,9 +9,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/dm0xa/isola/backend/pkg/config"
-	"github.com/dm0xa/isola/backend/pkg/orchestrator"
-	"github.com/dm0xa/isola/backend/pkg/store"
+	"github.com/dm0xa/isola-browser/backend/pkg/config"
+	"github.com/dm0xa/isola-browser/backend/pkg/orchestrator"
+	"github.com/dm0xa/isola-browser/backend/pkg/store"
 )
 
 // TestCreateSessionPersistsRowAndControlToken guards against the

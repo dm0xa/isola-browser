@@ -7,7 +7,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/dm0xa/isola/backend/pkg/dnsproxy"
+	"github.com/dm0xa/isola-browser/backend/pkg/dnsproxy"
 )
 
 // SetupDNSProxy starts the DNS-over-TLS / DNS-over-HTTPS forwarding server when

@@ -10,7 +10,7 @@ func getOpenAPISpec() []byte {
     "version": "1.0.0",
     "contact": {
       "name": "Isola",
-      "url": "https://github.com/dm0xa/isola"
+      "url": "https://github.com/dm0xa/isola-browser"
     },
     "license": {
       "name": "MIT"

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dm0xa/isola/backend/pkg/models"
-	"github.com/dm0xa/isola/backend/pkg/store"
+	"github.com/dm0xa/isola-browser/backend/pkg/models"
+	"github.com/dm0xa/isola-browser/backend/pkg/store"
 	"github.com/google/uuid"
 )
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dm0xa/isola/backend/pkg/config"
+	"github.com/dm0xa/isola-browser/backend/pkg/config"
 )
 
 // newTestPool builds a WarmPool whose provisioner/prober are fakes, so the

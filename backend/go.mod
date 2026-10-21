@@ -1,4 +1,4 @@
-module github.com/dm0xa/isola/backend
+module github.com/dm0xa/isola-browser/backend
 
 go 1.26
 

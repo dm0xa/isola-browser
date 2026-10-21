@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/dm0xa/isola/backend/pkg/plugin"
+	"github.com/dm0xa/isola-browser/backend/pkg/plugin"
 )
 
 // WSHandlerFunc serves a plugin WebSocket sub-route. The SDK hands over the

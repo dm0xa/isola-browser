@@ -3,7 +3,7 @@ package main
 import (
 	"github.com/rs/zerolog/log"
 
-	"github.com/dm0xa/isola/backend/internal/app"
+	"github.com/dm0xa/isola-browser/backend/internal/app"
 )
 
 func main() {

@@ -4,9 +4,9 @@
 // `git describe --tags`. The defaults below are only a fallback for a bare
 // `go build`; do not bump them per release.
 //
-//	go build -ldflags "-X github.com/dm0xa/isola/backend/pkg/version.Version=x.y.z \
-//	                  -X github.com/dm0xa/isola/backend/pkg/version.Commit=$(git rev-parse --short HEAD) \
-//	                  -X github.com/dm0xa/isola/backend/pkg/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+//	go build -ldflags "-X github.com/dm0xa/isola-browser/backend/pkg/version.Version=x.y.z \
+//	                  -X github.com/dm0xa/isola-browser/backend/pkg/version.Commit=$(git rev-parse --short HEAD) \
+//	                  -X github.com/dm0xa/isola-browser/backend/pkg/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 package version
 
 import "fmt"

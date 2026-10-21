@@ -18,8 +18,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dm0xa/isola/backend/pkg/graphopts"
-	"github.com/dm0xa/isola/backend/pkg/models"
+	"github.com/dm0xa/isola-browser/backend/pkg/graphopts"
+	"github.com/dm0xa/isola-browser/backend/pkg/models"
 )
 
 type Service struct {

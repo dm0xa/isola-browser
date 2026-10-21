@@ -39,7 +39,7 @@ function normalizeUrl(input: string): string {
   return `https://duckduckgo.com/?q=${encodeURIComponent(trimmed)}`;
 }
 
-const GITHUB_URL = 'https://github.com/dm0xa/isola';
+const GITHUB_URL = 'https://github.com/dm0xa/isola-browser';
 
 const textStyle = {
   fontFamily: '"Bitcount Prop Single", monospace',

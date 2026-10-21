@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dm0xa/isola/backend/pkg/config"
-	"github.com/dm0xa/isola/backend/pkg/store"
+	"github.com/dm0xa/isola-browser/backend/pkg/config"
+	"github.com/dm0xa/isola-browser/backend/pkg/store"
 )
 
 // TestWarmResizeTarget pins when a claimed container must be reshaped: only a

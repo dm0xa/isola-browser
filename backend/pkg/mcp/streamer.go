@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dm0xa/isola/backend/pkg/store"
+	"github.com/dm0xa/isola-browser/backend/pkg/store"
 )
 
 // defaultStreamerTimeout bounds one streamer HTTP call. Without it a wedged

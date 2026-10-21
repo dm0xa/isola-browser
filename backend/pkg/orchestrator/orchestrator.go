@@ -19,9 +19,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/dm0xa/isola/backend/pkg/config"
-	"github.com/dm0xa/isola/backend/pkg/models"
-	"github.com/dm0xa/isola/backend/pkg/store"
+	"github.com/dm0xa/isola-browser/backend/pkg/config"
+	"github.com/dm0xa/isola-browser/backend/pkg/models"
+	"github.com/dm0xa/isola-browser/backend/pkg/store"
 	"github.com/google/uuid"
 )
 

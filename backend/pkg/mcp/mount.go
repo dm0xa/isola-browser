@@ -7,9 +7,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/rs/zerolog/log"
 
-	"github.com/dm0xa/isola/backend/pkg/config"
-	isomw "github.com/dm0xa/isola/backend/pkg/middleware"
-	"github.com/dm0xa/isola/backend/pkg/version"
+	"github.com/dm0xa/isola-browser/backend/pkg/config"
+	isomw "github.com/dm0xa/isola-browser/backend/pkg/middleware"
+	"github.com/dm0xa/isola-browser/backend/pkg/version"
 )
 
 // Mount registers the Streamable HTTP MCP endpoint when enabled in config.

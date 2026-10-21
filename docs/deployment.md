@@ -47,12 +47,12 @@ The installer is the easy path, but every step it performs is plain `curl`, `tar
 | `Darwin arm64` | `isola-darwin-arm64` |
 | `Darwin x86_64` | `isola-darwin-amd64` |
 
-Pin an exact release tag. Do **not** use the `/releases/latest/download` alias with a hard-coded filename: the asset name carries the version, so a stale name simply 404s. `VERSION` below is an example — substitute a real tag from the [releases page](https://github.com/dm0xa/isola/releases).
+Pin an exact release tag. Do **not** use the `/releases/latest/download` alias with a hard-coded filename: the asset name carries the version, so a stale name simply 404s. `VERSION` below is an example — substitute a real tag from the [releases page](https://github.com/dm0xa/isola-browser/releases).
 
 ```bash
 VERSION=1.0.0                              # a real release tag, without the leading v
 GOOS=linux GOARCH=amd64                    # from `uname -sm` above
-BASE="https://github.com/dm0xa/isola/releases/download/v${VERSION}"
+BASE="https://github.com/dm0xa/isola-browser/releases/download/v${VERSION}"
 ARCHIVE="isola-${GOOS}-${GOARCH}-v${VERSION}.tar.gz"
 
 curl -fsSLO "${BASE}/${ARCHIVE}"

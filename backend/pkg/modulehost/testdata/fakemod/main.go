@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/dm0xa/isola/backend/pkg/modulesdk"
-	"github.com/dm0xa/isola/backend/pkg/plugin"
+	"github.com/dm0xa/isola-browser/backend/pkg/modulesdk"
+	"github.com/dm0xa/isola-browser/backend/pkg/plugin"
 )
 
 type allowGuard struct{}

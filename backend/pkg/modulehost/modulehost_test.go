@@ -15,9 +15,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
-	"github.com/dm0xa/isola/backend/pkg/modulesdk"
-	"github.com/dm0xa/isola/backend/pkg/plugin"
-	"github.com/dm0xa/isola/backend/pkg/registry"
+	"github.com/dm0xa/isola-browser/backend/pkg/modulesdk"
+	"github.com/dm0xa/isola-browser/backend/pkg/plugin"
+	"github.com/dm0xa/isola-browser/backend/pkg/registry"
 )
 
 // startFakeModule serves the contract v1 surface with test logic on a real

@@ -10,7 +10,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/dm0xa/isola/backend/pkg/models"
+	"github.com/dm0xa/isola-browser/backend/pkg/models"
 )
 
 // Snapshot persistence for single-user deployments: the backend's session

@@ -14,7 +14,7 @@ VERSION_VALUE=${VERSION_VALUE#v}
 COMMIT_VALUE=${COMMIT:-$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)}
 BUILD_TIME_VALUE=${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 
-LDFLAGS="-X github.com/dm0xa/isola/backend/pkg/version.Version=${VERSION_VALUE} -X github.com/dm0xa/isola/backend/pkg/version.Commit=${COMMIT_VALUE} -X github.com/dm0xa/isola/backend/pkg/version.BuildTime=${BUILD_TIME_VALUE}"
+LDFLAGS="-X github.com/dm0xa/isola-browser/backend/pkg/version.Version=${VERSION_VALUE} -X github.com/dm0xa/isola-browser/backend/pkg/version.Commit=${COMMIT_VALUE} -X github.com/dm0xa/isola-browser/backend/pkg/version.BuildTime=${BUILD_TIME_VALUE}"
 
 cd "$BUILD_DIR"
 

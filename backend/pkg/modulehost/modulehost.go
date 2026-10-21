@@ -12,8 +12,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"github.com/dm0xa/isola/backend/pkg/modulesdk"
-	"github.com/dm0xa/isola/backend/pkg/registry"
+	"github.com/dm0xa/isola-browser/backend/pkg/modulesdk"
+	"github.com/dm0xa/isola-browser/backend/pkg/registry"
 )
 
 // Options configures the host.

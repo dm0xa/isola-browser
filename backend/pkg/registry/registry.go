@@ -6,7 +6,7 @@ package registry
 import (
 	"sync"
 
-	"github.com/dm0xa/isola/backend/pkg/plugin"
+	"github.com/dm0xa/isola-browser/backend/pkg/plugin"
 	"github.com/rs/zerolog/log"
 )
 

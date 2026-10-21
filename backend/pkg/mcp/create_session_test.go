@@ -9,10 +9,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/dm0xa/isola/backend/pkg/api"
-	"github.com/dm0xa/isola/backend/pkg/config"
-	"github.com/dm0xa/isola/backend/pkg/orchestrator"
-	"github.com/dm0xa/isola/backend/pkg/store"
+	"github.com/dm0xa/isola-browser/backend/pkg/api"
+	"github.com/dm0xa/isola-browser/backend/pkg/config"
+	"github.com/dm0xa/isola-browser/backend/pkg/orchestrator"
+	"github.com/dm0xa/isola-browser/backend/pkg/store"
 )
 
 // TestCreateSessionParamsToRequest pins that the MCP `tor` argument reaches the

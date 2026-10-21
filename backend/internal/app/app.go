@@ -22,16 +22,16 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/dm0xa/isola/backend/pkg/api"
-	"github.com/dm0xa/isola/backend/pkg/config"
-	"github.com/dm0xa/isola/backend/pkg/mcp"
-	isomw "github.com/dm0xa/isola/backend/pkg/middleware"
-	"github.com/dm0xa/isola/backend/pkg/modulehost"
-	"github.com/dm0xa/isola/backend/pkg/orchestrator"
-	"github.com/dm0xa/isola/backend/pkg/registry"
-	"github.com/dm0xa/isola/backend/pkg/store"
-	"github.com/dm0xa/isola/backend/pkg/version"
-	"github.com/dm0xa/isola/backend/pkg/wsproxy"
+	"github.com/dm0xa/isola-browser/backend/pkg/api"
+	"github.com/dm0xa/isola-browser/backend/pkg/config"
+	"github.com/dm0xa/isola-browser/backend/pkg/mcp"
+	isomw "github.com/dm0xa/isola-browser/backend/pkg/middleware"
+	"github.com/dm0xa/isola-browser/backend/pkg/modulehost"
+	"github.com/dm0xa/isola-browser/backend/pkg/orchestrator"
+	"github.com/dm0xa/isola-browser/backend/pkg/registry"
+	"github.com/dm0xa/isola-browser/backend/pkg/store"
+	"github.com/dm0xa/isola-browser/backend/pkg/version"
+	"github.com/dm0xa/isola-browser/backend/pkg/wsproxy"
 )
 
 // Options selects the parts that differ between the entry points.

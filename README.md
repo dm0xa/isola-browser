@@ -100,10 +100,10 @@ Details: [Getting Started → Requirements](./docs/getting-started.md#requiremen
 Downloads `isola`, verifies the SHA-256 in `checksums.txt`, and can install a systemd unit or LaunchAgent. It prompts to install Docker if missing, then fetches the per-session sandbox image at the tag matching this release (`ghcr.io/dm0xa/isola-browser:v<version>`), falling back to the floating `:electron` tag and then to a local build from a checkout. `ISOLA_BROWSER_IMAGE_REMOTE` pins one exact reference (empty skips the registry); the image the binary actually launches is set with `ISOLA_BROWSER_IMAGE`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dm0xa/isola/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/dm0xa/isola-browser/main/scripts/install.sh | bash
 ```
 
-Read it first: `curl -fsSL https://raw.githubusercontent.com/dm0xa/isola/main/scripts/install.sh | less`. In-repo source: [`scripts/install.sh`](./scripts/install.sh). `ISOLA_INSTALL_DIR` / `ISOLA_VERSION` override the install location and version; the default is `/opt/isola`, falling back to `~/.isola` when the invoking user cannot write it. Service environment lives in `<install dir>/isola.env`. The installer reports whether the host enforces an AppArmor/SELinux profile — sessions fail closed without one, until you set `ISOLA_REQUIRE_MAC=0` (not recommended). Then open <http://localhost:8080>.
+Read it first: `curl -fsSL https://raw.githubusercontent.com/dm0xa/isola-browser/main/scripts/install.sh | less`. In-repo source: [`scripts/install.sh`](./scripts/install.sh). `ISOLA_INSTALL_DIR` / `ISOLA_VERSION` override the install location and version; the default is `/opt/isola`, falling back to `~/.isola` when the invoking user cannot write it. Service environment lives in `<install dir>/isola.env`. The installer reports whether the host enforces an AppArmor/SELinux profile — sessions fail closed without one, until you set `ISOLA_REQUIRE_MAC=0` (not recommended). Then open <http://localhost:8080>.
 
 Prefer not to pipe a script to a shell? [Manual install](./docs/deployment.md#manual-install) does the same thing by hand — download the release tarball, verify its SHA-256, pull the sandbox image and create the network.
 
@@ -112,8 +112,8 @@ Prefer not to pipe a script to a shell? [Manual install](./docs/deployment.md#ma
 Needs **BuildKit** and **Compose v2**. This is also how you build `isola-browser:electron`.
 
 ```bash
-git clone https://github.com/dm0xa/isola.git
-cd isola
+git clone https://github.com/dm0xa/isola-browser.git
+cd isola-browser
 docker compose up --build
 ```
 

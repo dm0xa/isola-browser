@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dm0xa/isola/backend/pkg/orchestrator"
-	"github.com/dm0xa/isola/backend/pkg/store"
+	"github.com/dm0xa/isola-browser/backend/pkg/orchestrator"
+	"github.com/dm0xa/isola-browser/backend/pkg/store"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"

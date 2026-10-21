@@ -3,11 +3,11 @@ set -euo pipefail
 
 # ────────────────────────────────────────────────────────────
 # isola install script
-# Usage: curl -fsSL https://raw.githubusercontent.com/dm0xa/isola/main/scripts/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/dm0xa/isola-browser/main/scripts/install.sh | bash
 # ────────────────────────────────────────────────────────────
 
-readonly DOWNLOAD_BASE="${ISOLA_DOWNLOAD_BASE:-https://github.com/dm0xa/isola/releases/latest/download}"
-readonly RELEASES_URL="${ISOLA_RELEASES_URL:-https://github.com/dm0xa/isola/releases}"
+readonly DOWNLOAD_BASE="${ISOLA_DOWNLOAD_BASE:-https://github.com/dm0xa/isola-browser/releases/latest/download}"
+readonly RELEASES_URL="${ISOLA_RELEASES_URL:-https://github.com/dm0xa/isola-browser/releases}"
 readonly BINARY_NAME="isola"
 
 # Install directory, resolved by resolve_install_dir() before use. The default
@@ -546,7 +546,7 @@ ensure_browser_image() {
 
     if [[ -z "$PROJECT_ROOT" || ! -f "${PROJECT_ROOT}/docker-compose.yml" ]]; then
         info "Build it once from a source checkout:"
-        info "  git clone https://github.com/dm0xa/isola.git && cd isola"
+        info "  git clone https://github.com/dm0xa/isola-browser.git && cd isola-browser"
         info "  docker compose up --build"
         return 0
     fi

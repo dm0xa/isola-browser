@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dm0xa/isola/backend/pkg/config"
-	"github.com/dm0xa/isola/backend/pkg/models"
-	"github.com/dm0xa/isola/backend/pkg/orchestrator"
-	"github.com/dm0xa/isola/backend/pkg/store"
+	"github.com/dm0xa/isola-browser/backend/pkg/config"
+	"github.com/dm0xa/isola-browser/backend/pkg/models"
+	"github.com/dm0xa/isola-browser/backend/pkg/orchestrator"
+	"github.com/dm0xa/isola-browser/backend/pkg/store"
 )
 
 func newTestHandler(t *testing.T, cfg *config.Config) *Handler {

@@ -14,8 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
-	"github.com/dm0xa/isola/backend/pkg/api"
-	"github.com/dm0xa/isola/backend/pkg/plugin"
+	"github.com/dm0xa/isola-browser/backend/pkg/api"
+	"github.com/dm0xa/isola-browser/backend/pkg/plugin"
 )
 
 // BuildSessionValidator returns a validator that runs all registered session guards

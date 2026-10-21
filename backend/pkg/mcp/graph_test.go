@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/dm0xa/isola/backend/pkg/models"
-	"github.com/dm0xa/isola/backend/pkg/store"
+	"github.com/dm0xa/isola-browser/backend/pkg/models"
+	"github.com/dm0xa/isola-browser/backend/pkg/store"
 )
 
 // graphService starts a fake streamer and a running session wired to it.

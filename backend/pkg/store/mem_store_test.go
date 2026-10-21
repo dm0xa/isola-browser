@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/dm0xa/isola/backend/pkg/models"
+	"github.com/dm0xa/isola-browser/backend/pkg/models"
 )
 
 func TestCreateSessionIfCapacityUnlimited(t *testing.T) {

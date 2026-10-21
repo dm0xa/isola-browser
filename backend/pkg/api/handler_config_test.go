@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/dm0xa/isola/backend/pkg/config"
+	"github.com/dm0xa/isola-browser/backend/pkg/config"
 )
 
 func getConfigBody(t *testing.T, cfg *config.Config) map[string]any {

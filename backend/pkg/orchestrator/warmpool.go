@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
-	"github.com/dm0xa/isola/backend/pkg/config"
+	"github.com/dm0xa/isola-browser/backend/pkg/config"
 )
 
 // WarmPool keeps a small set of pre-started isola (Electron) containers so a
