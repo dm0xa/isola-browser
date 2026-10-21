@@ -25,7 +25,7 @@ This directory is the external documentation — what an operator or an API cons
 - **One process, one port** — a single Go binary serves the React UI, the REST API, the WebSocket relay, and (optionally) an MCP endpoint on the same port (default `8080`).
 - **One container per session** — ephemeral, read-only root filesystem, dropped capabilities, loopback-only published ports.
 - **Single transport: Isola** — H.264 Annex-B over WebSocket, decoded in the browser with WebCodecs. No VNC and no WebRTC.
-- **Automation-ready** — optional MCP (snapshots, screenshots, network log, input) plus a JSON input protocol over the session WebSocket for custom clients.
+- **Automation-ready** — optional MCP (snapshots, screenshots, the network log, resource-graph images, input) plus a JSON input protocol over the session WebSocket for custom clients.
 
 ## License
 

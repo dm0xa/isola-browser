@@ -61,6 +61,6 @@ See [Security](security.md) for the full hardening list.
 - **Audio** — Opus → `WebCodecs AudioDecoder` → `AudioContext`.
 - **Input** — JSON over the `channel=input` socket → streamer → CDP `Input.`*.
 - **Clipboard** — bidirectional, via the streamer and CDP.
-- **Network monitor** — with `network_monitor` on create, CDP network events are streamed to the viewer's Network tab.
+- **Network monitor** — with `network_monitor` on create, CDP network events are streamed to the viewer's Network tab. The streamer also keeps the window itself: `GET /network` returns it as JSON, and `GET /graph.png` renders it as a PNG, both proxied by the control plane for the API and MCP surfaces.
 
 Packet layout, `stream_init` / `stream_reset`, ABR, and how to write a custom viewer are in [Transport](transport.md). Host vs container binaries and local build names are in [Binaries](binaries.md).

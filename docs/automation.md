@@ -59,10 +59,11 @@ A `tor` session always cold-starts — the SOCKS proxy is wired at container cre
 
 Network data comes from the same capture as the in-viewer Network panel, but `get_network` returns the streamer's full in-memory window with fields the UI omits or clips. The window holds the most recent `session.network_log_max_entries` requests (default 1000; see [Configuration → `session`](configuration.md#session)).
 
-### Snapshot vs screenshot
+### Snapshot, screenshot and graph
 
 - `snapshot` — accessibility tree with stable `ref` ids for automation. Geometry fields may be zero when the AX backend does not expose layout; roles and names are still useful for choosing targets.
 - `screenshot` — full visual frame of the active tab (CDP capture). Prefer this when you need to see captchas, layout, or pages that expose little in the AX tree. Payloads are large; use JPEG with a lower `quality` when bandwidth matters.
+- `resource_graph` — the captured *requests* rather than the pixels: one PNG of the initiator → host → resource chain, drawn from the same window `get_network` reads. Reach for it when you want to show what a page loaded — a phishing kit's exfiltration host, a page that never rendered, a wall of third-party scripts — or to attach evidence to a report. `expand=origin` (default) is the readable summary; `expand=all` opens every group to its files and can be very wide; `failed_only` keeps just the broken requests. The image is rendered by the streamer, so it works even when the tab shows nothing.
 
 ### Client configuration
 
@@ -110,7 +111,8 @@ screenshot      {"session_id":"9f1c2b3d-...","format":"jpeg","quality":70}
   → {"format":"jpeg","mime":"image/jpeg","width":1280,"height":720,"data_base64":"/9j/4AAQSk..."}
 
 resource_graph  {"session_id":"9f1c2b3d-...","theme":"light","expand":"all"}
-  → {"format":"png","bytes":184213,"theme":"light","width":2412,"height":986} + image/png block
+  → {"bytes":184213,"format":"png","height":986,"theme":"light","width":2412}
+    + an image/png content block with the graph itself
 
 close_session   {"session_id":"9f1c2b3d-..."}
   → terminated
@@ -159,7 +161,7 @@ curl -s -X POST http://localhost:8080/mcp \
        "params":{"name":"create_session","arguments":{"url":"https://example.com"}}}'
 ```
 
-`tools/list` returns the same ten tools with their input schemas, so a client can read the arguments from there rather than hard-coding them. SDKs also send `Mcp-Protocol-Version` with the negotiated revision; the server only insists on that header for the newest protocol revisions.
+`tools/list` returns the same eleven tools with their input schemas, so a client can read the arguments from there rather than hard-coding them. SDKs also send `Mcp-Protocol-Version` with the negotiated revision; the server only insists on that header for the newest protocol revisions.
 
 A working client is about 30 lines — Node 18+, no dependencies (save as `isola-mcp.mjs`; top-level `await` needs an ES module):
 

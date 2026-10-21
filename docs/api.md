@@ -113,9 +113,11 @@ curl -s -X DELETE http://localhost:8080/api/sessions/$ID -H "X-Session-Token: $T
 ## Resource graph image
 
 `GET /api/sessions/{id}/graph.png` renders the session's captured network as a
-PNG: the opened host, its resource-type groups, and the files behind them. The
-image is produced by the streamer (which holds the capture) and is never cached,
-so it always reflects the current window.
+PNG: the opened host, its resource-type groups, and the files behind them — the
+same summary the viewer's **Graph** tab draws. It is rendered by the streamer
+from its own capture, not from a screenshot of the page, so it reflects the
+current window (`session.network_log_max_entries`, default 1000) even while the
+tab is loading or blank.
 
 ```bash
 # Light theme, every host and group expanded, 3× raster
@@ -126,6 +128,12 @@ curl -s "http://localhost:8080/api/sessions/$ID/graph.png?theme=light&expand=all
 curl -s "http://localhost:8080/api/sessions/$ID/graph.png?failed=1&type=script,stylesheet&direction=vertical" \
   -H "X-Session-Token: $TOKEN" -o failures.png
 ```
+
+The response is `Content-Type: image/png` with `Cache-Control: no-store` — a
+live capture is never cached. A failed render returns
+`502 graph_render_failed`; an unknown or out-of-range option returns
+`400 invalid_graph_options`, whose message carries the renderer's own reason
+(for example `theme must be dark or light`).
 
 | Parameter | Values | Default | Meaning |
 | :--- | :--- | :--- | :--- |
@@ -139,9 +147,9 @@ curl -s "http://localhost:8080/api/sessions/$ID/graph.png?failed=1&type=script,s
 | `origin` | hostname | the opened page | Start the graph from another host. |
 | `caption` | `0`, `1` | `1` | Draw the provenance line (origin, counts, theme, UTC time). |
 
-Invalid options return `400` with the streamer's reason; a session whose
-container is still starting returns `409` (`container_not_ready`). The same
-image is available to MCP clients as the `resource_graph` tool.
+A session whose container is still starting returns `409`
+(`container_not_ready`). MCP clients get the same image from the
+`resource_graph` tool ([Automation → tools](automation.md#tools)).
 
 ## Shares
 

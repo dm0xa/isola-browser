@@ -239,7 +239,7 @@ Requests are flagged when they are worth a second look — an IP-literal host, p
 | :--- | :--- |
 | ![Analysis panel — request list](./docs/images/network-tab-requests.png) | ![Analysis panel — request graph](./docs/images/network-tab-graph.jpeg) |
 
-The panel is view-only: raw CDP is not exposed to the client. The same log is available to scripts through MCP `get_network` ([docs/automation.md](./docs/automation.md)), and the panel is only available for sessions created with `network_monitor` ([docs/api.md](./docs/api.md)).
+The panel is view-only: raw CDP is not exposed to the client. The same log is available to scripts through MCP `get_network` ([docs/automation.md](./docs/automation.md)), and the panel is only available for sessions created with `network_monitor` ([docs/api.md](./docs/api.md)). The graph can also be rendered headlessly — `GET /api/sessions/{id}/graph.png` or the MCP `resource_graph` tool, both with a `theme` of `dark` or `light`.
 
 ---
 
