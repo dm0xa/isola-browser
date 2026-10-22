@@ -9,15 +9,7 @@ publishes the section matching the tag.
 ### Added
 
 - `demo/` — a static, no-build interface demo that reproduces the landing page
-  (pinned to `example.com`), the four-phase launch overlay and the viewer chrome
-  (tab strip, address bar, session clock, end/restart/fullscreen). It simulates
-  the launch and draws example.com locally — the page is never requested — so it
-  can be hosted on GitHub Pages; nothing is provisioned. The address box is
-  read-only, new tabs are disabled with a short notice, and the session menu is
-  fully drawn with Enter fullscreen and Restart session enabled. An opt-in
-  spotlight tour explains the session chrome and can be replayed from a `?`
-  button.
-  `.github/workflows/pages.yml` publishes it from the `demo/` directory.
+  (pinned to `example.com`).
 
 ### Changed
 
@@ -27,15 +19,15 @@ publishes the section matching the tag.
   `toolchain go1.26.10`.
 - Local development prerequisites are now **Node 22+** (was 20), matching the
   builder images; Node 20 reached end-of-life in April 2026.
+- Dependency updates are automated: Dependabot watches both Go modules, both
+  npm trees, GitHub Actions and the Docker base images (runtime majors are left
+  for deliberate migrations), and CI plus the release build pin Go 1.26.10 to
+  match the builder images.
 
 ### Fixed
 
 - MCP `create_session` no longer fails with `401 unauthorized` when
-  `ISOLA_API_TOKEN` is also configured. The tool calls the REST handler
-  in-process, which applied the REST create gate to a request that had already
-  authenticated with `ISOLA_MCP_TOKEN`; the in-process call now carries a
-  context marker that no HTTP header can set, matching the behaviour already
-  documented in `docs/automation.md`.
+  `ISOLA_API_TOKEN` is also configured.
 - Deleting a session while its container was still being created no longer
   leaves an untracked container behind. `ActivateSession` used to overwrite the
   terminated status with `running`, resurrecting the row and hiding the

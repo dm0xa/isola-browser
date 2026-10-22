@@ -163,7 +163,7 @@ curl -s -X POST http://localhost:8080/mcp \
 
 `tools/list` returns the same eleven tools with their input schemas, so a client can read the arguments from there rather than hard-coding them. SDKs also send `Mcp-Protocol-Version` with the negotiated revision; the server only insists on that header for the newest protocol revisions.
 
-A working client is about 30 lines — Node 18+, no dependencies (save as `isola-mcp.mjs`; top-level `await` needs an ES module):
+A working client is about 30 lines — Node 22+, no dependencies (save as `isola-mcp.mjs`; top-level `await` needs an ES module):
 
 ```js
 const URL = 'http://localhost:8080/mcp';

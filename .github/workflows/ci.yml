@@ -13,7 +13,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.26.10'
           # Two Go modules live in this repo. Without both paths the module
           # cache is not restored and every run re-downloads from scratch.
           cache-dependency-path: |

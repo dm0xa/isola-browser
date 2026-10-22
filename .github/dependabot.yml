@@ -1,0 +1,106 @@
+# Dependency updates.
+#
+# Both npm trees and both Go modules are watched so advisories arrive as PRs
+# instead of surfacing at the next manual audit: the Electron runner used to
+# resolve whatever npm saw at build time, and the streamer sat on a 2020
+# transitive for years.
+version: 2
+updates:
+  # ── Go modules (two separate modules, so two directories) ──
+  - package-ecosystem: gomod
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      go-backend:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: gomod
+    directory: /browsers/isola-streamer
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      go-streamer:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ── npm ──
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      npm-frontend:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # The runner's lockfile is committed, so these PRs are exact upgrades.
+  - package-ecosystem: npm
+    directory: /browsers/electron-runner
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      npm-electron-runner:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ── GitHub Actions ──
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+
+  # ── Base images ──
+  # Tag moves inside a major (node 22.x, golang 1.26.x) are routine; a new
+  # runtime major (Node 24, Go 1.28) is a deliberate migration, so keep it out
+  # of the automated stream. Security patches still flow.
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(deps)"
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "golang"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "alpine"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: docker
+    directory: /browsers/browser-node-electron
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(deps)"
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "golang"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "debian"
+        update-types: ["version-update:semver-major"]
