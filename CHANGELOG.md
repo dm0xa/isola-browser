@@ -19,6 +19,15 @@ publishes the section matching the tag.
   button.
   `.github/workflows/pages.yml` publishes it from the `demo/` directory.
 
+### Changed
+
+- `browsers/isola-streamer/go.mod` now declares `go 1.26.0` (was `1.22`). The
+  module was always compiled by the 1.26 toolchain, and the patched `x/net`
+  requires it; local builds therefore need Go 1.26, as both modules now pin
+  `toolchain go1.26.10`.
+- Local development prerequisites are now **Node 22+** (was 20), matching the
+  builder images; Node 20 reached end-of-life in April 2026.
+
 ### Fixed
 
 - MCP `create_session` no longer fails with `401 unauthorized` when
