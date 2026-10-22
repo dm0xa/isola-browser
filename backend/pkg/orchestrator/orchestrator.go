@@ -961,20 +961,29 @@ func (o *Orchestrator) listLabeledSessionContainers(ctx context.Context) []label
 		log.Warn().Err(err).Str("output", string(out)).Msg("orphan sweep: docker ps failed")
 		return nil
 	}
+	return parseLabeledContainers(string(out))
+}
+
+// parseLabeledContainers parses the tab-separated output above. An absent
+// isola.warm label prints as an empty third field, so the line ends with a tab:
+// trimming the whole output first would drop that field on the last line and
+// silently hide one container from the sweep (a lone orphan forever).
+func parseLabeledContainers(out string) []labeledContainer {
 	var containers []labeledContainer
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, "\r")
 		if line == "" {
 			continue
 		}
 		parts := strings.SplitN(line, "\t", 3)
-		if len(parts) != 3 || parts[0] == "" {
+		if len(parts) < 2 || parts[0] == "" {
 			continue
 		}
 		// Belt and braces: warm-pool containers are the pool's property. A
 		// claimed one is already covered by the active-container check below,
 		// but a labeling mistake must never make the sweep kill a container
 		// that may be serving a user.
-		if strings.TrimSpace(parts[2]) != "" {
+		if len(parts) == 3 && strings.TrimSpace(parts[2]) != "" {
 			continue
 		}
 		containers = append(containers, labeledContainer{ID: parts[0], SessionID: parts[1]})

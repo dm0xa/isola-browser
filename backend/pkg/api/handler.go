@@ -431,6 +431,18 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+
+		// The owner can delete the session while `docker run` is in flight.
+		// DeleteSession then sees an empty ContainerID and cannot stop what it
+		// does not know about, so the container we just started is ours to
+		// reap before it becomes an untracked sandbox.
+		if cur, gerr := h.store.Sessions.GetSession(bgCtx, session.ID); gerr != nil || cur == nil || cur.Status != models.SessionStatusProvisioning {
+			log.Printf("create session: %s left provisioning during creation, tearing down container", session.ID)
+			if terr := h.orch.TerminateSession(bgCtx, info.ContainerID); terr != nil {
+				log.Printf("create session: terminate cancelled container: %v", terr)
+			}
+			return
+		}
 		log.Printf("create session: container ready in %v (warm=%v)", time.Since(createStart), warmed)
 
 		// Wait for stream to be ready before marking session as running. Warm
@@ -484,9 +496,16 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 
 		// Activate session: mark running + set expiry to NOW + sessionDuration
 		if err := h.store.Sessions.ActivateSession(bgCtx, session.ID, info.ContainerID, info.Host, info.Port, sessionDuration); err != nil {
-			// Clean up the cache key we just set
-			h.cache.Del(bgCtx, key, transportKey, controlTokenKey(session.ID.String()))
+			// Clean up the cache keys we just set. Activation is refused when
+			// the row left provisioning (deleted mid-create), so the container
+			// has no owner left: stop it here rather than leak it.
+			h.cache.Del(bgCtx, key, transportKey,
+				fmt.Sprintf("session:%s:cdp", session.ID.String()),
+				controlTokenKey(session.ID.String()))
 			log.Printf("create session: activate error: %v", err)
+			if terr := h.orch.TerminateSession(bgCtx, info.ContainerID); terr != nil {
+				log.Printf("create session: terminate container after activation failure: %v", terr)
+			}
 			return
 		}
 

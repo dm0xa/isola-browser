@@ -13,6 +13,13 @@ import (
 // configured concurrent-session cap is already in use.
 var ErrMaxSessionsReached = errors.New("max sessions reached")
 
+// ErrSessionNotProvisioning is returned by ActivateSession when the row is no
+// longer in the provisioning state. That happens when the owner deletes the
+// session while its container is still being created: the activation must not
+// resurrect a terminated row, and the caller must tear down the container it
+// just started instead of leaving an untracked sandbox behind.
+var ErrSessionNotProvisioning = errors.New("session is not provisioning")
+
 // SessionStoreInterface is the session method set consumed by the handler,
 // proxy, and orchestrator.
 type SessionStoreInterface interface {

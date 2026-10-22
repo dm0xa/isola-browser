@@ -27,6 +27,15 @@ publishes the section matching the tag.
   authenticated with `ISOLA_MCP_TOKEN`; the in-process call now carries a
   context marker that no HTTP header can set, matching the behaviour already
   documented in `docs/automation.md`.
+- Deleting a session while its container was still being created no longer
+  leaves an untracked container behind. `ActivateSession` used to overwrite the
+  terminated status with `running`, resurrecting the row and hiding the
+  container from the orphan sweep; it now refuses anything but a provisioning
+  row, and the create path stops the container it just started.
+- The orphan sweep no longer skips one container — always the last line of
+  `docker ps`, and a lone orphan every time. Trimming the whole output dropped
+  the empty `isola.warm` field, so that line failed to parse as a session
+  container; it is now trimmed per line.
 
 ### Security
 

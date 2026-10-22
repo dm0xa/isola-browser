@@ -195,7 +195,14 @@ func (s *memSessionStore) ActivateSession(ctx context.Context, id uuid.UUID, con
 	defer s.ms.mu.Unlock()
 	sess, ok := s.ms.sessions[id]
 	if !ok {
-		return nil
+		return ErrSessionNotProvisioning
+	}
+	// Activating is only meaningful while provisioning. Terminating the
+	// session during container creation used to be overwritten here, which
+	// resurrected the row as "running" and hid the container from the orphan
+	// sweep. Report it instead so the caller stops the container.
+	if sess.Status != models.SessionStatusProvisioning {
+		return ErrSessionNotProvisioning
 	}
 	sess.Status = models.SessionStatusRunning
 	sess.ContainerID = containerID
