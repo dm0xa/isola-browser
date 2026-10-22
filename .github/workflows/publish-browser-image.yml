@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # arm64 is built under emulation, so the Electron npm install inside the
+      # arm64 is built under emulation, so the Electron npm ci inside the
       # node-builder stage runs for a foreign arch. That is the one part of this
       # image that is not arch-independent.
       - uses: docker/setup-qemu-action@v3
