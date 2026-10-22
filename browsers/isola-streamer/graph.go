@@ -323,6 +323,13 @@ func buildGraphModel(entries []netDumpEntry, pinnedOrigin string, types []resCla
 	lastTrigger := map[string]string{}
 	for pos, idx := range included {
 		host := facts[idx].Host
+		// The opened page is the root of the chain, so a script from an ad host
+		// can never be its trigger. Inferring that edge closed a loop and the
+		// cycle-tolerant layering parked the ad host at depth 0, pushing the
+		// page to the far right of the graph.
+		if host == origin {
+			continue
+		}
 		for j := pos - 1; j >= 0 && j >= pos-40; j-- {
 			prevHost := facts[included[j]].Host
 			if prevHost == host {
@@ -601,50 +608,113 @@ type graphLayout struct {
 	TotalH  float64
 }
 
-// computeDepths is longest-path layering that tolerates cycles (real trigger
-// chains loop back): back edges are skipped, so depth stays finite.
-func computeDepths(nodes []graphNode, edges []graphEdge) map[string]int {
-	depths := make(map[string]int, len(nodes))
-	incoming := make(map[string][]string, len(nodes))
+// originNodeID is the host card of the opened page, or "" when no origin is
+// known.
+func originNodeID(origin string) string {
+	if origin == "" {
+		return ""
+	}
+	return "host:" + origin
+}
+
+// computeDepths is longest-path layering over the graph's cycles. Real trigger
+// chains loop in the wild (host A's script loads host B, whose script loads
+// host A back), so the graph is not a DAG. A DFS that merely skips back edges
+// mislays every cycle: when all of a node's parents are ancestors still on the
+// stack it settles on depth 0, which parked a third-party host in the entry
+// column, left of the page. Tarjan condenses each cycle into one component —
+// hosts that trigger each other belong in the same column — and the components
+// form a DAG whose longest path is the depth.
+func computeDepths(nodes []graphNode, edges []graphEdge, originID string) map[string]int {
+	outgoing := make(map[string][]string, len(nodes))
 	for _, n := range nodes {
-		depths[n.ID] = 0
+		outgoing[n.ID] = nil
 	}
 	for _, e := range edges {
-		incoming[e.To] = append(incoming[e.To], e.From)
+		outgoing[e.From] = append(outgoing[e.From], e.To)
 	}
-	const (
-		white = 0
-		gray  = 1
-		black = 2
-	)
-	state := make(map[string]int, len(nodes))
-	var visit func(id string)
-	visit = func(id string) {
-		if state[id] != white {
-			return
-		}
-		state[id] = gray
-		best := 0
-		for _, p := range incoming[id] {
-			if state[p] == gray {
-				continue
+
+	index := make(map[string]int, len(nodes))
+	low := make(map[string]int, len(nodes))
+	onStack := make(map[string]bool, len(nodes))
+	component := make(map[string]int, len(nodes))
+	var stack []string
+	next, count := 0, 0
+
+	var strongConnect func(v string)
+	strongConnect = func(v string) {
+		index[v] = next
+		low[v] = next
+		next++
+		stack = append(stack, v)
+		onStack[v] = true
+		for _, w := range outgoing[v] {
+			if _, seen := index[w]; !seen {
+				strongConnect(w)
+				if low[w] < low[v] {
+					low[v] = low[w]
+				}
+			} else if onStack[w] && index[w] < low[v] {
+				low[v] = index[w]
 			}
-			if _, ok := depths[p]; !ok {
-				continue
-			}
-			visit(p)
-			if d := depths[p] + 1; d > best {
-				best = d
-			}
 		}
-		if best > len(nodes) {
-			best = len(nodes)
+		if low[v] == index[v] {
+			for {
+				w := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				onStack[w] = false
+				component[w] = count
+				if w == v {
+					break
+				}
+			}
+			count++
 		}
-		depths[id] = best
-		state[id] = black
 	}
 	for _, n := range nodes {
-		visit(n.ID)
+		if _, seen := index[n.ID]; !seen {
+			strongConnect(n.ID)
+		}
+	}
+
+	// Tarjan finishes a component only after every component reachable from it,
+	// so ids run sink → source; relaxing in that order is the longest path in
+	// one pass and cannot ping-pong on a cycle.
+	byComponent := make([][]int, count)
+	for _, e := range edges {
+		from, okFrom := component[e.From]
+		to, okTo := component[e.To]
+		if !okFrom || !okTo || from == to {
+			continue
+		}
+		byComponent[from] = append(byComponent[from], to)
+	}
+	componentDepth := make([]int, count)
+	for c := count - 1; c >= 0; c-- {
+		for _, to := range byComponent[c] {
+			if componentDepth[c]+1 > componentDepth[to] {
+				componentDepth[to] = componentDepth[c] + 1
+			}
+		}
+	}
+
+	depths := make(map[string]int, len(nodes))
+	for _, n := range nodes {
+		depths[n.ID] = componentDepth[component[n.ID]]
+	}
+	// The entry chip and the opened page are columns 0 and 1 by definition: the
+	// page is the root of the chain, whatever else points at it.
+	if _, ok := depths[rootNodeID]; ok {
+		depths[rootNodeID] = 0
+	}
+	if originID != "" {
+		if _, ok := depths[originID]; ok {
+			if _, hasRoot := depths[rootNodeID]; hasRoot {
+				depths[originID] = 1
+			} else {
+				depths[originID] = 0
+			}
+		}
 	}
 	return depths
 }
@@ -691,7 +761,7 @@ func layoutModel(m graphModel, width, height float64, dir layoutDirection) graph
 	}
 	crossLimit := math.Max(300, crossOf(width*1.35, height*1.7))
 
-	depths := computeDepths(m.Nodes, m.Edges)
+	depths := computeDepths(m.Nodes, m.Edges, originNodeID(m.Origin))
 	byDepth := map[int][]graphNode{}
 	var depthKeys []int
 	for _, n := range m.Nodes {

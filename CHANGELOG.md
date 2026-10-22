@@ -28,6 +28,11 @@ publishes the section matching the tag.
 
 ### Fixed
 
+- The request graph now keeps the page you opened in the leftmost column. A
+  script from a third party was inferred as the page's trigger, closing a loop
+  that parked that host at depth 0 and pushed the origin to the far right;
+  trigger cycles are now condensed into one column instead of being mislaid, so
+  the panel and `graph.png` both read `[request] → origin → third parties`.
 - MCP `create_session` no longer fails with `401 unauthorized` when
   `ISOLA_API_TOKEN` is also configured.
 - Deleting a session while its container was still being created no longer

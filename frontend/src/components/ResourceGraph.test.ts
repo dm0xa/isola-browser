@@ -125,6 +125,61 @@ describe('layoutGraph direction', () => {
   });
 });
 
+describe('layoutGraph ordering', () => {
+  // Real captures interleave third-party scripts with the page's own polls, so
+  // the trigger scan used to draw an edge from the last ad host back into the
+  // page. The cycle-tolerant layering then parked the ad host at depth 0 and
+  // pushed the opened page to the far right.
+  const entries = [
+    entry('https://www.unibet.se/', 'Document'),
+    entry('https://www.unibet.se/app.js', 'Script'),
+    entry('https://ads.googlesyndication.example/tag.js', 'Script'),
+    entry('https://connect.facebook.example/sdk.js', 'Script'),
+    entry('https://lo.liveperson.example/lp.js', 'Script'),
+    entry('https://www.unibet.se/api/poll', 'XHR'),
+  ];
+
+  it('keeps the opened page left of every third party it loaded', () => {
+    const graph = buildGraph(entries, 'www.unibet.se');
+    const { nodes } = layoutGraph(graph, 1280, 720);
+    const origin = nodes.find((n) => n.id === 'host:www.unibet.se')!;
+
+    expect(origin.depth).toBe(1);
+    for (const other of nodes) {
+      if (other.id === origin.id || other.node.kind !== 'host') continue;
+      expect(other.x).toBeGreaterThan(origin.x);
+    }
+  });
+
+  it('never infers a trigger edge back into the opened page', () => {
+    const graph = buildGraph(entries, 'www.unibet.se');
+    expect(graph.edges.some((e) => e.to === 'host:www.unibet.se' && e.from !== 'root:request'))
+      .toBe(false);
+  });
+
+  it('keeps hosts that trigger each other right of the page instead of in the entry column', () => {
+    const cyclic = [
+      entry('https://example.com/', 'Document'),
+      entry('https://example.com/app.js', 'Script'),
+      entry('https://a.tracker.example/t.js', 'Script'),
+      entry('https://b.tracker.example/b.js', 'Script'),
+      entry('https://example.com/poll', 'XHR'),
+      // b's script is followed by a request on a again: a ⇄ b is a cycle.
+      entry('https://a.tracker.example/t2.js', 'Script'),
+    ];
+    const graph = buildGraph(cyclic, 'example.com');
+    const { nodes } = layoutGraph(graph, 1280, 720);
+    const origin = nodes.find((n) => n.id === 'host:example.com')!;
+
+    expect(origin.depth).toBe(1);
+    for (const n of nodes) {
+      if (n.id === 'root:request' || n.id === origin.id) continue;
+      expect(n.depth).toBeGreaterThan(1);
+      expect(n.x).toBeGreaterThan(origin.x);
+    }
+  });
+});
+
 describe('buildGraph type filter', () => {
   const entries = [
     entry('https://example.com/', 'Document'),

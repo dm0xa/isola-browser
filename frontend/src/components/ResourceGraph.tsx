@@ -305,6 +305,12 @@ export function buildGraph(
   for (let i = 0; i < included.length; i++) {
     const host = facts[included[i]].host;
 
+    // The opened page is the root of the chain, so a script from an ad host can
+    // never be its trigger. Inferring that edge closed a loop (origin → ad host
+    // → … → origin) and the cycle-tolerant layering below then parked the ad
+    // host at depth 0 and pushed the page to the far right of the graph.
+    if (host === finalRootHost) continue;
+
     for (let j = i - 1; j >= 0 && j >= i - 40; j--) {
       const prev = facts[included[j]];
       if (prev.host === host) continue;
@@ -634,41 +640,78 @@ function nodeSize(n: GraphNode): { w: number; h: number } {
 const KIND_RANK: Record<GraphNodeKind, number> = { root: 0, host: 1, group: 2, resource: 3, more: 4 };
 
 function computeDepths(data: GraphData): Map<string, number> {
-  const depths = new Map<string, number>();
-  const incoming = new Map<string, string[]>();
+  const outgoing = new Map<string, string[]>();
+  for (const n of data.nodes) outgoing.set(n.id, []);
+  for (const e of data.edges) outgoing.get(e.from)?.push(e.to);
+
+  // Longest-path layering. Real trigger chains loop in the wild (host A's
+  // script loads host B, whose script loads host A back), so the graph is not a
+  // DAG. A DFS that merely skips back edges mislays every cycle: when all of a
+  // node's parents are ancestors still on the stack it settles on depth 0,
+  // which parked a third-party host in the entry column, left of the page.
+  // Tarjan condenses each cycle into one component — hosts that trigger each
+  // other belong in the same column — and the components form a DAG.
+  const index = new Map<string, number>();
+  const low = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  const component = new Map<string, number>();
+  let next = 0;
+  let components = 0;
+
+  const strongConnect = (v: string) => {
+    index.set(v, next);
+    low.set(v, next);
+    next++;
+    stack.push(v);
+    onStack.add(v);
+    for (const w of outgoing.get(v) || []) {
+      if (!index.has(w)) {
+        strongConnect(w);
+        low.set(v, Math.min(low.get(v)!, low.get(w)!));
+      } else if (onStack.has(w)) {
+        low.set(v, Math.min(low.get(v)!, index.get(w)!));
+      }
+    }
+    if (low.get(v) === index.get(v)) {
+      let w: string;
+      do {
+        w = stack.pop()!;
+        onStack.delete(w);
+        component.set(w, components);
+      } while (w !== v);
+      components++;
+    }
+  };
   for (const n of data.nodes) {
-    depths.set(n.id, 0);
-    incoming.set(n.id, []);
-  }
-  for (const e of data.edges) {
-    incoming.get(e.to)?.push(e.from);
+    if (!index.has(n.id)) strongConnect(n.id);
   }
 
-  // Longest-path layering, tolerant of cycles: real trigger chains loop in the
-  // wild (host A's script loads host B, whose script loads host A back), and a
-  // BFS-relaxation ping-pongs on those — inflating depths until the iteration
-  // cap and leaving depth values with no nodes between them, which rendered
-  // column guides with ±Infinity coordinates. DFS memoisation simply skips
-  // back edges (an ancestor still on the stack), so depth(v) settles at
-  // 1 + max(depth of acyclic parents) and stays finite.
-  const WHITE = 0;
-  const GRAY = 1;
-  const BLACK = 2;
-  const state = new Map<string, number>();
-  const visit = (id: string) => {
-    const st = state.get(id) ?? WHITE;
-    if (st !== WHITE) return;
-    state.set(id, GRAY);
-    let best = 0;
-    for (const p of incoming.get(id) || []) {
-      if ((state.get(p) ?? WHITE) === GRAY) continue;
-      visit(p);
-      best = Math.max(best, (depths.get(p) || 0) + 1);
+  // Tarjan finishes a component only after every component reachable from it,
+  // so ids run sink → source; relaxing in that order is the longest path in
+  // one pass and cannot ping-pong on a cycle.
+  const byComponent: number[][] = Array.from({ length: components }, () => []);
+  for (const e of data.edges) {
+    const from = component.get(e.from);
+    const to = component.get(e.to);
+    if (from === undefined || to === undefined || from === to) continue;
+    byComponent[from].push(to);
+  }
+  const componentDepth = new Array<number>(components).fill(0);
+  for (let c = components - 1; c >= 0; c--) {
+    for (const to of byComponent[c]) {
+      componentDepth[to] = Math.max(componentDepth[to], componentDepth[c] + 1);
     }
-    depths.set(id, Math.min(best, data.nodes.length));
-    state.set(id, BLACK);
-  };
-  for (const n of data.nodes) visit(n.id);
+  }
+
+  const depths = new Map<string, number>();
+  for (const n of data.nodes) depths.set(n.id, componentDepth[component.get(n.id)!]);
+  // The entry chip and the opened page are columns 0 and 1 by definition: the
+  // page is the root of the chain, whatever else points at it.
+  if (depths.has(ROOT_NODE_ID)) depths.set(ROOT_NODE_ID, 0);
+  if (data.originId && depths.has(data.originId)) {
+    depths.set(data.originId, depths.has(ROOT_NODE_ID) ? 1 : 0);
+  }
   return depths;
 }
 

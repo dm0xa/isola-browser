@@ -362,6 +362,85 @@ func TestOriginOfPrefersDocumentHost(t *testing.T) {
 	}
 }
 
+// A real capture interleaves third-party scripts with the page's own polls.
+// The trigger scan used to attribute the page to the last ad host, closing a
+// loop that parked the ad host at depth 0 and pushed the opened page right.
+func TestLayoutKeepsOriginFirst(t *testing.T) {
+	entries := []netDumpEntry{
+		{URL: "https://www.unibet.se/", Type: "Document"},
+		{URL: "https://www.unibet.se/app.js", Type: "Script"},
+		{URL: "https://ads.googlesyndication.example/tag.js", Type: "Script"},
+		{URL: "https://connect.facebook.example/sdk.js", Type: "Script"},
+		{URL: "https://lo.liveperson.example/lp.js", Type: "Script"},
+		{URL: "https://www.unibet.se/api/poll", Type: "XHR"},
+	}
+	m := buildGraphModel(entries, "www.unibet.se", nil)
+	for _, e := range m.Edges {
+		if e.To == "host:www.unibet.se" && e.From != rootNodeID {
+			t.Fatalf("%s -> %s: inferred trigger edge back into the opened page", e.From, e.To)
+		}
+	}
+
+	lay := layoutModel(m, 1280, 720, dirHorizontal)
+	origin, ok := layoutNodeByID(lay.Nodes, "host:www.unibet.se")
+	if !ok {
+		t.Fatal("origin node missing from the layout")
+	}
+	if origin.Depth != 1 {
+		t.Fatalf("origin depth = %d, want 1", origin.Depth)
+	}
+	for _, n := range lay.Nodes {
+		if n.Node.Kind != "host" || n.Node.ID == origin.Node.ID {
+			continue
+		}
+		if n.X <= origin.X {
+			t.Fatalf("%s at x=%.0f is not right of the origin at x=%.0f", n.Node.ID, n.X, origin.X)
+		}
+	}
+}
+
+// Hosts whose trigger chain loops (a's script → b, b's script → a) used to
+// settle on depth 0 and appear in the entry column, left of the opened page.
+func TestLayoutCondensesTriggerCycles(t *testing.T) {
+	entries := []netDumpEntry{
+		{URL: "https://example.com/", Type: "Document"},
+		{URL: "https://example.com/app.js", Type: "Script"},
+		{URL: "https://a.tracker.example/t.js", Type: "Script"},
+		{URL: "https://b.tracker.example/b.js", Type: "Script"},
+		{URL: "https://example.com/poll", Type: "XHR"},
+		{URL: "https://a.tracker.example/t2.js", Type: "Script"},
+	}
+	m := buildGraphModel(entries, "example.com", nil)
+	lay := layoutModel(m, 1280, 720, dirHorizontal)
+	origin, ok := layoutNodeByID(lay.Nodes, "host:example.com")
+	if !ok {
+		t.Fatal("origin node missing from the layout")
+	}
+	if origin.Depth != 1 {
+		t.Fatalf("origin depth = %d, want 1", origin.Depth)
+	}
+	for _, n := range lay.Nodes {
+		if n.Node.Kind == "root" || n.Node.ID == origin.Node.ID {
+			continue
+		}
+		if n.Depth <= 1 {
+			t.Fatalf("%s at depth %d, want > 1", n.Node.ID, n.Depth)
+		}
+		if n.X <= origin.X {
+			t.Fatalf("%s at x=%.0f is not right of the origin at x=%.0f", n.Node.ID, n.X, origin.X)
+		}
+	}
+}
+
+func layoutNodeByID(nodes []layoutNode, id string) (layoutNode, bool) {
+	for _, n := range nodes {
+		if n.Node.ID == id {
+			return n, true
+		}
+	}
+	return layoutNode{}, false
+}
+
 // BenchmarkRenderGraphPNG measures the full build+layout+paint path. The
 // per-shape rasteriser this replaced took seconds to minutes on the same input.
 func BenchmarkRenderGraphPNG(b *testing.B) {
