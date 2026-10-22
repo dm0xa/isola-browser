@@ -136,3 +136,42 @@ func TestCreateSessionAcceptsAnyConfiguredAPIToken(t *testing.T) {
 		t.Fatalf("second token: status = %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// TestCreateSessionInternalCallerBypassesAPITokenGate pins the contract the MCP
+// server relies on: an in-process caller that already authenticated on /mcp is
+// not rejected by the REST api.token gate. The marker lives in the request
+// context, so a network client cannot forge it with a header.
+func TestCreateSessionInternalCallerBypassesAPITokenGate(t *testing.T) {
+	mem := store.NewMemStore()
+	st := store.NewMemBridgeStore(mem)
+	cache := store.NewMemCache()
+	orch, err := orchestrator.New("unix:///nonexistent/docker.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		BrowserType:          "chromium",
+		Browsers:             map[string]config.BrowserEntry{"chromium": {Enabled: true}},
+		DisableURLValidation: true,
+		APITokens:            []string{"create-gate-token-32-characters-min!!"},
+	}
+	h := New(st, cache, orch, cfg)
+	body := `{"url":"https://example.com","browser_type":"chromium"}`
+
+	req := httptest.NewRequest("POST", "/api/sessions", strings.NewReader(body))
+	req = req.WithContext(WithInternalSessionCreate(req.Context()))
+	w := httptest.NewRecorder()
+	h.CreateSession(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("internal caller: status = %d: %s", w.Code, w.Body.String())
+	}
+
+	// A header that merely claims to be internal must still hit the gate.
+	req2 := httptest.NewRequest("POST", "/api/sessions", strings.NewReader(body))
+	req2.Header.Set("X-Isola-Internal", "true")
+	w2 := httptest.NewRecorder()
+	h.CreateSession(w2, req2)
+	if w2.Code != http.StatusUnauthorized {
+		t.Fatalf("forged header: status = %d, want 401", w2.Code)
+	}
+}

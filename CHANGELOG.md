@@ -19,6 +19,15 @@ publishes the section matching the tag.
   button.
   `.github/workflows/pages.yml` publishes it from the `demo/` directory.
 
+### Fixed
+
+- MCP `create_session` no longer fails with `401 unauthorized` when
+  `ISOLA_API_TOKEN` is also configured. The tool calls the REST handler
+  in-process, which applied the REST create gate to a request that had already
+  authenticated with `ISOLA_MCP_TOKEN`; the in-process call now carries a
+  context marker that no HTTP header can set, matching the behaviour already
+  documented in `docs/automation.md`.
+
 ### Security
 
 - The streamer is off the 2020 `golang.org/x/net` pseudo-version that `cmux`

@@ -1924,10 +1924,26 @@ func (h *Handler) authorizedForSessionCreate(r *http.Request) error {
 	if len(h.cfg.APITokens) == 0 {
 		return nil
 	}
+	// In-process callers that authenticated by other means (the MCP server
+	// verifies mcp.token on /mcp before invoking the handler) are not subject
+	// to the REST bearer gate. The marker lives in the request context and is
+	// never populated from an HTTP header, so network clients are unaffected.
+	if internal, _ := r.Context().Value(internalCreateKey{}).(bool); internal {
+		return nil
+	}
 	if isomw.CheckBearerAny(r, h.cfg.APITokens) {
 		return nil
 	}
 	return errors.New("unauthorized")
+}
+
+// internalCreateKey is the context key for WithInternalSessionCreate.
+type internalCreateKey struct{}
+
+// WithInternalSessionCreate marks ctx as belonging to an in-process caller that
+// has already been authenticated (MCP). Only the MCP server should use it.
+func WithInternalSessionCreate(ctx context.Context) context.Context {
+	return context.WithValue(ctx, internalCreateKey{}, true)
 }
 
 // pluginConfig delegates to the extension point if set, otherwise returns nil.

@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/dm0xa/isola-browser/backend/pkg/api"
 	"github.com/dm0xa/isola-browser/backend/pkg/graphopts"
 	"github.com/dm0xa/isola-browser/backend/pkg/models"
 )
@@ -129,13 +130,21 @@ type resourceGraphParams struct {
 	Scale      int    `json:"scale,omitempty" jsonschema:"Raster scale 1-4 (default 2)"`
 }
 
+// newCreateSessionRequest builds the in-process request toolCreateSession hands
+// to the API handler. The internal-caller marker keeps the REST api.token gate
+// from rejecting a caller that already authenticated on /mcp (see
+// docs/automation.md: MCP create_session is not gated by ISOLA_API_TOKEN).
+func newCreateSessionRequest(ctx context.Context, body []byte) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
+	return req.WithContext(api.WithInternalSessionCreate(ctx))
+}
+
 func (s *Service) toolCreateSession(ctx context.Context, _ *mcp.CallToolRequest, p *createSessionParams) (*mcp.CallToolResult, any, error) {
 	if p == nil || strings.TrimSpace(p.URL) == "" {
 		return nil, nil, fmt.Errorf("url is required")
 	}
 	body, _ := json.Marshal(p.toRequest())
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
-	req = req.WithContext(ctx)
+	req := newCreateSessionRequest(ctx, body)
 	w := httptest.NewRecorder()
 	s.deps.API.CreateSession(w, req)
 	if w.Code != http.StatusAccepted {

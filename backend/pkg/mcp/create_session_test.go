@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -107,5 +108,45 @@ func TestMCPCreateSessionAdvertisesTor(t *testing.T) {
 	}
 	if _, ok := generic.InputSchema.Properties["tor_country"]; !ok {
 		t.Fatalf("create_session schema lacks a `tor_country` property: %s", b)
+	}
+}
+
+// TestMCPCreateSessionRequestBypassesAPITokenGate guards the wiring between the
+// MCP tool and the REST handler: create_session must not run into
+// ISOLA_API_TOKEN, because the caller already authenticated on /mcp.
+func TestMCPCreateSessionRequestBypassesAPITokenGate(t *testing.T) {
+	const mcpToken = "mcp-gate-test-token-32-characters!!"
+	const apiToken = "create-gate-token-32-characters-min!!"
+
+	mem := store.NewMemStore()
+	t.Cleanup(func() { mem.Close() })
+	st := store.NewMemBridgeStore(mem)
+	cache := store.NewMemCache()
+	orch, err := orchestrator.New("unix:///nonexistent/docker.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		MCPEnabled:           true,
+		MCPTokens:            []string{mcpToken},
+		APITokens:            []string{apiToken},
+		BrowserType:          "chromium",
+		Browsers:             map[string]config.BrowserEntry{"chromium": {Enabled: true}},
+		DisableURLValidation: true,
+	}
+	h := api.New(st, cache, orch, cfg)
+
+	params := createSessionParams{URL: "https://example.com"}
+	body, err := json.Marshal(params.toRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.CreateSession(w, newCreateSessionRequest(context.Background(), body))
+	if w.Code == http.StatusUnauthorized {
+		t.Fatalf("MCP create_session blocked by the api.token gate: %d %s", w.Code, w.Body.String())
+	}
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 	}
 }
