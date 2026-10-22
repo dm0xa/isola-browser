@@ -128,7 +128,7 @@ just down                  # docker compose down
 
 ## Hacking on Isola
 
-For local UI iteration and Go development you need **Go 1.26+**, **Node 20+**, and **Just**:
+For local UI iteration and Go development you need **Go 1.26+**, **Node 22+**, and **Just**:
 
 ```bash
 cp .env.example .env

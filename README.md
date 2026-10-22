@@ -148,7 +148,7 @@ just down                  # docker compose down
 
 ## Development
 
-Go 1.26+, Node 20+, and [Just](https://github.com/casey/just):
+Go 1.26+, Node 22+, and [Just](https://github.com/casey/just):
 
 ```bash
 cp .env.example .env

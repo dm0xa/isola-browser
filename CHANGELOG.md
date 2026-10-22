@@ -19,6 +19,21 @@ publishes the section matching the tag.
   button.
   `.github/workflows/pages.yml` publishes it from the `demo/` directory.
 
+### Security
+
+- The streamer is off the 2020 `golang.org/x/net` pseudo-version that `cmux`
+  pinned: `x/net` v0.61.0 (with `x/image` v0.47.0 and `x/text` v0.43.0),
+  closing the HTTP/2 and image-decoder advisories `govulncheck` reported. The
+  backend moves to `go-chi/chi` v5.3.0 and `golang.org/x/sys` v0.49.0. Both
+  modules pin `toolchain go1.26.10`, and the Docker builders use
+  `golang:1.26.10-alpine`, so a stale cache cannot build against an unpatched
+  1.26.0 standard library.
+- Electron is pinned to `44.9.0` with a committed `package-lock.json` and
+  `npm ci` in place of a floating `npm install`, so an image build can no
+  longer resolve an unpatched 44.0–44.2 (CVE-2026-113800).
+- The frontend builder moves from `node:20-alpine` — end-of-life since April
+  2026 — to `node:22-alpine`.
+
 ## [1.2.0] - 2026-10-21
 
 ### Added

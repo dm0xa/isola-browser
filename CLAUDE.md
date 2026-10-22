@@ -37,7 +37,7 @@ just fmt-backend      # go fmt ./...
 
 Builds: `just build-backend`, `just build-frontend`,
 `just build-browser-node-electron`. Full stack: `docker compose up --build`;
-dev stack: `just up-dev`. Requirements: Go 1.26+, Node 20+, Just. CI does **not**
+dev stack: `just up-dev`. Requirements: Go 1.26+, Node 22+, Just. CI does **not**
 run `browsers/electron-runner`'s node tests — run them yourself if you touch that
 tree.
 

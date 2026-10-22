@@ -4,7 +4,7 @@
 # Stage 2: node-builder — install Electron + electron-runner deps
 # Stage 3: runtime — Debian slim + Electron runtime deps + ffmpeg + tor
 
-FROM golang:1.26-alpine AS go-builder
+FROM golang:1.26.10-alpine AS go-builder
 
 # ca-certificates: only needed when modules are downloaded (i.e. no vendor/).
 RUN apk add --no-cache ca-certificates && update-ca-certificates
@@ -18,9 +18,11 @@ RUN cd isola-streamer && CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/isola-s
 FROM node:22-bookworm-slim AS node-builder
 
 WORKDIR /app
-# Electron needs a build context to resolve prebuilt binaries
-COPY electron-runner/package.json ./
-RUN npm install --production
+# Electron needs a build context to resolve prebuilt binaries.
+# package-lock.json is committed so `npm ci` installs the exact reviewed tree
+# instead of resolving whatever npm sees at build time.
+COPY electron-runner/package.json electron-runner/package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
 
 # Electron 44 no longer downloads the platform binary from a package
 # `postinstall` hook — its manifest ships no `scripts` at all. The fetch is now

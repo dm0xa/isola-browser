@@ -2,7 +2,7 @@
 # ──────────────────────────────────────────────────────────────────
 # Stage 1: Build the React frontend
 # ──────────────────────────────────────────────────────────────────
-FROM node:20-alpine AS frontend-builder
+FROM node:22-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
@@ -15,7 +15,7 @@ RUN npm run build
 # ──────────────────────────────────────────────────────────────────
 # Stage 2: Build the Go backend (with the embedded frontend)
 # ──────────────────────────────────────────────────────────────────
-FROM golang:1.26-alpine AS backend-builder
+FROM golang:1.26.10-alpine AS backend-builder
 
 RUN apk add --no-cache ca-certificates git && update-ca-certificates
 

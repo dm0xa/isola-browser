@@ -47,15 +47,16 @@ ship unedited).
 
 ## 2. Isola streamer — Go modules (`browsers/isola-streamer`)
 
-5 modules. License mix: BSD-3-Clause × 3, Apache-2.0 × 1, BSD-2-Clause × 1.
+6 modules. License mix: BSD-3-Clause × 4, Apache-2.0 × 1, BSD-2-Clause × 1.
 
 | Module | Version | License | Copyright |
 |---|---|---|---|
 | `github.com/gorilla/websocket` | `v1.5.3` | BSD-2-Clause | Copyright (c) 2013 The Gorilla WebSocket Authors. All rights reserved. |
 | `github.com/soheilhy/cmux` | `v0.1.5` | Apache-2.0 | _(not stated in license file)_ |
-| `golang.org/x/image` | `v0.24.0` | BSD-3-Clause | Copyright 2009 The Go Authors. |
-| `golang.org/x/net` | `v0.0.0-20201202161906-c7110b5ffcbb` | BSD-3-Clause | Copyright (c) 2009 The Go Authors. All rights reserved. |
-| `golang.org/x/text` | `v0.22.0` | BSD-3-Clause | Copyright 2009 The Go Authors. |
+| `golang.org/x/image` | `v0.47.0` | BSD-3-Clause | Copyright 2009 The Go Authors. |
+| `golang.org/x/net` | `v0.61.0` | BSD-3-Clause | Copyright 2009 The Go Authors. |
+| `golang.org/x/sys` | `v0.49.0` | BSD-3-Clause | Copyright 2009 The Go Authors. |
+| `golang.org/x/text` | `v0.43.0` | BSD-3-Clause | Copyright 2009 The Go Authors. |
 
 ## 3. Desktop runner (`browsers/electron-runner`)
 
@@ -66,7 +67,7 @@ Chromium's `LICENSES.chromium.html` for the full set.
 
 | Package | Range | License | Copyright |
 |---|---|---|---|
-| `electron` | `^44.0.0` | MIT | Copyright (c) Electron contributors; Copyright (c) 2013-2020 GitHub Inc. |
+| `electron` | `44.9.0` | MIT | Copyright (c) Electron contributors; Copyright (c) 2013-2020 GitHub Inc. |
 
 ## 4. Frontend — npm runtime dependencies
 
