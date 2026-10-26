@@ -259,6 +259,8 @@ Some messages get a reply on the same socket:
 | `{"type":"select_range","x1":..,"y1":..,"x2":..,"y2":..}`                                          | —                                   |
 | `{"type":"tab_new"|"tab_switch"|"tab_close"|"tab_navigate"|"tab_back"|"tab_reload"|"tab_recover"|"get_tabs"}` | Tab state                           |
 
+`tab_recover` replaces the tab's renderer and reloads the page, so it costs the page's state. A viewer's `tab_recover` always acts. The sandbox's own renderer watchdog asks the runner for recovery on the internal control socket with `"auto": true`, and that path is budgeted: at most one automatic recovery per URL in ten minutes, and at most three in ten minutes in total (`ISOLA_STALL_SAME_URL_MS`, `ISOLA_STALL_RECOVER_WINDOW_MS`, `ISOLA_STALL_RECOVER_MAX`). Once the budget is spent the picture stays frozen, `renderer_stall` keeps reporting it, and only a manual `tab_recover` replaces the renderer — a page that wedges every fresh renderer would otherwise be reloaded in a loop.
+
 ### Server pushes
 
 The socket is not only a request channel — the sandbox reports state on it as it happens. Unknown message types are ignored, so a client can safely skip pushes it does not understand.

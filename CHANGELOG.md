@@ -6,6 +6,14 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Changed
+
+- Automatic renderer recovery is now budgeted (one per URL, three per ten
+  minutes); manual recover is unaffected.
+- Inactive tabs, and sessions with no viewer attached, composite at 1 fps
+  instead of the capture rate.
+- Page loads read the surface back twice instead of five times.
+
 ### Fixed
 
 - The installer fetches the release-matched sandbox image even when a local

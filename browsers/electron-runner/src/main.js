@@ -28,6 +28,12 @@ const { encodeFrame, extractRect, clampRect, isBlankBitmap, shouldHoldBlank, sur
 const { hardenCtrlSocket } = require('./ctrl_socket');
 const { applyChromeFlags } = require('./chrome_flags');
 const { isEmptyCaptureExpected, shouldStopCaptureFallback, pruneEmptyCaptureTimes } = require('./capture_fallback');
+const {
+  frameRateFor,
+  shouldAutoRecover,
+  loadCaptureDelays,
+  parseDelayList,
+} = require('./render_policy');
 const { applyTorProxy, isTorEnabled } = require('./tor');
 const { isAllowedPageNavigation, resolveAddressBar } = require('./navigation_url');
 const { themeColours, fillPageCanvas } = require('./theme');
@@ -51,6 +57,13 @@ const ISOLA_FRAME_SOCK = process.env.ISOLA_FRAME_SOCK || '/run/isola/frame.sock'
 const ISOLA_CTRL_SOCK = process.env.ISOLA_CTRL_SOCK || '/run/isola/ctrl.sock';
 const TOR_ENABLED = isTorEnabled(process.env.TOR_ENABLED);
 const BROWSER_THEME = process.env.BROWSER_THEME || 'light';
+
+// intEnv reads an integer switch, keeping 0 and negatives meaningful (unlike
+// `parseInt(...) || default`): several knobs use 0 as "this rule is off".
+function intEnv(name, fallback) {
+  const raw = parseInt(process.env[name] || '', 10);
+  return Number.isFinite(raw) ? raw : fallback;
+}
 
 let udsSocket = null;
 let ctrlClients = [];
@@ -110,6 +123,20 @@ const STALL_RECOVER_COOLDOWN_MS = Math.max(
   10000,
   parseInt(process.env.ISOLA_STALL_RECOVER_COOLDOWN_MS || '60000', 10) || 60000,
 );
+// Automatic-recovery budget (see src/render_policy.js shouldAutoRecover). The
+// manual recover action never consults it: a person asking for a fresh renderer
+// is not the loop this protects against. A 0 disables that rule.
+const STALL_RECOVER_MAX = Math.max(0, intEnv('ISOLA_STALL_RECOVER_MAX', 3));
+const STALL_RECOVER_WINDOW_MS = Math.max(0, intEnv('ISOLA_STALL_RECOVER_WINDOW_MS', 600000));
+const STALL_SAME_URL_MS = Math.max(0, intEnv('ISOLA_STALL_SAME_URL_MS', 600000));
+// Inactive tabs — and every tab while no viewer is attached — are composited at
+// this rate instead of the capture rate (<= 0 keeps them all at the capture
+// rate). An offscreen window is composited whether or not anyone can see it, so
+// a background software-GL page is real CPU for no picture. See frameRateFor.
+const BACKGROUND_FPS = intEnv('ISOLA_BACKGROUND_FPS', 1);
+// Post-load capturePage() offsets. ISOLA_LOAD_CAPTURE_DELAYS_MS restores the
+// older five-readback series ("250,600,1200,2500,5000").
+const LOAD_CAPTURE_DELAYS = parseDelayList(process.env.ISOLA_LOAD_CAPTURE_DELAYS_MS);
 let lastComposedAt = Date.now();
 let stallGraceUntil = 0;
 let emptyCaptures = 0;
@@ -125,6 +152,15 @@ let stallReported = false;
 let stallAnnouncedAt = 0;
 let recoveries = 0;
 let lastRecoverAt = 0;
+// Every recovery with the URL it replaced, so the budget can tell "this page
+// wedges every fresh renderer" from a one-off bad load.
+let recoverHistory = [];
+// While set, automatic recovery is skipped without probing capture: the budget
+// just said no, and a full-surface capturePage() every 3s on a wedged renderer
+// is its own cost. Manual recover ignores it.
+let autoRecoverBlockedUntil = 0;
+// Last "<reason>|<url>" refused, so the log says it once, not once per tick.
+let recoverySuppressedKey = '';
 
 // ── Capture-path degradation ────────────────────────────────────────────
 // A paint event can hand back an EMPTY image — the compositor's copy-output
@@ -627,19 +663,75 @@ async function confirmStalled() {
 // is stuck), and forcefullyCrashRenderer() + reload() left the tab with NO
 // renderer process at all — no CDP answers, no capturePage, forever. A new
 // BrowserWindow always comes with a new renderer.
-function recoverStalledRenderer(reason) {
+// recoverStalledRenderer recreates the window only when the automatic budget
+// allows it (opts.auto), or always for a manual/viewer request. It reports
+// whether the window was actually replaced, so callers can keep the stall
+// visible instead of assuming a recovery happened.
+function recoverStalledRenderer(reason, { auto = false } = {}) {
   const tab = activeTab();
-  if (!tab) return;
-  lastRecoverAt = Date.now();
+  if (!tab) return false;
+  const now = Date.now();
+  const url =
+    tab.win && !tab.win.isDestroyed() ? tab.win.webContents.getURL() : tab.url;
+
+  if (auto) {
+    if (now < autoRecoverBlockedUntil) return false;
+    const decision = shouldAutoRecover({
+      url,
+      now,
+      history: recoverHistory,
+      cooldownMs: STALL_RECOVER_COOLDOWN_MS,
+      lastRecoverAt,
+      maxPerWindow: STALL_RECOVER_MAX,
+      windowMs: STALL_RECOVER_WINDOW_MS,
+      sameUrlWindowMs: STALL_SAME_URL_MS,
+    });
+    if (!decision.allow) {
+      // Back off for a full cooldown: retrying the decision (and the capture
+      // readback that leads to it) every watchdog tick would be pure cost.
+      autoRecoverBlockedUntil = now + STALL_RECOVER_COOLDOWN_MS;
+      announceRecoverySuppressed(decision.reason, url);
+      return false;
+    }
+  }
+
+  lastRecoverAt = now;
   recoveries++;
-  const stalledMs = stalledSince ? Date.now() - stalledSince : 0;
+  recoverHistory.push({ url, at: now });
+  // Bound the history: only entries inside a budget window can ever matter.
+  const pruneMs = Math.max(STALL_RECOVER_WINDOW_MS, STALL_SAME_URL_MS, STALL_RECOVER_COOLDOWN_MS);
+  recoverHistory = recoverHistory.filter((entry) => now - entry.at < pruneMs);
+  const stalledMs = stalledSince ? now - stalledSince : 0;
   console.warn(
     `[electron] renderer stalled (${reason}) — recreating the tab window with a fresh renderer`,
   );
   stallReported = true;
-  stallAnnouncedAt = Date.now();
+  stallAnnouncedAt = now;
   broadcastRunnerEvent({ ev: 'renderer_stall', stalled: true, ms: stalledMs, recoveries });
   recreateTabWindow(tab, reason);
+  return true;
+}
+
+// announceRecoverySuppressed keeps the viewer's warning up — the picture really
+// is stuck — while explaining once, per URL and reason, why nothing was
+// reloaded. The manual recover action stays available.
+function announceRecoverySuppressed(reason, url) {
+  const key = `${reason}|${url}`;
+  if (recoverySuppressedKey === key) return;
+  recoverySuppressedKey = key;
+  console.warn(
+    `[electron] renderer still stalled (${reason}) — not replacing it again for this page; manual recover is still available`,
+  );
+  if (!stallReported) {
+    stallReported = true;
+    stallAnnouncedAt = Date.now();
+    broadcastRunnerEvent({
+      ev: 'renderer_stall',
+      stalled: true,
+      ms: stalledSince ? Date.now() - stalledSince : 0,
+      recoveries,
+    });
+  }
 }
 
 function startStallWatchdog() {
@@ -672,14 +764,20 @@ function startStallWatchdog() {
       return;
     }
     if (!stalledSince) stalledSince = Date.now() - silentMs;
-    // One recovery per cooldown window: a page that wedges its renderer on
-    // every load must not turn into a reload loop.
-    if (probing || Date.now() - lastRecoverAt < STALL_RECOVER_COOLDOWN_MS) return;
+    // One recovery per cooldown window, and nothing at all while the automatic
+    // budget has just refused one: a page that wedges its renderer on every load
+    // must not turn into a reload loop, and a full-surface capturePage() every
+    // 3s on a wedged renderer is its own cost.
+    if (probing || Date.now() < autoRecoverBlockedUntil) return;
+    if (Date.now() - lastRecoverAt < STALL_RECOVER_COOLDOWN_MS) return;
     probing = true;
     void (async () => {
       try {
         if (await confirmStalled()) {
-          await recoverStalledRenderer(`${Math.round(silentMs / 1000)}s without a composited frame`);
+          await recoverStalledRenderer(
+            `${Math.round(silentMs / 1000)}s without a composited frame`,
+            { auto: true },
+          );
         } else {
           // Capture still works, so the paint path (not the renderer) was quiet.
           lastComposedAt = Date.now();
@@ -700,10 +798,16 @@ function clearLoadCaptures() {
 }
 
 // Bing and similar sites load hero/background images after did-finish-load.
-// Offscreen paint often misses GPU-layer backgrounds — capturePage composites all layers.
+// Offscreen paint often misses GPU-layer backgrounds — capturePage composites all
+// layers. Every one of these is a full-surface ReadPixels, the expensive path on
+// a software-GL page, so the early ones are skipped once this document has
+// already put a full frame on the wire; the late one always runs.
 function scheduleLoadCaptures() {
   clearLoadCaptures();
-  const delays = [250, 600, 1200, 2500, 5000];
+  const delays = loadCaptureDelays({
+    configured: LOAD_CAPTURE_DELAYS,
+    fullFrameSent: hasSentFullFrame,
+  });
   for (const ms of delays) {
     loadCaptureTimers.push(setTimeout(() => {
       void captureAndSend(`load+${ms}ms`);
@@ -783,6 +887,28 @@ function startForwarding(tab) {
   }, keepaliveMs);
 }
 
+// tabFrameRate is the compositor rate a tab should run at now: the capture rate
+// only while it is active and a viewer is attached.
+function tabFrameRate(active) {
+  return frameRateFor({
+    base: frameRate,
+    active: active === true,
+    captureActive,
+    backgroundFps: BACKGROUND_FPS,
+  });
+}
+
+// setTabFrameRate applies that rate to an attached tab.
+function setTabFrameRate(tab, active) {
+  if (!tab || !tab.win || tab.win.isDestroyed()) return;
+  const next = tabFrameRate(active);
+  try {
+    tab.win.webContents.setFrameRate(next);
+  } catch (err) {
+    console.warn(`[electron] setFrameRate(${next}) failed: ${err.message}`);
+  }
+}
+
 // setCaptureActive is driven by the streamer's viewer count. Pausing stops the
 // keepalive nudges and makes every capture path a no-op, but leaves the page
 // itself untouched (it keeps loading and rendering). Resuming re-seeds the
@@ -795,10 +921,15 @@ function setCaptureActive(on) {
   if (on) {
     resetFrameState();
     if (tab) startForwarding(tab);
+    // Raise the rate before the seeding capture: a tab left at the background
+    // rate could hand back a stale surface as the first frame.
+    if (tab) setTabFrameRate(tab, true);
     if (tab && tab.win && !tab.win.isDestroyed()) tab.win.webContents.invalidate();
     void captureAndSend('viewer-attach');
   } else if (tab) {
     stopForwarding(tab);
+    // Nobody is watching: composing this surface at the capture rate is waste.
+    setTabFrameRate(tab, false);
     if (tab.partialTimer) {
       clearTimeout(tab.partialTimer);
       tab.partialTimer = null;
@@ -813,7 +944,12 @@ function switchTab(id) {
   const target = tabs.find((t) => t.id === id);
   if (!target) return;
   const prev = activeTab();
-  if (prev && prev.id !== id) stopForwarding(prev);
+  if (prev && prev.id !== id) {
+    stopForwarding(prev);
+    // The tab is leaving the screen: keep it live, but stop it competing with
+    // the one that is about to be streamed.
+    setTabFrameRate(prev, false);
+  }
   activeTabId = id;
   // The surface still holds the tab we are leaving, so the first frame from this
   // one must not be held back as a blank replacing a picture — it is the
@@ -826,6 +962,9 @@ function switchTab(id) {
   // stall (if any) said nothing about this one.
   stalledSince = 0;
   clearStallReport();
+  // Restore full rate BEFORE the seeding capture, or the switch could hand the
+  // viewer a surface the tab produced at the background rate.
+  setTabFrameRate(target, true);
   startForwarding(target);
   try {
     target.win.webContents.focus();
@@ -861,6 +1000,8 @@ function createTab(url, activate = true) {
     activeTabId = id;
     startForwarding(tab);
   }
+  // attachTabWindow cannot know yet whether this tab ends up active.
+  setTabFrameRate(tab, tab.id === activeTabId);
   broadcastTabs();
   return tab;
 }
@@ -915,7 +1056,10 @@ function attachTabWindow(tab, url) {
       backgroundThrottling: false,
     },
   });
-  win.webContents.setFrameRate(frameRate);
+  // `tab.win` is assigned at the end of this function, so the rate is applied
+  // there — one applier only: a window attached for a background tab starts at
+  // the background rate, and whoever activates it raises it back (see
+  // createTab/switchTab).
 
   win.webContents.on('paint', (event, dirty, image) => {
     if (tab.id !== activeTabId) return; // background tab: don't stream
@@ -999,6 +1143,8 @@ function attachTabWindow(tab, url) {
   // re-applied per window here.
   if (!loadResolved(win, url)) win.loadURL('about:blank');
   tab.win = win;
+  // Now that the tab owns the window, give it the rate its visibility deserves.
+  setTabFrameRate(tab, tab.id === activeTabId);
   return win;
 }
 
@@ -1057,10 +1203,17 @@ function handleCtrlCommand(line) {
       break;
     }
     case 'tab_recover': {
-      // A user-initiated "the picture is frozen" action: recreate the window
-      // with a fresh renderer, regardless of the watchdog's own timers.
-      lastRecoverAt = 0;
-      void recoverStalledRenderer('requested by viewer');
+      // A viewer-initiated "the picture is frozen" action recreates the window
+      // with a fresh renderer regardless of the watchdog's timers and of the
+      // automatic-recovery budget. `auto` is set only by the streamer's own
+      // watchdog, which IS budgeted: a page that wedges every fresh renderer
+      // must not become a reload loop.
+      const auto = cmd.auto === true;
+      if (!auto) lastRecoverAt = 0;
+      void recoverStalledRenderer(
+        auto ? 'requested by the renderer watchdog' : 'requested by viewer',
+        { auto },
+      );
       break;
     }
     case 'get_tabs':

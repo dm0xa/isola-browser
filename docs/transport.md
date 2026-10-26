@@ -51,6 +51,10 @@ The producer does not ship a full BGRA surface every tick. Each frame is a 32-by
 
 The encode loop skips ticks while the surface is unchanged, but never for longer than `ISOLA_STATIC_KEEPALIVE_MS` (default 2 s, `0` disables). Idle pages stay cheap without looking like a stall. On the MSE path a quiet change also gets a 40 ms follow-up frame so the fMP4 muxer can close the fragment — otherwise a single edit would sit unflushed until keepalive.
 
+Only the active tab of an attached viewer is composited at the capture rate. An inactive tab — and every tab while no viewer is attached — runs at `ISOLA_BACKGROUND_FPS` (default `1`; `<= 0` keeps the capture rate). An offscreen window is composited whether or not anyone can see it, and with no GPU in the sandbox a background tab drawing a WebGL page at capture rate is real CPU competing with the tab that is actually on screen.
+
+Loading a document also schedules post-load `capturePage()` readbacks, because offscreen paint misses GPU-layer hero and background images. Each readback is a full-surface one, so once a document has put a full frame on the wire only the late offset runs (`ISOLA_LOAD_CAPTURE_DELAYS_MS`, default `1200,5000`).
+
 ### Encode
 
 ffmpeg reads the composited BGRA, converts, and emits H.264 **High** profile (`avc1.6400LL`; level follows capture size — 3.0 at 720p, up through 5.1 at 4K). High is ~15% more efficient than Constrained Baseline at the same bitrate, which is the quality lever on text-heavy pages.

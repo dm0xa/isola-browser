@@ -162,7 +162,13 @@ func startRendererWatchdog() {
 			lastRequestAt = time.Now()
 			recoverTimes = append(recoverTimes, lastRequestAt)
 			requests++
-			if !writeCtrlCommand(map[string]any{"cmd": "tab_recover"}) {
+			// "auto" marks this as the watchdog's own request, so the runner applies
+			// its automatic-recovery budget (per URL and per window). A viewer's
+			// manual recover arrives without the flag and always recreates the
+			// window. With the two budgets independent, a page that wedges every
+			// fresh renderer got reloaded about once a minute instead of being left
+			// alone after the first fresh renderer failed too.
+			if !writeCtrlCommand(map[string]any{"cmd": "tab_recover", "auto": true}) {
 				log.Printf("renderer: blocked, but the runner control socket is down — cannot request recovery")
 				continue
 			}
