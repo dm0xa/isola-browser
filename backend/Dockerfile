@@ -40,7 +40,7 @@ RUN chmod +x ./scripts/build.sh && \
 # ──────────────────────────────────────────────────────────────────
 # Stage 3: Minimal runtime image
 # ──────────────────────────────────────────────────────────────────
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates tzdata docker-cli wget
 
