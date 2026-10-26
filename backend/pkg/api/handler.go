@@ -229,8 +229,8 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	userID := uuid.Nil
 
 	var req models.CreateSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid_request_body")
+	if err := decodeJSON(r, &req); err != nil {
+		respondDecodeError(w, err)
 		return
 	}
 	if req.URL == "" {
@@ -959,8 +959,8 @@ func (h *Handler) ResizeSession(w http.ResponseWriter, r *http.Request) {
 		Width  int `json:"width"`
 		Height int `json:"height"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid_request_body")
+	if err := decodeJSON(r, &req); err != nil {
+		respondDecodeError(w, err)
 		return
 	}
 
@@ -1234,9 +1234,9 @@ func (h *Handler) ToggleAudio(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		log.Printf("audio toggle: json decode error: %v", err)
-		respondError(w, http.StatusBadRequest, "invalid_request_body")
+		respondDecodeError(w, err)
 		return
 	}
 
@@ -1860,6 +1860,40 @@ func setSensitiveNoStore(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 }
 
+// maxJSONBodyBytes caps the bodies the API decodes. The largest legitimate
+// payload — a session-create request carrying a URL and browser flags — is a
+// few KiB, so this is generous while keeping an unauthenticated caller from
+// making the control plane buffer an unbounded body.
+const maxJSONBodyBytes = 64 << 10
+
+// errBodyTooLarge marks a decode that hit maxJSONBodyBytes, so callers can tell
+// an oversized body apart from malformed JSON.
+var errBodyTooLarge = errors.New("request body too large")
+
+// decodeJSON decodes r.Body into dst with a size cap. A nil ResponseWriter is
+// passed to http.MaxBytesReader deliberately: the caller decides the response,
+// so an oversized body keeps a stable error code instead of Go's implicit 413.
+func decodeJSON(r *http.Request, dst interface{}) error {
+	body := http.MaxBytesReader(nil, r.Body, maxJSONBodyBytes)
+	if err := json.NewDecoder(body).Decode(dst); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return errBodyTooLarge
+		}
+		return err
+	}
+	return nil
+}
+
+// respondDecodeError maps a decodeJSON failure onto the API error contract.
+func respondDecodeError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errBodyTooLarge) {
+		respondError(w, http.StatusRequestEntityTooLarge, "payload_too_large")
+		return
+	}
+	respondError(w, http.StatusBadRequest, "invalid_request_body")
+}
+
 func respondError(w http.ResponseWriter, status int, code string) {
 	respondErrorMessage(w, status, code, errorMessageForCode(code))
 }
@@ -1888,6 +1922,8 @@ func errorMessageForCode(code string) string {
 		return "Session not found"
 	case "invalid_request_body":
 		return "Invalid request body"
+	case "payload_too_large":
+		return "Request body exceeds the maximum allowed size"
 	case "missing_authorization":
 		return "Missing authorization header"
 	case "invalid_token":

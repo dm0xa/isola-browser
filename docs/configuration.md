@@ -158,7 +158,7 @@ In addition to the per-setting variables above:
 | `ISOLA_DATA_DIR` | Container | Directory for the session snapshot (`sessions.json`) and per-session policy files. Default `/var/lib/isola`; it must be writable by the running user or persistence is silently skipped with `data dir unavailable, persistence disabled`. |
 | `ISOLA_BROWSER_IMAGE` | Container | Docker image used for session containers (default `isola-browser:electron`, the image the Compose stack builds). Point it at a published/prebuilt image to run without a local build. |
 | `ISOLA_MAX_SESSIONS` | Container | Cap on concurrently active sessions (provisioning + running) across the whole instance. Unset/`0` = unlimited. Launches beyond the cap are refused with HTTP `429` (`max_sessions_reached`). |
-| `ISOLA_GPU` | Container | Set to `1` to pass `/dev/dri` into session containers for hardware-accelerated encoding. |
+| `ISOLA_GPU` | Container | Set to `1` to pass `/dev/dri` into session containers for hardware-accelerated encoding. Only takes effect when the backend can see `/dev/dri/renderD128` itself — with Compose, use the GPU overlay (`-f deploy/docker-compose.gpu.yml`). |
 | `ISOLA_SECCOMP_PROFILE` | Container | Path to a seccomp profile for session containers. |
 | `ISOLA_REQUIRE_MAC` | Container | Require an enforcing MAC policy (AppArmor or SELinux) to confine session containers; the entrypoint refuses to start without one. Default `1`; set `0` to allow an unconfined host (**not recommended**). The installer reports the detected state but never sets this itself. |
 | `RATE_LIMITING_ENABLED` | Container | When `true`, limits mutating REST calls to 120/min per client IP (GET/HEAD exempt). Recommended on internet-facing hosts. |

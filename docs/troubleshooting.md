@@ -115,7 +115,7 @@ Requests above `session.max_resolution` are scaled down before the container sta
 
 ## GPU Encoding Isn't Used
 
-- The host needs `/dev/dri/renderD128`, and both `ISOLA_GPU=1` and the `/dev/dri` mount must be present. Without them Isola uses software encoding; this is expected, not an error.
+- The host needs `/dev/dri/renderD128`, and both `ISOLA_GPU=1` and the `/dev/dri` mount must be present — the backend checks the device from inside its own container. With Compose, the GPU overlay supplies both: `-f deploy/docker-compose.gpu.yml`. Without them Isola uses software encoding; this is expected, not an error.
 
 ## `POST /api/sessions` Returns 401
 

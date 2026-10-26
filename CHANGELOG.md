@@ -31,6 +31,14 @@ publishes the section matching the tag.
 
 ### Changed
 
+- **GPU acceleration is opt-in, and the dev frontend is loopback-only.** The
+  base Compose stack no longer mounts `/dev/dri`: the device is absent on macOS
+  and on GPU-less hosts, where the unconditional mount made `docker compose up`
+  fail outright. Enable hardware encoding with the new overlay,
+  `docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d`,
+  which adds the device and `ISOLA_GPU=1` together (the backend checks the device
+  itself, so one without the other silently falls back to libx264). The Vite dev
+  server now publishes on `127.0.0.1:5173` instead of all interfaces.
 - Recon follows the Tor circuit in Tor sessions; ASN lookups are reported as
   unavailable there.
 - Posture accounts for transport trust: a document served over an untrusted or
@@ -41,8 +49,6 @@ publishes the section matching the tag.
 
 ### Fixed
 
-- Switching a page's country no longer leaves stale or blank regions in the
-  viewport.
 - Emoji flags render in the sandbox.
 - The request graph keeps the opened page in the leftmost column.
 - Filtering the network log no longer drops fields from the returned entries.

@@ -1,0 +1,20 @@
+# GPU acceleration overlay — opt-in.
+#
+#   docker compose -f deploy/docker-compose.yml \
+#     -f deploy/docker-compose.gpu.yml up -d
+#
+# Why an overlay and not the base file: /dev/dri does not exist on macOS or on a
+# host without an Intel render device, and an unconditional bind mount makes
+# `docker compose up` fail before anything starts. The base stack therefore
+# mounts nothing, and this file adds the device only where it is wanted.
+#
+# Both halves are required. The orchestrator stat()s /dev/dri/renderD128 from
+# inside its own container before it passes the device to a session, so the
+# backend needs the mount *and* ISOLA_GPU=1; with only one of them, sessions
+# still encode in software (libx264) and log nothing unusual.
+services:
+  backend:
+    environment:
+      - ISOLA_GPU=1
+    volumes:
+      - /dev/dri:/dev/dri

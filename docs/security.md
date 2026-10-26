@@ -20,6 +20,18 @@ Isola's threat model is simple: a page you open may be hostile, and it must not 
 | MAC policy | An enforcing LSM must confine the container — AppArmor's `docker-default` profile or SELinux's container policy. The entrypoint **fails closed** (`ISOLA_REQUIRE_MAC=0` overrides) if neither is enforcing, so a host that failed to apply a profile never serves an unconfined sandbox. |
 | Published ports | `127.0.0.1::5900` and `127.0.0.1::9223` — bound to loopback only, never exposed on the host's external interfaces. |
 
+**Control-plane container.** The backend is hardened to the same shape as the sessions it launches (`deploy/docker-compose.yml`):
+
+| Control | Setting |
+| :--- | :--- |
+| Filesystem | `read_only: true`, with a `tmpfs` at `/tmp` (64 MB, `noexec,nosuid,nodev`) and the `isola-data` volume at `/var/lib/isola` for the session snapshot. |
+| Capabilities | `cap_drop: ALL` — the control plane reaches Docker through the socket, not through capabilities. |
+| Privilege escalation | `no-new-privileges:true`. |
+| Limits | `pids_limit 512`, `mem_limit 1g` with `memswap_limit` equal to it, `cpus 2`. Override with `ISOLA_BACKEND_MEMORY` / `ISOLA_BACKEND_CPUS`. |
+| Seccomp | Docker's default profile. `ISOLA_SECCOMP_PROFILE` is deliberately **not** set: the bundled profile is written for the browser image and aborts container setup on Docker 29.x (`runc: reopen exec fifo … operation not permitted`), so it must be validated on the host before it is enabled. |
+
+This narrows the gap between the sandbox and its supervisor: an RCE in the Go process still gets the Docker socket (which is equivalent to host root), but no longer gets a writable rootfs, added capabilities, or unbounded memory and processes.
+
 **Network isolation.** Session containers run on a dedicated Docker bridge (`browser-net`) with inter-container communication disabled; only the backend joins it, and it has no direct internet ingress. Inside the container, the entrypoint applies matching `iptables` **and** `ip6tables` policies (startup **fails closed** if rules cannot be applied). Outbound whitelists permit only HTTP, HTTPS, DNS, and NTP, and block RFC1918 and ULA targets so a session cannot probe your internal network. Docker's embedded resolver (`127.0.0.11`) is applied on IPv4 only so `ip6tables` is not fed invalid host literals.
 
 **Service port ACL.** On INPUT, TCP **5900** (streamer) and **9223** (CDP relay) accept traffic only from the backend peer: `ISOLA_PROXY_IP` when set, otherwise the container default gateway. Other bridge neighbours cannot dial those ports.

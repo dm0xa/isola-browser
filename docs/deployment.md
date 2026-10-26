@@ -124,19 +124,19 @@ Each session container is capped at **2 GB RAM, 3 CPUs, and 512 PIDs**. Size the
 - A **warm pool** of size *N* keeps *N* idle containers ready, each costing a full session's memory while it waits. A claimed container is no longer idle, so peak concurrency plus *N* idle containers is the memory to budget.
 - **Disk** — used by the images and by `/dev/shm` allocations; the browser images are the bulk of it.
 
+The control plane itself is capped separately at **1 GB RAM, 2 CPUs, and 512 PIDs** by the Compose stack, with a read-only rootfs and no capabilities. Those limits cover the Go process, the WebSocket relay and the graph proxy — not the sessions. Override them with `ISOLA_BACKEND_MEMORY` (e.g. `2g`) and `ISOLA_BACKEND_CPUS` if you serve many concurrent viewers or large resource graphs; the memory limit is also the swap limit, so swapping cannot hide a too-small value.
+
 ## GPU Acceleration
 
-If the host has an Intel render device (`/dev/dri/renderD128`), you can enable hardware-accelerated encoding:
+If the host has an Intel render device (`/dev/dri/renderD128`), enable hardware-accelerated encoding with the GPU overlay:
 
-```yaml
-# docker-compose.yml (services.isola)
-environment:
-  - ISOLA_GPU=1
-volumes:
-  - /dev/dri:/dev/dri
+```bash
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d
 ```
 
-The dev stack in [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) already mounts `/dev/dri`. When no GPU is available, Isola falls back to software encoding.
+The overlay adds `/dev/dri` to the backend and sets `ISOLA_GPU=1`. Both are required: the orchestrator checks `/dev/dri/renderD128` from inside its own container before it passes the device to a session, so setting either one alone silently leaves encoding on `libx264`. The base stack never mounts `/dev/dri` — the device is absent on macOS and on GPU-less hosts, where an unconditional mount makes `docker compose up` fail before anything starts. When no GPU is available, Isola falls back to software encoding.
+
+For a non-Compose deployment, supply the same two things yourself: `-v /dev/dri:/dev/dri` and `-e ISOLA_GPU=1`.
 
 ## Persistence and Volumes
 
@@ -144,8 +144,8 @@ The dev stack in [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) alr
 | :--- | :--- |
 | `/var/run/docker.sock` | **Required.** Lets Isola launch session containers. |
 | `./backend/config.yaml` → `/config.yaml` | Configuration (read-only). Restart to apply changes. |
-| `browsers/isola-base/seccomp.json` → `/etc/isola/seccomp.json` | Seccomp profile for session containers. |
-| `isola-data` → `/var/lib/isola` | Persistent application data: the session snapshot (`sessions.json`) and per-session policy files. Set `ISOLA_DATA_DIR` to relocate it. |
+| `browsers/isola-base/seccomp.json` → `/etc/isola/seccomp.json` | Opt-in strict seccomp profile. Only used when `ISOLA_SECCOMP_PROFILE` points at it; it is not enabled by default (it aborts container setup on Docker 29.x, so validate before enabling). |
+| `isola-data` → `/var/lib/isola` | **Required for the hardened stack** (and for viewers to resume across restarts). Persistent application data: the session snapshot (`sessions.json`) and per-session policy files. The container's rootfs is read-only, so without this volume the snapshot saver disables itself. Set `ISOLA_DATA_DIR` to relocate it. |
 
 Session *content* (cookies, history, files inside the browser) is never persisted — it lives only inside the container and is discarded on teardown.
 

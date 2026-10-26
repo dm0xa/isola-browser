@@ -38,13 +38,45 @@ services:
       # Require an enforcing MAC policy (AppArmor/SELinux) to confine session
       # containers; set to 0 only on a host that deliberately runs without one.
       - ISOLA_REQUIRE_MAC=${ISOLA_REQUIRE_MAC:-1}
+      # Strict seccomp for the CONTROL PLANE is opt-in and deliberately off: with
+      # Docker 29.x the bundled profile aborts container setup (runc: "reopen
+      # exec fifo ... operation not permitted"). Validate on your runtime first.
+      # - ISOLA_SECCOMP_PROFILE=/etc/isola/seccomp.json
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # config.yaml is bind-mounted so operators can change UI options
       # (transports/resolutions/visibility) with a restart, no rebuild.
       - ../backend/config.yaml:/config.yaml:ro
-      - /dev/dri:/dev/dri  # Intel GPU access for hardware-accelerated encoding
+      # /dev/dri is deliberately NOT mounted here: the device does not exist on
+      # macOS or GPU-less hosts, and an unconditional bind mount makes the whole
+      # stack fail at start. Enable hardware encoding with the GPU overlay:
+      #   docker compose -f deploy/docker-compose.yml \
+      #     -f deploy/docker-compose.gpu.yml up -d
+      # Opt-in only (see ISOLA_SECCOMP_PROFILE above): the bundled profile is a
+      # strict default-deny allowlist written for the browser image, not the
+      # control plane, and it currently fails to set a container up at all on
+      # Docker 29.x. Mounted so an operator can opt in without a rebuild.
       - ../browsers/isola-base/seccomp.json:/etc/isola/seccomp.json:ro
+      # Session routing state (sessions.json). Required for viewers to resume
+      # across restarts, and required for the read-only rootfs below: without a
+      # writable /var/lib/isola the snapshot saver disables itself silently.
+      - isola-data:/var/lib/isola
+    # ── Control-plane hardening ──
+    # Mirrors the session containers: no capabilities, no privilege escalation,
+    # immutable rootfs and hard resource caps. The backend only needs the
+    # Docker socket, the config file, and a writable /tmp (module sockets) plus
+    # /var/lib/isola (snapshot persistence).
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: ${ISOLA_BACKEND_MEMORY:-1g}
+    memswap_limit: ${ISOLA_BACKEND_MEMORY:-1g}  # == mem_limit: no swap escape hatch
+    cpus: ${ISOLA_BACKEND_CPUS:-2}
     networks:
       - isola
       - browser-net
@@ -55,13 +87,21 @@ services:
       context: ../frontend
       dockerfile: Dockerfile.dev
     ports:
-      - "5173:5173"
+      # Loopback only. The Vite dev server has no TLS and no auth, and the API it
+      # proxies to is already reachable from this host; publishing it on 0.0.0.0
+      # exposes the dev stack to the network for no benefit.
+      - "127.0.0.1:5173:5173"
     volumes:
       - ../frontend/src:/app/src
     environment:
       - VITE_API_URL=http://localhost
     networks:
       - isola
+
+volumes:
+  # Holds sessions.json, which contains session control tokens: keep it 0700
+  # (the binary enforces that) and treat the volume as secret-bearing state.
+  isola-data:
 
 networks:
   isola:
