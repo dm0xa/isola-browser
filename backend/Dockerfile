@@ -15,7 +15,7 @@ RUN npm run build
 # ──────────────────────────────────────────────────────────────────
 # Stage 2: Build the Go backend (with the embedded frontend)
 # ──────────────────────────────────────────────────────────────────
-FROM golang:1.26.10-alpine AS backend-builder
+FROM golang:1.27.3-alpine AS backend-builder
 
 RUN apk add --no-cache ca-certificates git && update-ca-certificates
 
