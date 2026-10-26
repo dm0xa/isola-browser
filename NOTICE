@@ -263,13 +263,13 @@ License mix: MIT × 302, Apache-2.0 × 20, ISC × 16, BSD-2-Clause × 8, BSD-3-C
 | `@typescript-eslint/utils` | `8.72.0` | MIT | Copyright (c) 2019 typescript-eslint and other contributors |
 | `@typescript-eslint/visitor-keys` | `8.72.0` | MIT | Copyright (c) 2019 typescript-eslint and other contributors |
 | `@vitejs/plugin-react` | `4.7.0` | MIT | Copyright (c) 2019-present, Yuxi (Evan) You and Vite contributors |
-| `@vitest/expect` | `4.1.9` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `@vitest/mocker` | `4.1.9` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `@vitest/pretty-format` | `4.1.9` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `@vitest/runner` | `4.1.9` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `@vitest/snapshot` | `4.1.9` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `@vitest/spy` | `4.1.9` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `@vitest/utils` | `4.1.9` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
+| `@vitest/expect` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
+| `@vitest/mocker` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
+| `@vitest/pretty-format` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
+| `@vitest/runner` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
+| `@vitest/snapshot` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
+| `@vitest/spy` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
+| `@vitest/utils` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
 | `acorn` | `8.17.0` | MIT | Copyright (C) 2012-2022 by various contributors (see AUTHORS) |
 | `acorn-jsx` | `5.3.2` | MIT | Copyright (C) 2012-2017 by Ingvar Stepanyan |
 | `ajv` | `6.15.0` | MIT | Copyright (c) 2015-2017 Evgeny Poberezkin |
@@ -289,13 +289,13 @@ License mix: MIT × 302, Apache-2.0 × 20, ISC × 16, BSD-2-Clause × 8, BSD-3-C
 | `bidi-js` | `1.0.3` | MIT | Copyright (c) 2021 Jason Johnston |
 | `binary-extensions` | `2.3.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com); Copyright (c) Paul Miller (https://paulmillr.com) |
 | `brace-expansion` | `5.0.12` | MIT | _(not stated in license file)_ |
-| `brace-expansion` | `1.1.15` | MIT | Copyright (c) 2013 Julian Gruber <julian@juliangruber.com> |
+| `brace-expansion` | `1.1.21` | MIT | Copyright (c) 2013 Julian Gruber <julian@juliangruber.com> |
 | `braces` | `3.0.3` | MIT | Copyright (c) 2014-present, Jon Schlinkert. |
 | `browserslist` | `4.29.4` | MIT | Copyright 2014 Andrey Sitnik <andrey@sitnik.es> and other contributors |
 | `callsites` | `3.1.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com) |
 | `camelcase-css` | `2.0.1` | MIT | Copyright (c) Steven Vachon <contact@svachon.com> (svachon.com) |
 | `caniuse-lite` | `1.0.30001819` | CC-BY-4.0 | Copyright (c) Ben Briggs |
-| `chai` | `6.2.2` | MIT | Copyright (c) 2017 Chai.js Assertion Library |
+| `chai` | `6.3.0` | MIT | Copyright (c) 2017 Chai.js Assertion Library |
 | `chalk` | `4.1.2` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com) |
 | `chokidar` | `3.6.0` | MIT | Copyright (c) 2012-2019 Paul Miller (https://paulmillr.com), Elan Shanker |
 | `color-convert` | `2.0.1` | MIT | Copyright (c) 2011-2016 Heather Arthur <fayearthur@gmail.com> |
@@ -368,7 +368,7 @@ License mix: MIT × 302, Apache-2.0 × 20, ISC × 16, BSD-2-Clause × 8, BSD-3-C
 | `is-potential-custom-element-name` | `1.0.1` | MIT | Copyright (c) Mathias Bynens |
 | `isexe` | `2.0.0` | ISC | Copyright (c) Isaac Z. Schlueter and Contributors |
 | `jiti` | `1.21.7` | MIT | Copyright (c) Pooya Parsa <pooya@pi0.io> |
-| `js-yaml` | `4.2.0` | MIT | Copyright (C) 2011-2015 by Vitaly Puzrin |
+| `js-yaml` | `4.3.2` | MIT | Copyright (C) 2011-2015 by Vitaly Puzrin |
 | `jsdom` | `29.1.1` | MIT | Copyright (c) 2010 Elijah Insua |
 | `jsesc` | `3.1.0` | MIT | Copyright (c) Mathias Bynens |
 | `json-buffer` | `3.0.1` | MIT | Copyright (c) 2013 Dominic Tarr |
@@ -418,7 +418,7 @@ License mix: MIT × 302, Apache-2.0 × 20, ISC × 16, BSD-2-Clause × 8, BSD-3-C
 | `postcss-js` | `4.1.0` | MIT | Copyright 2015 Andrey Sitnik <andrey@sitnik.ru> |
 | `postcss-load-config` | `6.0.1` | MIT | Copyright (c) Michael Ciniawky <michael.ciniawsky@gmail.com> |
 | `postcss-nested` | `6.2.0` | MIT | Copyright 2014 Andrey Sitnik <andrey@sitnik.ru> |
-| `postcss-selector-parser` | `6.1.4` | MIT | _(not stated in license file)_ |
+| `postcss-selector-parser` | `6.1.5` | MIT | _(not stated in license file)_ |
 | `postcss-value-parser` | `4.2.0` | MIT | Copyright (c) Bogdan Chadkin <trysound@yandex.ru> |
 | `prelude-ls` | `1.2.1` | MIT | Copyright (c) George Zahariev |
 | `pretty-format` | `27.5.1` | MIT | Copyright (c) Facebook, Inc. and its affiliates. |
@@ -456,7 +456,7 @@ License mix: MIT × 302, Apache-2.0 × 20, ISC × 16, BSD-2-Clause × 8, BSD-3-C
 | `tinybench` | `2.9.0` | MIT | Copyright (c) 2022 Tinylibs |
 | `tinyexec` | `1.2.4` | MIT | Copyright (c) 2024 Tinylibs |
 | `tinyglobby` | `0.2.17` | MIT | Copyright (c) 2024 Madeline Gurriarán |
-| `tinyrainbow` | `3.1.0` | MIT | Copyright (c) 2022 Tinylibs |
+| `tinyrainbow` | `3.2.0` | MIT | Copyright (c) 2022 Tinylibs |
 | `tldts` | `7.4.3` | MIT | Copyright (c) 2017 Thomas Parisot, 2018 Rémi Berson |
 | `tldts-core` | `7.4.3` | MIT | Copyright (c) 2017 Thomas Parisot, 2018 Rémi Berson |
 | `to-regex-range` | `5.0.1` | MIT | Copyright (c) 2015-present, Jon Schlinkert. |
@@ -467,13 +467,13 @@ License mix: MIT × 302, Apache-2.0 × 20, ISC × 16, BSD-2-Clause × 8, BSD-3-C
 | `type-check` | `0.4.0` | MIT | Copyright (c) George Zahariev |
 | `typescript` | `5.9.3` | Apache-2.0 | Copyright (c) Microsoft Corp. |
 | `typescript-eslint` | `8.72.0` | MIT | Copyright (c) 2019 typescript-eslint and other contributors |
-| `undici` | `7.28.0` | MIT | Copyright (c) Matteo Collina and Undici contributors |
+| `undici` | `7.30.1` | MIT | Copyright (c) Matteo Collina and Undici contributors |
 | `undici-types` | `8.9.0` | MIT | Copyright (c) Matteo Collina and Undici contributors |
 | `update-browserslist-db` | `1.3.4` | MIT | Copyright 2022 Andrey Sitnik <andrey@sitnik.es> and other contributors |
 | `uri-js` | `4.4.1` | BSD-2-Clause | Copyright 2011 Gary Court. All rights reserved. |
 | `util-deprecate` | `1.0.2` | MIT | Copyright (c) 2014 Nathan Rajlich <nathan@tootallnate.net> |
-| `vite` | `6.4.3` | MIT | Copyright (c) 2019-present, VoidZero Inc. and Vite contributors |
-| `vitest` | `4.1.9` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
+| `vite` | `6.4.5` | MIT | Copyright (c) 2019-present, VoidZero Inc. and Vite contributors |
+| `vitest` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
 | `w3c-xmlserializer` | `5.0.0` | MIT | Copyright © Sebastian Mayr |
 | `webidl-conversions` | `8.0.1` | BSD-2-Clause | Copyright (c) 2014, Domenic Denicola |
 | `whatwg-mimetype` | `5.0.0` | MIT | Copyright © Domenic Denicola <d@domenic.me> |
