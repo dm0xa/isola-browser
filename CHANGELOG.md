@@ -6,6 +6,13 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- The installer fetches the release-matched sandbox image even when a local
+  `isola-browser:electron` tag exists; it previously kept a leftover image that
+  could mismatch the binary. A detached install no longer prints a `/dev/tty`
+  error before taking its prompt defaults.
+
 ## [1.4.0] - 2026-10-26
 
 ### Security

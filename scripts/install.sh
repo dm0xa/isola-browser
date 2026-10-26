@@ -48,6 +48,12 @@ success() { printf "${GREEN}✓${NC} %s\n" "$*"; }
 warn()    { printf "${YELLOW}⚠${NC} %s\n" "$*"; }
 error()   { printf "${RED}✗${NC} %s\n" "$*"; }
 
+# /dev/tty is readable by mode bits even when the process has no controlling
+# terminal, so `[[ -r /dev/tty ]]` was true for a detached install and the read
+# printed "Device not configured" before falling back to its default. Opening
+# it is the only reliable test.
+have_tty() { ( exec 9</dev/tty ) 2>/dev/null; }
+
 # ── which version to install ───────────────────────────────────────────
 # DOWNLOAD_BASE is the /releases/latest/download alias, so the version in the
 # asset filename must match whatever release is latest *right now*. A hard-coded
@@ -155,7 +161,7 @@ stop_isola_if_running() {
 
     warn "isola is already running (PID $isola_pid). It must be stopped before upgrading."
     local answer="Y"
-    if [[ -r /dev/tty ]]; then
+    if have_tty; then
         printf "${CYAN}Stop isola now? [Y/n] ${NC}"
         read -r answer </dev/tty || answer="Y"
     fi
@@ -469,7 +475,11 @@ browser_image_candidates() {
 }
 
 pull_browser_image() {
-    local ref
+    local ref candidates
+    candidates="$(browser_image_candidates)"
+    # An empty candidate list means the registry was deliberately skipped
+    # (ISOLA_BROWSER_IMAGE_REMOTE=""), not that a pull failed.
+    [[ -n "$candidates" ]] || return 2
 
     while IFS= read -r ref; do
         [[ -n "$ref" ]] || continue
@@ -481,7 +491,7 @@ pull_browser_image() {
             return 0
         fi
         warn "Could not fetch ${ref}."
-    done < <(browser_image_candidates)
+    done <<< "$candidates"
 
     info "  Private or not published yet? Authenticate, then re-run:"
     info "  docker login ghcr.io"
@@ -499,7 +509,7 @@ ensure_docker() {
         warn "Docker is required but was not found on this host."
 
         local answer="Y"
-        if [[ -r /dev/tty ]]; then
+        if have_tty; then
             printf "${CYAN}Install Docker now? [Y/n] ${NC}"
             read -r answer </dev/tty || answer="Y"
         fi
@@ -531,18 +541,27 @@ ensure_docker() {
 
 # ── ensure the per-session browser image is present ─────────────────
 ensure_browser_image() {
+    # The published image comes first, every time: the binary and the streamer
+    # share the ISOL wire header and the ABR ladder, so an `isola-browser:electron`
+    # tag left over from an earlier install cannot be assumed to match this
+    # release. Checking the registry also costs nothing when the layers are
+    # already present — docker pull is then only a manifest comparison.
+    local rc=0
+    pull_browser_image || rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        return 0
+    fi
+    if [[ $rc -eq 2 ]]; then
+        info "Registry skipped (ISOLA_BROWSER_IMAGE_REMOTE is empty)."
+    fi
+
     if docker image inspect "${BROWSER_IMAGE}" >/dev/null 2>&1; then
-        success "Session image ${BROWSER_IMAGE} is ready."
+        warn "Keeping the local ${BROWSER_IMAGE}; it may not match this release."
         return 0
     fi
 
     warn "The per-session image ${BROWSER_IMAGE} is not present."
-
-    # The published image comes first: it is the only path that works without a
-    # source checkout. It is non-interactive, so a piped install never blocks.
-    if pull_browser_image; then
-        return 0
-    fi
 
     if [[ -z "$PROJECT_ROOT" || ! -f "${PROJECT_ROOT}/docker-compose.yml" ]]; then
         info "Build it once from a source checkout:"
@@ -554,7 +573,7 @@ ensure_browser_image() {
     # No TTY (piped install): proceed without prompting rather than blocking on
     # a read, matching the prompt's [Y/n] default.
     local build_answer=""
-    if [[ -r /dev/tty ]]; then
+    if have_tty; then
         printf "${CYAN}Build ${BROWSER_IMAGE} now? [Y/n] ${NC}"
         read -r build_answer </dev/tty || build_answer=""
     fi
@@ -701,7 +720,7 @@ main() {
     # 10. optionally set up as a system service
     if [[ $docker_ready -eq 1 ]] || service_file_exists "$os"; then
         local setup_svc="Y"
-        if [[ -r /dev/tty ]]; then
+        if have_tty; then
             printf "\n${CYAN}Set up isola as a system service (auto-start on boot)? [Y/n] ${NC}\n"
             read -r setup_svc </dev/tty || setup_svc="Y"
         fi
