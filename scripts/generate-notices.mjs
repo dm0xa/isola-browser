@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 // Generates the repository NOTICE file from the dependency trees that are
-// actually installed/vendored, so the module list, versions, licenses and
+// actually resolved, so the module list, versions, licenses and
 // copyright lines are read from disk instead of being written by hand.
 //
 //   node scripts/generate-notices.mjs          # writes ./NOTICE
 //   node scripts/generate-notices.mjs --check  # exits 1 if NOTICE is stale
 //
-// Sources: backend/vendor (backend Go modules), browsers/isola-streamer/go.mod
-// (+ the Go module cache), browsers/electron-runner/package.json,
-// frontend/package-lock.json (+ frontend/node_modules).
+// Sources: backend/go.mod (+ the Go module cache),
+// browsers/isola-streamer/go.mod (+ the Go module cache),
+// browsers/electron-runner/package.json, frontend/package-lock.json
+// (+ frontend/node_modules).
+//
+// Nothing here may read backend/vendor: vendor/ is gitignored and absent in CI
+// and in the release build (both use `go mod download`), so a vendor-based list
+// made this file's contents depend on the machine that generated it — a stale
+// vendor tree silently published old versions.
 //
 // Trees that are not part of this repository are deliberately excluded from
 // the generated NOTICE.
@@ -95,38 +101,46 @@ function inspectDir(dir) {
   return { license: null, copyright: null, text: null };
 }
 
-// ---------------------------------------------------------------- Go: backend (vendored)
+// ---------------------------------------------------------------- Go: modules
+
+function parseGoModRequires(goMod) {
+  const reqs = [];
+  for (const line of goMod.split('\n')) {
+    const m = line.match(/^\s*(?:require\s+)?([a-z0-9.-]+\.[a-z]{2,}\/\S+)\s+(v\S+)/i);
+    if (m) reqs.push({ module: m[1], version: m[2] });
+  }
+  return reqs.sort((a, b) => a.module.localeCompare(b.module));
+}
+
+function goModCache() {
+  try {
+    return execFileSync('go', ['env', 'GOMODCACHE'], { encoding: 'utf8' }).trim();
+  } catch {
+    return null;
+  }
+}
+
+// The module cache escapes upper-case letters in paths as '!x'.
+const cachePath = (module) => module.replace(/[A-Z]/g, (c) => `!${c.toLowerCase()}`);
+
+// ---------------------------------------------------------------- Go: backend
 
 function backendModules() {
-  const dir = path.join(ROOT, 'backend', 'vendor');
-  const modulesTxt = read(path.join(dir, 'modules.txt'));
-  if (!modulesTxt) return [];
+  const goMod = read(path.join(ROOT, 'backend', 'go.mod'));
+  const cache = goMod ? goModCache() : null;
+  if (!cache) return [];
 
-  const withPackages = new Set();
-  let current = null;
-  for (const line of modulesTxt.split('\n')) {
-    if (line.startsWith('# ')) {
-      const [, modPath, version] = line.match(/^# (\S+)(?:\s+(\S+))?/) || [];
-      if (modPath && !line.startsWith('##')) current = `${modPath} ${version || ''}`.trim();
-      continue;
-    }
-    if (line.startsWith('##') || line.trim() === '') continue;
-    if (current) withPackages.add(current);
-  }
-
-  const out = [];
-  for (const stamp of [...withPackages].sort()) {
-    const [modPath, version] = stamp.split(' ');
-    const { license, copyright } = inspectDir(path.join(dir, modPath));
-    out.push({
-      module: modPath,
-      version: version || '—',
+  return parseGoModRequires(goMod).map(({ module, version }) => {
+    const dir = path.join(cache, `${cachePath(module)}@${version}`);
+    const { license, copyright } = inspectDir(dir);
+    return {
+      module,
+      version,
       license: license || NO_LICENSE_FILE,
       copyright: copyright || NO_COPYRIGHT,
-      dir: path.join(dir, modPath),
-    });
-  }
-  return out;
+      dir,
+    };
+  });
 }
 
 // ---------------------------------------------------------------- Go: isola-streamer
@@ -134,24 +148,12 @@ function backendModules() {
 function streamerModules() {
   const modRoot = path.join(ROOT, 'browsers', 'isola-streamer');
   const goMod = read(path.join(modRoot, 'go.mod'));
-  if (!goMod) return [];
-
-  let cache = null;
-  try {
-    cache = execFileSync('go', ['env', 'GOMODCACHE'], { encoding: 'utf8' }).trim();
-  } catch {
-    return [];
-  }
-
-  const reqs = [];
-  for (const line of goMod.split('\n')) {
-    const m = line.match(/^\s*(?:require\s+)?([a-z0-9.-]+\.[a-z]{2,}\/\S+)\s+(v\S+)/i);
-    if (m) reqs.push({ module: m[1], version: m[2] });
-  }
+  const cache = goMod ? goModCache() : null;
+  if (!cache) return [];
 
   const out = [];
-  for (const { module, version } of reqs.sort((a, b) => a.module.localeCompare(b.module))) {
-    const modDir = path.join(cache, `${module}@${version}`);
+  for (const { module, version } of parseGoModRequires(goMod)) {
+    const modDir = path.join(cache, `${cachePath(module)}@${version}`);
     const { license, copyright } = inspectDir(modDir);
     out.push({
       module,
@@ -275,7 +277,7 @@ Copyright 2026 Isola contributors
 This repository is licensed under the MIT License (see \`LICENSE\`).
 It contains and builds upon third-party open-source software. The components
 listed below are grouped by the part of the product they are used in, with the
-version and license that the pinned/vendored build resolves to.
+version and license that the pinned build resolves to.
 
 All listed components are distributed under permissive licenses (MIT, ISC,
 BSD, Apache-2.0, and similar). No copyleft (GPL/LGPL/AGPL/MPL) component is
@@ -296,9 +298,9 @@ ship unedited).
     return counts.map(([l, n]) => `${l} × ${n}`).join(', ');
   };
 
-  parts.push(`## 1. Backend — Go modules (vendored under \`backend/vendor\`)
+  parts.push(`## 1. Backend — Go modules (\`backend/go.mod\`)
 
-${backend.length} modules with vendored packages. License mix: ${sizeLine(backend)}.
+${backend.length} modules. License mix: ${sizeLine(backend)}.
 
 ${table(goRows(backend), ['Module', 'Version', 'License', 'Copyright'])}`);
 
@@ -339,7 +341,7 @@ ${table(npmRows(build), ['Package', 'Version', 'License', 'Copyright'])}`);
       if (e.isFile() && /^NOTICE/i.test(e.name)) noticeFiles.push(path.join(dir, e.name));
     }
   };
-  scanNotice(path.join(ROOT, 'backend', 'vendor', 'gopkg.in', 'yaml.v3'));
+  scanNotice(backend.find((m) => m.module === 'gopkg.in/yaml.v3')?.dir);
   const attribution = noticeFiles
     .map((f) => {
       const body = read(f).trim();
