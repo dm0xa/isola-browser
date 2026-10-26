@@ -4,7 +4,7 @@
 # Stage 2: node-builder — install Electron + electron-runner deps
 # Stage 3: runtime — Debian slim + Electron runtime deps + ffmpeg + tor
 
-FROM golang:1.26.10-alpine AS go-builder
+FROM golang:1.27.3-alpine AS go-builder
 
 # ca-certificates: only needed when modules are downloaded (i.e. no vendor/).
 RUN apk add --no-cache ca-certificates && update-ca-certificates
