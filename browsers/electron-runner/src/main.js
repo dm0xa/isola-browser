@@ -428,12 +428,6 @@ function writeFrame(dirtyRects, nativeImage) {
     && rect.w * rect.h >= w * h * BLANK_PATCH_MIN_SHARE
     && (loading || Date.now() < blankHoldUntil);
   const blankPatch = patchLargeEnough && isBlankBitmap(payload);
-  // TRACE (temporary)
-  if (blank || !isFull && rect.w * rect.h >= w * h * BLANK_PATCH_MIN_SHARE) {
-    console.log(
-      `[trace] rect=${rect.x},${rect.y},${rect.w},${rect.h} full=${isFull} bmp=${bmpW}x${bmpH} surf=${w}x${h} payloadBlank=${isBlankBitmap(payload)} patch=${blankPatch} loading=${loading} inWindow=${Date.now() < blankHoldUntil} est=${!!(activeWin && activeWin.surfaceEstablished)} seeded=${streamerSeeded}`,
-    );
-  }
   // Both decisions read the surface's state BEFORE this frame: whether a blank is
   // worth hiding depends on what is being replaced, not on what this frame is.
   const established = !!(activeWin && activeWin.surfaceEstablished);
@@ -444,7 +438,6 @@ function writeFrame(dirtyRects, nativeImage) {
     loading,
     withinHoldWindow: Date.now() < blankHoldUntil,
   })) {
-    if (blank || blankPatch) console.log('[trace] HELD');
     dedupTotal++;
     return FRAME_DEDUP;
   }
@@ -731,7 +724,6 @@ function resetFrameState() {
   // A new document also opens the window in which a blank full frame is
   // withheld instead of forwarded — see writeFrame.
   blankHoldUntil = Date.now() + BLANK_HOLD_MS;
-  console.log(`[trace] new document, hold until +${BLANK_HOLD_MS}ms`);
 }
 
 // Applies the theme and returns the WINDOW backdrop. The two colours are
