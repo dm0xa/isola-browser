@@ -38,9 +38,16 @@ Every request must send `Authorization: Bearer <token>`. Session ownership is ke
 | `screenshot`      | Visual capture via CDP (`format`: png/jpeg, optional `quality` for jpeg).                                                              |
 | `click`           | Click by `ref` from the latest snapshot.                                                                                               |
 | `type`            | Type text; optional `ref` to focus first.                                                                                              |
-| `get_network`     | Network log; optional `type`, `host_contains`, `limit` filters.                                                                        |
+| `get_network`     | Network log; optional `type`, `host_contains`, `limit` filters. Entries also carry headers, TLS, redirect chains, first/third-party flags and tracker labels. |
+| `get_headers`     | Response headers (and TLS) per request, documents only by default; `host_contains`, `url_contains`, `type`, `limit`, `include_tls`. |
+| `get_posture`     | Security-header audit per document: HSTS, CSP, frame protection, nosniff, Referrer-Policy, Permissions-Policy, COOP/COEP, with a 0–7 score and A–F grade. `tls_state`/`note` report the transport verdict; an untrusted or plaintext connection caps the grade at C. |
+| `get_redirects`   | Redirect chains with each hop's status code; `host_contains`, `documents_only`, `limit`. |
+| `get_trackers`    | Third-party/tracker inventory: per-host counts and bytes, known tracker families, beacons and cookie-family fingerprints; `third_party_only`, `include_beacons`, `include_cookies`, `limit`. |
+| `host_intel`      | Passive DNS intelligence for a host: IPs, PTR, ASN/org/country and the CNAME chain. Omit `host` to use the most recently captured document host. |
+| `probe_host`      | Active recon from the sandbox, one bounded request per check: `robots`, `securitytxt`, `sitemap`, `wellknown`, `favicon` (mmh3 + SHA-1). Defaults to the first three. Every check fetches the host itself; no provider is contacted. |
 | `resource_graph`  | Render the capture as a resource-graph PNG (hosts → resource types → files); `theme`, `direction`, `expand`, `types`, `failed_only`, `scale` (1–4). Returns the image plus a metadata block; bounded to 45 s and 8 MiB. |
 | `get_links`       | Links on the active page (`href` + text, plus page url/title); optional `limit`, `host_contains`. Each link carries a snapshot `ref` when it can be matched, so `click` and `navigate` are interchangeable. |
+| `host_intel` / `probe_host` | `host` (omit to use the captured document host); `probe_host` also takes `checks` (comma list or `all`). Recon contacts no provider, so the hostname never travels anywhere but the target and the resolver. Requires `intel.enabled` (`ISOLA_INTEL_ENABLED`). |
 | `close_session`   | Terminate the session and destroy the container.                                                                                       |
 
 ### Tool parameters (common)

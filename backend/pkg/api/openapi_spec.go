@@ -340,6 +340,31 @@ func getOpenAPISpec() []byte {
         }
       }
     },
+    "/api/sessions/{id}/intel": {
+      "get": {
+        "tags": ["Sessions"],
+        "summary": "Recon intelligence for a host captured in the session",
+        "description": "Proxies the streamer's /intel endpoint: passive DNS enrichment (resolved IPs, PTR, ASN/org/country, CNAME chain) and, when checks are named, active probes from inside the sandbox (robots.txt, security.txt, sitemap.xml, well-known change-password, favicon hashes). Nothing runs until this call names a host, each check is a single bounded request to that host, and no third-party provider is ever contacted. Disabled when ISOLA_INTEL_ENABLED=false. Requires owner authorization (X-Session-Token).",
+        "operationId": "getSessionIntel",
+        "security": [{ "sessionToken": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Session ID" },
+          { "name": "host", "in": "query", "schema": { "type": "string" }, "description": "Bare hostname to enrich or probe (required unless ips is given)" },
+          { "name": "ips", "in": "query", "schema": { "type": "string" }, "description": "Comma-separated IP addresses to enrich instead of resolving host" },
+          { "name": "mode", "in": "query", "schema": { "type": "string", "enum": ["dns", "probe", "all"] }, "description": "dns = passive only; probe = active checks; all = both. Inferred when omitted." },
+          { "name": "checks", "in": "query", "schema": { "type": "string" }, "description": "Comma list or 'all': robots, sitemap, securitytxt, wellknown, favicon. Default robots,securitytxt,sitemap." }
+        ],
+        "responses": {
+          "200": { "description": "DNS and/or probe results", "content": { "application/json": { "schema": { "type": "object", "properties": { "host": { "type": "string" }, "dns": { "type": "object" }, "probes": { "type": "object" }, "generated_at": { "type": "integer" } } } } } },
+          "400": { "description": "Invalid query or a non-public probe target (invalid_intel_query)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "Not authorized, or recon is disabled by the operator", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Session not found or no longer active", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "409": { "description": "Session container is not ready", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "502": { "description": "The streamer could not be reached (intel_failed)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "504": { "description": "The recon request timed out (intel_failed)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
     "/api/sessions/{id}/shares": {
       "get": {
         "tags": ["Shares"],

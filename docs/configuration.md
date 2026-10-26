@@ -55,6 +55,26 @@ Pinning is strict (`StrictNodes`): if no reachable exit exists in the chosen cou
 
 > The Compose `.env` sets `RESOLUTION=1280x720`, overriding the file default of `1920x1080`.
 
+### `intel`
+
+On-demand reconnaissance: passive DNS enrichment and active probes for a host a
+session observed. Nothing runs until a caller names a host, and each check is a
+single bounded request from inside the sandbox.
+
+| Key | Default | Env | Meaning |
+| :--- | :--- | :--- | :--- |
+| `intel.enabled` | `true` | `INTEL_ENABLED`, `ISOLA_INTEL_ENABLED` | Expose `GET /api/sessions/{id}/intel` and the `host_intel` / `probe_host` MCP tools. When `false` the endpoint answers `403` and the viewer disables the Recon tab. Use it to guarantee a session that only renders: recon is the only feature that issues requests on a caller's behalf, and probes are attributable in the target's logs. |
+| `intel.ca_file` | `""` | `INTEL_CA_FILE`, `ISOLA_INTEL_CA_FILE` | PEM bundle with extra root CAs for recon. Required on a TLS-inspecting network (corporate proxy), where otherwise every probe fails with `x509: certificate signed by unknown authority`. Verification is never disabled. An unreadable path fails startup. |
+
+The passive half (IPs, PTR, CNAME, ASN/org/country) uses DNS only. The active
+checks (`robots`, `securitytxt`, `sitemap`, `wellknown`, `favicon`) fetch the
+target itself. Nothing else is contacted: recon has no provider lookups, so the
+only parties that see an investigation are your resolver (which carries the ASN
+TXT query too) and the host you named. In a
+Tor session recon follows the circuit: HTTP through the SOCKS proxy and DNS
+through Tor's DNSPort (which answers A/AAAA/PTR, so ASN lookups are reported as
+unavailable). See [Third parties](third-parties.md).
+
 ### `warm_pool`
 
 Pre-started containers, so a session is live the moment a user hits enter rather than after a container boot. Each warm container costs a full session's memory (the per-container limit — default 2 GB, see `ISOLA_SESSION_MEMORY_MB`), so size the pool to expected concurrency.

@@ -208,7 +208,16 @@ type Config struct {
 	// in its capture window. The streamer drops the oldest entries past this
 	// count, the viewer trims its buffers to the same number, and MCP
 	// get_network sees the same window. Metadata only; no bodies or headers.
-	NetworkLogMaxEntries int                     `yaml:"-"`
+	NetworkLogMaxEntries int `yaml:"-"`
+	// IntelEnabled gates the on-demand recon endpoint (/intel) and the MCP
+	// tools built on it. Recon sends requests from the sandbox to the target
+	// and to no one else, so the whole surface can be turned off to keep a
+	// deployment purely passive without changing the capture.
+	IntelEnabled bool `yaml:"-"`
+	// IntelCAPEM is an operator-supplied CA bundle (PEM) added to the sandbox's
+	// trust store for recon. Needed on TLS-inspecting networks; verification
+	// is never disabled.
+	IntelCAPEM           string                  `yaml:"-"`
 	Resolution           string                  `yaml:"-"`
 	ResolutionMax        string                  `yaml:"-"` // hard cap for requested resolutions (WxH)
 	WarmPoolEnabled      bool                    `yaml:"-"` // keep pre-started containers so sessions start instantly
@@ -369,6 +378,14 @@ type configFile struct {
 		Enabled bool      `yaml:"enabled"`
 		Token   TokenList `yaml:"token"`
 	} `yaml:"mcp"`
+	Intel struct {
+		// Enabled gates the on-demand recon endpoint. Defaults to true; probes
+		// are only ever run when a caller asks for a specific host.
+		Enabled bool `yaml:"enabled"`
+		// CAFile is a PEM bundle added to the trust store recon uses. Point it
+		// at a corporate proxy's root CA on a TLS-inspecting network.
+		CAFile string `yaml:"ca_file"`
+	} `yaml:"intel"`
 	API struct {
 		Token TokenList `yaml:"token"`
 	} `yaml:"api"`
@@ -438,6 +455,9 @@ func LoadFrom(path string) (*Config, error) {
 	cfg.Session.InactivityMin = 5
 	cfg.Session.Resolution = "1280x720"
 	cfg.Session.NetworkLogMaxEntries = NetworkLogMaxEntriesDefault
+	// Recon is available unless an operator disables it: nothing leaves the
+	// sandbox until a caller names a host.
+	cfg.Intel.Enabled = true
 	// Hard cap for launch resolutions. Bigger framebuffers are what kill the
 	// sandbox: a BGRA frame is w*h*4 bytes, and on a 2 GB host (Podman VM,
 	// small CI box) a 3456x2234 capture (30 MB/frame) OOM-kills the container
@@ -512,6 +532,7 @@ func LoadFrom(path string) (*Config, error) {
 		NetworkLogMaxEntries: normalizeNetworkLogMaxEntries(
 			envOrDefaultInt("NETWORK_LOG_MAX_ENTRIES", cfg.Session.NetworkLogMaxEntries),
 		),
+		IntelEnabled:    envOrDefaultBool("INTEL_ENABLED", cfg.Intel.Enabled),
 		Resolution:      envOrDefault("RESOLUTION", cfg.Session.Resolution),
 		ResolutionMax:   envOrDefault("MAX_RESOLUTION", cfg.Session.MaxResolution),
 		WarmPoolEnabled: envOrDefaultBool("WARM_POOL_ENABLED", cfg.WarmPool.Enabled),
@@ -588,6 +609,14 @@ func LoadFrom(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: tor.exit_country / TOR_EXIT_COUNTRY: %w", err)
 	}
 	cfg2.TorExitCountry = torCountry
+
+	if caFile := strings.TrimSpace(envOrDefault("INTEL_CA_FILE", cfg.Intel.CAFile)); caFile != "" {
+		pem, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("config: intel.ca_file: %w", err)
+		}
+		cfg2.IntelCAPEM = string(pem)
+	}
 
 	return cfg2, nil
 }

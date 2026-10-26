@@ -202,8 +202,16 @@ type CreateSessionParams struct {
 	NetworkMonitor bool     // isola: stream CDP network events to the viewer
 	// NetworkLogMaxEntries is the capture window handed to the streamer
 	// (NET_LOG_MAX_ENTRIES). 0 leaves the streamer's own default in place.
-	NetworkLogMaxEntries int    // isola: CDP network entries retained per session
-	DockerImage          string // Docker image name (e.g. isola-browser:electron)
+	NetworkLogMaxEntries int // isola: CDP network entries retained per session
+	// IntelEnabled exposes the streamer's /intel recon endpoint (INTEL_PROBES).
+	// No traffic leaves the sandbox until a caller names a host, and recon only
+	// ever talks to that host (plus the resolver).
+	IntelEnabled bool // isola: on-demand recon probes / DNS enrichment
+	// IntelCAPEM is an operator-supplied CA bundle passed to the streamer
+	// (INTEL_CA_PEM) so recon can verify certificates behind a TLS-inspecting
+	// proxy. Empty leaves the image's system pool alone.
+	IntelCAPEM  string
+	DockerImage string // Docker image name (e.g. isola-browser:electron)
 	// warmLabel stamps the container with isola.warm=1 instead of a session
 	// label. Warm-pool containers are the pool's property: the orphan sweep
 	// filters on isola.session_id and must never see them. No code path may
@@ -412,6 +420,12 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 	}
 	if params.NetworkLogMaxEntries > 0 {
 		cmdArgs = append(cmdArgs, "-e", fmt.Sprintf("NET_LOG_MAX_ENTRIES=%d", params.NetworkLogMaxEntries))
+	}
+	if params.IntelEnabled {
+		cmdArgs = append(cmdArgs, "-e", "INTEL_PROBES=1")
+	}
+	if params.IntelCAPEM != "" {
+		cmdArgs = append(cmdArgs, "-e", "INTEL_CA_PEM="+params.IntelCAPEM)
 	}
 
 	// Route traffic through Tor if enabled, optionally pinned to exit

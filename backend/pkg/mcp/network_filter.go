@@ -13,22 +13,30 @@ type networkEntry struct {
 	Type   string `json:"type"`
 }
 
+// filterNetworkBody keeps the original entry JSON and only decides membership.
+// It used to re-marshal a four-field struct, which silently stripped every
+// field added later (ip, bytes, headers, redirects, tracker labels) whenever a
+// caller passed type/host/limit.
 func filterNetworkBody(body []byte, entryType, hostContains string, limit int) ([]byte, error) {
 	var parsed struct {
-		Entries []networkEntry `json:"entries"`
+		Entries []json.RawMessage `json:"entries"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return body, err
 	}
-	filtered := make([]networkEntry, 0, len(parsed.Entries))
-	for _, e := range parsed.Entries {
+	filtered := make([]json.RawMessage, 0, len(parsed.Entries))
+	for _, raw := range parsed.Entries {
+		var e networkEntry
+		if err := json.Unmarshal(raw, &e); err != nil {
+			continue
+		}
 		if entryType != "" && !strings.EqualFold(e.Type, entryType) {
 			continue
 		}
 		if hostContains != "" && !hostMatches(e.URL, hostContains) {
 			continue
 		}
-		filtered = append(filtered, e)
+		filtered = append(filtered, raw)
 		if limit > 0 && len(filtered) >= limit {
 			break
 		}

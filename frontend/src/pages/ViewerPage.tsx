@@ -6,7 +6,8 @@ import { LoadingOverlay } from '../components/LoadingOverlay';
 import { getToolbarButtons, getPluginProviders, usePlugins } from '../plugins/registry';
 import { useTheme } from '../lib/ThemeContext';
 import { api } from '../lib/api';
-import { getCommit, getVersion, isTimerEnabled } from '../lib/config';
+import { getCommit, getVersion, isIntelEnabled, isTimerEnabled } from '../lib/config';
+import { fetchSessionIntel, type DocumentHeaders, type IntelFetch } from '../lib/intel';
 import { clearSessionToken, getSessionToken, storeSessionToken } from '../lib/sessionToken';
 import { endLaunch, setLaunchStatus, useLaunchProgress } from '../lib/launchProgress';
 import { useSessionTimer } from './viewer/useSessionTimer';
@@ -75,6 +76,7 @@ export default function ViewerPage() {
   const [netTab, setNetTab] = useState<PanelTab>('network');
   const [consoleEntries, setConsoleEntries] = useState<ConsoleEntry[]>([]);
   const [cookieEntries, setCookieEntries] = useState<CookieEntry[]>([]);
+  const [docHeaders, setDocHeaders] = useState<Record<string, DocumentHeaders>>({});
   const consoleRef = useRef<ConsoleEntry[]>([]);
   const cookieRef = useRef<CookieEntry[]>([]);
   // True when the session was provisioned with CDP network capture enabled
@@ -148,6 +150,14 @@ export default function ViewerPage() {
     const token = sessionTokenRef.current;
     const url = `/session/${id}/network${token ? `#token=${encodeURIComponent(token)}` : ''}`;
     window.open(url, '_blank', 'noopener,noreferrer');
+  }, [id]);
+
+  // Recon goes through the API proxy, which validates the query and forwards it
+  // to the streamer. Nothing runs until the user presses a recon button.
+  const onIntel = useCallback<IntelFetch>((query) => {
+    if (!id) return Promise.reject(new Error('No session'));
+    const token = sessionTokenRef.current || getSessionToken(id) || '';
+    return fetchSessionIntel(id, token, query);
   }, [id]);
 
   useEffect(() => {
@@ -902,7 +912,7 @@ export default function ViewerPage() {
     }
   }, [debugInfo]);
 
-  useIsolaMonitorEvents(netEntriesRef, setNetEntries, consoleRef, setConsoleEntries, cookieRef, setCookieEntries);
+  useIsolaMonitorEvents(netEntriesRef, setNetEntries, consoleRef, setConsoleEntries, cookieRef, setCookieEntries, setDocHeaders);
 
     // Wrap toolbar + canvas in plugin providers
   // Toolbar is hidden when ?hide_toolbar=1 is present
@@ -958,6 +968,9 @@ export default function ViewerPage() {
         netEntries={netEntries}
         consoleEntries={consoleEntries}
         cookieEntries={cookieEntries}
+        docHeaders={docHeaders}
+        onIntel={onIntel}
+        intelDisabled={!isIntelEnabled()}
         netTab={netTab}
         setNetTab={setNetTab}
         setNetPanel={setNetPanel}

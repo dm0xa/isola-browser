@@ -2,6 +2,7 @@ import React from 'react';
 import { IsolaNetworkPanel, type ConsoleEntry, type CookieEntry, type NetEntry, type PanelLayout, type PanelTab } from '../../components/IsolaNetworkPanel';
 import { ISOLA_LOGO_KEYFRAMES } from '../../components/IsolaLogo';
 import type { useIsolaStream } from '../../hooks/useIsolaStream';
+import type { DocumentHeaders, IntelFetch } from '../../lib/intel';
 
 export type ViewerStreamShellProps = {
   shellRef: React.RefObject<HTMLDivElement>;
@@ -12,6 +13,9 @@ export type ViewerStreamShellProps = {
   netEntries: NetEntry[];
   consoleEntries: ConsoleEntry[];
   cookieEntries: CookieEntry[];
+  docHeaders: Record<string, DocumentHeaders>;
+  onIntel: IntelFetch;
+  intelDisabled: boolean;
   netTab: PanelTab;
   setNetTab: React.Dispatch<React.SetStateAction<PanelTab>>;
   setNetPanel: React.Dispatch<React.SetStateAction<PanelLayout | 'off'>>;
@@ -23,7 +27,7 @@ export type ViewerStreamShellProps = {
 export function ViewerStreamShell(props: ViewerStreamShellProps) {
   const {
     shellRef, canvasRef, containerStyle, networkCaptureEnabled, netPanel, netEntries,
-    consoleEntries, cookieEntries, netTab, setNetTab, setNetPanel, openNetworkPopOut,
+    consoleEntries, cookieEntries, docHeaders, onIntel, intelDisabled, netTab, setNetTab, setNetPanel, openNetworkPopOut,
     browserTabs, theme,
   } = props;
   return (
@@ -40,6 +44,9 @@ export function ViewerStreamShell(props: ViewerStreamShellProps) {
             entries={netEntries}
             consoleEntries={consoleEntries}
             cookieEntries={cookieEntries}
+            docHeaders={docHeaders}
+            onIntel={onIntel}
+            intelDisabled={intelDisabled}
             layout={netPanel}
             tab={netTab}
             onTab={setNetTab}

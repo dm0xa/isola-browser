@@ -1309,6 +1309,10 @@ export function useIsolaStream(defaultTargetUrl?: string) {
           // Network monitor entry (metadata only). Dispatch as a DOM event
           // so the panel can live in React without the hook owning it.
           window.dispatchEvent(new CustomEvent('isola-net', { detail: msg.e }));
+        } else if (msg.type === 'headers' && msg.e && typeof msg.e === 'object') {
+          // Document headers + posture/TLS, computed by the streamer. Same
+          // dispatch pattern as net/console so the panel stays React-owned.
+          window.dispatchEvent(new CustomEvent('isola-headers', { detail: msg.e }));
         } else if (msg.type === 'console' && typeof msg.l === 'string' && typeof msg.t === 'string') {
           window.dispatchEvent(new CustomEvent('isola-console', { detail: { i: typeof msg.i === 'number' ? msg.i : undefined, level: msg.l, text: msg.t, tb: msg.tb, ts: typeof msg.ts === 'number' ? msg.ts : undefined } }));
         } else if (msg.type === 'cookie' && typeof msg.n === 'string') {

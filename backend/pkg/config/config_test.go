@@ -347,6 +347,74 @@ func TestLoadFromSessionTimer(t *testing.T) {
 	})
 }
 
+func TestLoadFromIntel(t *testing.T) {
+	// Not parallel: the env-override subtests use t.Setenv.
+
+	writeCfg := func(t *testing.T, content string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	t.Run("recon defaults on", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := LoadFrom(writeCfg(t, "server:\n  port: \"8080\"\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cfg.IntelEnabled {
+			t.Error("IntelEnabled = false, want true")
+		}
+	})
+
+	t.Run("yaml can disable recon", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := LoadFrom(writeCfg(t, "intel:\n  enabled: false\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.IntelEnabled {
+			t.Error("IntelEnabled = true, want false from YAML")
+		}
+	})
+
+	t.Run("ca_file is loaded", func(t *testing.T) {
+		ca := filepath.Join(t.TempDir(), "ca.pem")
+		if err := os.WriteFile(ca, []byte("PEM-CONTENT"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("INTEL_CA_FILE", ca)
+		cfg, err := LoadFrom(writeCfg(t, "server:\n  port: \"8080\"\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.IntelCAPEM != "PEM-CONTENT" {
+			t.Fatalf("IntelCAPEM = %q, want the file contents", cfg.IntelCAPEM)
+		}
+	})
+
+	t.Run("missing ca_file is fatal", func(t *testing.T) {
+		t.Setenv("INTEL_CA_FILE", filepath.Join(t.TempDir(), "absent.pem"))
+		if _, err := LoadFrom(writeCfg(t, "server:\n  port: \"8080\"\n")); err == nil {
+			t.Fatal("an unreadable intel.ca_file must fail startup")
+		}
+	})
+
+	t.Run("master switch via env", func(t *testing.T) {
+		t.Setenv("INTEL_ENABLED", "false")
+		cfg, err := LoadFrom(writeCfg(t, "server:\n  port: \"8080\"\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.IntelEnabled {
+			t.Error("IntelEnabled = true, want false (INTEL_ENABLED=false)")
+		}
+	})
+}
+
 func TestLoadFromAPITokenValidation(t *testing.T) {
 	writeCfg := func(t *testing.T, content string) string {
 		t.Helper()

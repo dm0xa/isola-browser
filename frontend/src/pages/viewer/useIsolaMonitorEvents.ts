@@ -3,6 +3,7 @@ import type { ConsoleEntry, CookieEntry, NetEntry } from '../../components/Isola
 import { mergeConsoleEntry } from '../../lib/consoleEntries';
 import { cookieFromWire, mergeCookieEntry } from '../../lib/cookieEntries';
 import { getNetworkLogMaxEntries } from '../../lib/config';
+import type { DocumentHeaders } from '../../lib/intel';
 import { mergeNetEntry } from '../../lib/netEntries';
 
 export function useIsolaMonitorEvents(
@@ -12,6 +13,7 @@ export function useIsolaMonitorEvents(
   setConsoleEntries: Dispatch<SetStateAction<ConsoleEntry[]>>,
   cookieRef: MutableRefObject<CookieEntry[]>,
   setCookieEntries: Dispatch<SetStateAction<CookieEntry[]>>,
+  setDocHeaders: Dispatch<SetStateAction<Record<string, DocumentHeaders>>>,
 ) {
   useEffect(() => {
     const onNet = (e: Event) => {
@@ -50,6 +52,11 @@ export function useIsolaMonitorEvents(
       netEntriesRef.current = trimmed;
       setNetEntries(trimmed);
     };
+    const onHeaders = (e: Event) => {
+      const doc = (e as CustomEvent<DocumentHeaders>).detail;
+      if (!doc || !doc.id || !doc.hd) return;
+      setDocHeaders((prev) => ({ ...prev, [doc.id]: doc }));
+    };
     const onNetClear = () => {
       netEntriesRef.current = [];
       setNetEntries([]);
@@ -57,18 +64,21 @@ export function useIsolaMonitorEvents(
       setConsoleEntries([]);
       cookieRef.current = [];
       setCookieEntries([]);
+      setDocHeaders({});
     };
     window.addEventListener('isola-net', onNet);
     window.addEventListener('isola-net-init', onNetInit);
     window.addEventListener('isola-net-clear', onNetClear);
     window.addEventListener('isola-console', onConsole);
     window.addEventListener('isola-cookie', onCookie);
+    window.addEventListener('isola-headers', onHeaders);
     return () => {
       window.removeEventListener('isola-net', onNet);
       window.removeEventListener('isola-net-init', onNetInit);
       window.removeEventListener('isola-net-clear', onNetClear);
       window.removeEventListener('isola-console', onConsole);
       window.removeEventListener('isola-cookie', onCookie);
+      window.removeEventListener('isola-headers', onHeaders);
     };
-  }, [netEntriesRef, setNetEntries, consoleRef, setConsoleEntries, cookieRef, setCookieEntries]);
+  }, [netEntriesRef, setNetEntries, consoleRef, setConsoleEntries, cookieRef, setCookieEntries, setDocHeaders]);
 }

@@ -129,6 +129,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Post("/sessions/{id}/resize", h.ResizeSession)
 		r.Post("/sessions/{id}/audio", h.ToggleAudio)
 		r.Get("/sessions/{id}/graph.png", h.GetResourceGraph)
+		r.Get("/sessions/{id}/intel", h.GetSessionIntel)
 		r.Delete("/sessions/{id}", h.DeleteSession)
 
 		// Share management for a session
@@ -188,6 +189,12 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	// Concurrent-session cap (ISOLA_MAX_SESSIONS). 0 = unlimited. Lets the client
 	// explain a 429 instead of showing a bare error.
 	resp["max_sessions"] = h.cfg.MaxSessions
+	// On-demand recon (intel.enabled). The viewer hides the recon actions when
+	// the operator disabled it.
+	resp["intel_enabled"] = h.cfg.IntelEnabled
+	// Whether an operator CA bundle is installed for recon. The certificate
+	// itself is never exposed.
+	resp["intel_ca_configured"] = h.cfg.IntelCAPEM != ""
 	// Network capture window (session.network_log_max_entries), so the viewer
 	// trims its buffers to the same number the streamer keeps. Omitted when
 	// unset; the client falls back to the default.
@@ -419,6 +426,8 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 				// count and the viewer trims to the same number. Baked in at launch
 				// because container env cannot change afterwards.
 				NetworkLogMaxEntries: h.cfg.NetworkLogMaxEntries,
+				IntelEnabled:         h.cfg.IntelEnabled,
+				IntelCAPEM:           h.cfg.IntelCAPEM,
 				DockerImage:          h.cfg.SessionImage(),
 				DNSMode:              h.cfg.DNSMode,
 				DNSServers:           h.cfg.DNSServers,
@@ -1919,6 +1928,10 @@ func errorMessageForCode(code string) string {
 		return "Failed to render the resource graph"
 	case "graph_render_busy":
 		return "A resource graph render is already running for this session"
+	case "invalid_intel_query":
+		return "Invalid intelligence query"
+	case "intel_failed":
+		return "Failed to reach the session's intelligence endpoint"
 	case "graph_render_timeout":
 		return "Resource graph render timed out"
 	case "invalid_graph_options":

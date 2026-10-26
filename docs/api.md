@@ -17,13 +17,14 @@ Base URL for a local deployment: `http://localhost:8080`.
 
 | Method | Path | Auth | Description |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/api/config` | none | Client-visible feature flags and settings (resolutions, transports, version, `create_auth_required` when API token is set, `tor_exit_country` when a Tor exit-country default is configured, `network_log_max_entries` when a capture window is configured). |
+| `GET` | `/api/config` | none | Client-visible feature flags and settings (resolutions, transports, version, `create_auth_required` when API token is set, `tor_exit_country` when a Tor exit-country default is configured, `network_log_max_entries` when a capture window is configured, `intel_enabled` for the on-demand recon surface). |
 | `POST` | `/api/sessions` | optional bearer | Create a session. |
 | `GET` | `/api/sessions/{id}` | session | Session details, including `cdp_url`. |
 | `PATCH` | `/api/sessions/{id}` | session | Extend the session TTL. |
 | `POST` | `/api/sessions/{id}/resize` | session | Change the capture resolution. |
 | `POST` | `/api/sessions/{id}/audio` | session | Toggle audio capture. |
 | `GET` | `/api/sessions/{id}/graph.png` | session | Render the captured network as a resource-graph PNG (`theme`, `direction`, `expand`, `type`, `failed`, `scale`, `width`, `height`, `origin`, `caption`). |
+| `GET` | `/api/sessions/{id}/intel` | session | Recon for a host: passive DNS/ASN enrichment and/or bounded active probes (`host`, `ips`, `mode`, `checks`). |
 | `DELETE` | `/api/sessions/{id}` | session | Terminate the session. |
 | `POST` | `/api/sessions/{id}/shares` | session | Create a view-only share link. |
 | `GET` | `/api/sessions/{id}/shares` | session | List share links. |
@@ -116,6 +117,46 @@ to the new shape, and attached viewers receive a `stream_reset`
 at least 64 and cannot exceed the session's launch resolution, so a request
 reshapes that pixel budget rather than growing it. The viewer issues this
 automatically when fullscreen or a window resize changes its capture box.
+
+## Recon intelligence
+
+`GET /api/sessions/{id}/intel` proxies the streamer's recon engine. It is
+on-demand only: nothing leaves the sandbox until a caller names a host, and the
+caller must own the session (`X-Session-Token`).
+
+| Query | Meaning |
+| :--- | :--- |
+| `host` | Bare hostname to enrich or probe (required unless `ips` is given). URLs, ports and credentials are rejected. |
+| `ips` | Comma-separated addresses to enrich instead of resolving `host`. |
+| `mode` | `dns` (passive), `probe` (active checks), `all` (both). Inferred when omitted. |
+| `checks` | Comma list or `all`: `robots`, `sitemap`, `securitytxt`, `wellknown`, `favicon`. Default `robots,securitytxt,sitemap`. Every check fetches the host itself; no provider is contacted. |
+
+Passive mode resolves IPs, PTR, the CNAME chain and ASN/org/country (Team Cymru
+over DNS — WHOIS on port 43 is outside the sandbox allowlist). Probe mode makes
+one bounded GET per check (8 s, 2 MiB, at most three redirects that must stay on
+the same registrable domain) and refuses targets that resolve to a private
+address. No check sends the hostname to a provider.
+
+```bash
+curl -s "http://localhost:8080/api/sessions/$ID/intel?host=example.com&mode=dns" \
+  -H "X-Session-Token: $TOKEN"
+
+curl -s "http://localhost:8080/api/sessions/$ID/intel?host=example.com&mode=probe&checks=robots,favicon" \
+  -H "X-Session-Token: $TOKEN"
+```
+
+The same analysis is already attached to the network dump: every entry in
+`GET /network` may carry `headers`, `tls`, `redirects`, `posture`, `ttfb_ms`,
+`from_disk_cache`, `from_service_worker`, `third_party`, `tracker` and `beacon`.
+Those fields survive `type`, `host_contains` and `limit` filtering.
+
+`tls.security_state` is CDP's own verdict on the connection (`secure`, `info`,
+`neutral`, `insecure`, `insecure-broken`, `unknown`). It matters because the
+sandbox browser runs with certificate errors ignored: `insecure` means the
+certificate was presented but its chain was never trusted. `/posture` carries
+the same value as `tls_state`, and an `insecure`/`insecure-broken` or `neutral`
+transport caps the letter grade at `C` with an explanatory `note` — header
+posture is only as trustworthy as the connection that delivered the headers.
 
 ## Resource graph image
 

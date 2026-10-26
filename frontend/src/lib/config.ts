@@ -18,6 +18,9 @@ let maxSessions = 0;
 const DEFAULT_NETWORK_LOG_MAX_ENTRIES = 1000;
 const MAX_NETWORK_LOG_MAX_ENTRIES = 10000;
 let networkLogMaxEntries = DEFAULT_NETWORK_LOG_MAX_ENTRIES;
+// On-demand recon (intel.enabled / ISOLA_INTEL_ENABLED). The viewer hides the
+// recon actions when the operator turned them off.
+let intelEnabled = true;
 let version = 'dev';
 let commit = 'unknown';
 let backendReachable = false;
@@ -44,6 +47,7 @@ export function initAppConfig(config: {
   timer?: boolean;
   max_sessions?: number;
   network_log_max_entries?: number;
+  intel_enabled?: boolean;
   version?: string;
   commit?: string;
 }) {
@@ -58,6 +62,7 @@ export function initAppConfig(config: {
   timerEnabled = config.timer !== false;
   maxSessions = Number(config.max_sessions) > 0 ? Number(config.max_sessions) : 0;
   networkLogMaxEntries = normalizeNetworkLogMaxEntries(config.network_log_max_entries);
+  intelEnabled = config.intel_enabled !== false;
   version = config.version || 'dev';
   commit = config.commit || 'unknown';
 }
@@ -78,6 +83,11 @@ export function getMaxSessions(): number {
 /** Network requests retained by the capture window (streamer + viewer). */
 export function getNetworkLogMaxEntries(): number {
   return networkLogMaxEntries;
+}
+
+// Whether the deployment allows on-demand recon (intel.enabled).
+export function isIntelEnabled(): boolean {
+  return intelEnabled;
 }
 
 export function getResolutions(): { value: string; label: string }[] {

@@ -16,6 +16,7 @@ export function cookieFromWire(msg: Record<string, unknown>): CookieEntry | null
     maxAge: typeof msg.ma === 'number' ? msg.ma : undefined,
     httpOnly: !!msg.h,
     secure: !!msg.s,
+    fp: typeof msg.fp === 'string' && msg.fp !== '' ? msg.fp : undefined,
   };
 }
 

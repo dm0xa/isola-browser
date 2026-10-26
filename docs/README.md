@@ -16,6 +16,7 @@ This directory is the external documentation — what an operator or an API cons
 | Drive Isola from my own code | [API reference](api.md) |
 | Automate with an AI agent (MCP) or a custom client | [Automation](automation.md) |
 | Understand the isolation model | [Security](security.md) |
+| Know which outside services recon can contact | [Third parties](third-parties.md) |
 | Lock down API/MCP on a public host | [Security → API and MCP authentication](security.md#api-and-mcp-authentication) |
 | Run it in production | [Deployment](deployment.md) |
 | Diagnose a problem | [Troubleshooting](troubleshooting.md) |

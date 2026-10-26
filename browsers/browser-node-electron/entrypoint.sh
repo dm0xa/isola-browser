@@ -336,6 +336,7 @@ if [ "$(id -u)" = "0" ]; then
         echo "[browser-node-electron] Starting Tor daemon as ${TOR_USER}"
         tor --User "$TOR_USER" \
             --SOCKSPort 9050 \
+            --DNSPort 5353 \
             --ControlPort 9051 \
             --CookieAuthentication 0 \
             --DataDirectory "$TOR_DATA_DIR" \

@@ -36,6 +36,8 @@ go.work.sum
 # Environment overrides (never commit secrets)
 .env
 .env.*
+# Operator CA bundles mounted into the backend (recon / TLS inspection).
+/certs/
 !.env.example
 
 # Debug artifacts

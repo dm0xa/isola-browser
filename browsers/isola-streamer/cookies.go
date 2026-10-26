@@ -108,6 +108,11 @@ func cookieWireMsg(entry cookieEntry) map[string]any {
 	if entry.MaxAge != 0 {
 		msg["ma"] = entry.MaxAge
 	}
+	if fp := cookieFingerprint(entry.Name); fp != "" {
+		// Product family label, computed here so the panel and the trackers
+		// aggregate never keep two copies of the catalogue.
+		msg["fp"] = fp
+	}
 	return msg
 }
 

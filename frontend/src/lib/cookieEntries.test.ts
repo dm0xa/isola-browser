@@ -22,4 +22,11 @@ describe('cookieEntries', () => {
     expect(cookieExpiryLabel(merged[0])).toBe('Session');
     expect(cookieExpiryLabel({ ...merged[0], maxAge: 120 })).toBe('120s');
   });
+
+  it('carries the product-family fingerprint when the streamer sent one', () => {
+    const withFp = cookieFromWire({ n: '_ga', d: '.example.com', fp: 'Google Analytics' });
+    expect(withFp?.fp).toBe('Google Analytics');
+    const withoutFp = cookieFromWire({ n: 'custom', d: '.example.com' });
+    expect(withoutFp?.fp).toBeUndefined();
+  });
 });

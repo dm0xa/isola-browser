@@ -5,6 +5,8 @@ import { ArrowLeft, RefreshCw } from 'lucide-react';
 import { IsolaNetworkPanel, type PanelTab } from '../components/IsolaNetworkPanel';
 import { useNetworkStream, type NetworkStreamStatus } from '../hooks/useNetworkStream';
 import { api } from '../lib/api';
+import { isIntelEnabled } from '../lib/config';
+import { fetchSessionIntel, type IntelFetch } from '../lib/intel';
 import { consumeSessionTokenFromUrl, getSessionToken } from '../lib/sessionToken';
 
 interface SessionMeta {
@@ -174,7 +176,12 @@ export default function NetworkPage() {
     return `${protocol}://${window.location.host}/ws/${id}?${qs.toString()}`;
   }, [id, token, isIsola]);
 
-  const { entries, consoleEntries, cookieEntries, tabs, status, retry } = useNetworkStream(wsUrl);
+  const { entries, consoleEntries, cookieEntries, docHeaders, tabs, status, retry } = useNetworkStream(wsUrl);
+
+  const onIntel = useCallback<IntelFetch>((query) => {
+    if (!id) return Promise.reject(new Error('No session'));
+    return fetchSessionIntel(id, token, query);
+  }, [id, token]);
 
   const backToSession = useCallback(() => navigate(`/session/${id}`), [navigate, id]);
 
@@ -262,6 +269,9 @@ export default function NetworkPage() {
           entries={entries}
           consoleEntries={consoleEntries}
           cookieEntries={cookieEntries}
+          docHeaders={docHeaders}
+          onIntel={onIntel}
+          intelDisabled={!isIntelEnabled()}
           layout="side"
           tab={tab}
           onTab={setTab}

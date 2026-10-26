@@ -85,12 +85,12 @@ func TestApplyNetEventDefersHashableFinish(t *testing.T) {
 
 	const key, uiID = "target-aaaa|1", "target:1"
 	netMu.Lock()
-	_, job := applyNetEvent(key, uiID, "Network.requestWillBeSent", &inFlight, 1, "sess-1")
+	_, job, _ := applyNetEvent(key, uiID, "Network.requestWillBeSent", &inFlight, 1, "sess-1")
 	if job != nil {
 		netMu.Unlock()
 		t.Fatal("a request-in-flight event must not schedule a hash job")
 	}
-	broadcast, job := applyNetEvent(key, uiID, "Network.loadingFinished", &finished, 1, "sess-1")
+	broadcast, job, _ := applyNetEvent(key, uiID, "Network.loadingFinished", &finished, 1, "sess-1")
 	netMu.Unlock()
 
 	if job == nil {

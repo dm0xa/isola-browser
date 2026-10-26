@@ -33,6 +33,29 @@ const (
 	netBodyHashWorkers = 6
 )
 
+// netRedirect is one hop of a redirect chain. The chain used to be lost: a
+// redirect reuses the CDP requestId and the new URL overwrote the old one.
+type netRedirect struct {
+	Status int    `json:"status"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+}
+
+// netTLS summarises the certificate a document was served with. SecurityState
+// is CDP's verdict on the connection, not our inference: Chromium reports
+// "insecure" for a chain it accepted only because certificate errors were
+// ignored.
+type netTLS struct {
+	Protocol      string   `json:"protocol,omitempty"`
+	Cipher        string   `json:"cipher,omitempty"`
+	Issuer        string   `json:"issuer,omitempty"`
+	Subject       string   `json:"subject,omitempty"`
+	ValidFrom     float64  `json:"valid_from,omitempty"`
+	ValidTo       float64  `json:"valid_to,omitempty"`
+	SANs          []string `json:"sans,omitempty"`
+	SecurityState string   `json:"security_state,omitempty"`
+}
+
 type netRequest struct {
 	id           string
 	cdpID        string // CDP requestId (per target) — the key for getResponseBody
@@ -51,6 +74,20 @@ type netRequest struct {
 	err          string
 	tab          int   // active browser tab at capture time (client tab strip id)
 	startedAt    int64 // wall-clock capture time, Unix ms (CDP wallTime, else local)
+
+	// Response metadata. Headers are kept only for the types where they carry
+	// signal and are shed oldest-first past netHeaderEntries (see headers.go).
+	headers   map[string]string
+	tls       *netTLS
+	tlsState  string // CDP securityState, kept even when there are no cert details
+	ttfbMs    int64  // time to first byte, from CDP response.timing
+	cached    bool   // served from the disk cache
+	sw        bool   // served by a service worker
+	posture   *postureReport
+	redirects []netRedirect
+	// originHost is the tab's document host when this entry was created. It is
+	// what makes first- vs third-party classification possible without any DNS.
+	originHost string
 }
 
 // netHashJob is a finished request whose body still has to be fetched and
@@ -70,6 +107,15 @@ var (
 	netOrder    []string                   // completion order, capped
 	netOrdered  map[string]bool            // membership index for netOrder
 	netSeenSeq  int
+	// netOriginByTab remembers the document host per browser tab, so a request
+	// can be classified without re-parsing its tab's URL.
+	netOriginByTab = map[int]string{}
+	// netMainFrameByTarget remembers the first document frame seen per CDP
+	// target — the page's main frame. Later Document requests from other frame
+	// ids are iframes and do not move the tab's origin.
+	netMainFrameByTarget = map[string]string{}
+	// netHeadered counts entries currently holding headers, for the shed loop.
+	netHeadered int
 )
 
 const (
@@ -137,7 +183,7 @@ func netMonitorTap(scope, sessionID, method string, params json.RawMessage, tab 
 	uiID := shortTargetID(scope) + ":" + p.RequestId
 
 	netMu.Lock()
-	broadcast, hashJob := applyNetEvent(key, uiID, method, &p, tab, sessionID)
+	broadcast, hashJob, emitHeaders := applyNetEvent(key, uiID, method, &p, tab, sessionID)
 	// Serialise while the lock is held: the entry's string fields are written
 	// by other goroutines (redirects, tab reassignment, body hashing), so a
 	// wire map built after unlocking is a data race on a string header.
@@ -145,10 +191,17 @@ func netMonitorTap(scope, sessionID, method string, params json.RawMessage, tab 
 	if broadcast != nil {
 		msg = netWireMessage(broadcast)
 	}
+	var hmsg map[string]any
+	if emitHeaders && broadcast != nil {
+		hmsg = netHeadersMessage(broadcast)
+	}
 	netMu.Unlock()
 
 	if msg != nil {
 		broadcastNetMessage(msg)
+	}
+	if hmsg != nil {
+		broadcastNetMessage(hmsg)
 	}
 	if hashJob != nil {
 		go hashNetBody(hashJob)
@@ -159,29 +212,63 @@ func netMonitorTap(scope, sessionID, method string, params json.RawMessage, tab 
 type netEvent struct {
 	RequestId string `json:"requestId"`
 	Type      string `json:"type"`
+	// FrameId identifies the frame that issued the request. Only the main
+	// frame's document defines the tab's origin; an iframe document (a consent
+	// wall, a payment widget) must not reclassify the whole page.
+	FrameId   string `json:"frameId"`
 	ErrorText string `json:"errorText"`
 	Canceled  bool   `json:"canceled"`
 	Request   struct {
 		URL    string `json:"url"`
 		Method string `json:"method"`
 	} `json:"request"`
+	// RedirectResponse rides requestWillBeSent when this request replaces a
+	// previous hop. It is the only place the hop's status is reported.
+	RedirectResponse *struct {
+		URL    string `json:"url"`
+		Status int    `json:"status"`
+	} `json:"redirectResponse"`
 	Response struct {
-		Status          int    `json:"status"`
-		MimeType        string `json:"mimeType"`
-		Protocol        string `json:"protocol"`
-		RemoteIPAddress string `json:"remoteIPAddress"`
-		FromDiskCache   bool   `json:"fromDiskCache"`
+		Status            int               `json:"status"`
+		MimeType          string            `json:"mimeType"`
+		Protocol          string            `json:"protocol"`
+		RemoteIPAddress   string            `json:"remoteIPAddress"`
+		FromDiskCache     bool              `json:"fromDiskCache"`
+		FromServiceWorker bool              `json:"fromServiceWorker"`
+		Headers           map[string]string `json:"headers"`
+		SecurityDetails   *struct {
+			Protocol    string   `json:"protocol"`
+			Cipher      string   `json:"cipher"`
+			Issuer      string   `json:"issuer"`
+			SubjectName string   `json:"subjectName"`
+			ValidFrom   float64  `json:"validFrom"`
+			ValidTo     float64  `json:"validTo"`
+			SANList     []string `json:"sanList"`
+		} `json:"securityDetails"`
+		// "secure", "neutral", "insecure", "insecure-broken", "info",
+		// "unknown". Present for every response; the only signal that
+		// distinguishes a verified chain from one Chromium was told to accept.
+		SecurityState string `json:"securityState"`
+		Timing        *struct {
+			ReceiveHeadersEnd float64 `json:"receiveHeadersEnd"`
+		} `json:"timing"`
 	} `json:"response"`
-	ConnectionId      int64   `json:"connectionId"`
-	EncodedDataLength float64 `json:"encodedDataLength"`
-	WallTime          float64 `json:"wallTime"`
+	// Network.responseReceivedExtraInfo reports these at the top level. Its
+	// header list is the raw wire form, including headers Chromium filters out
+	// of response.headers — the better source when both arrive.
+	Headers           map[string]string `json:"headers"`
+	HeadersText       string            `json:"headersText"`
+	StatusCode        int               `json:"statusCode"`
+	ConnectionId      int64             `json:"connectionId"`
+	EncodedDataLength float64           `json:"encodedDataLength"`
+	WallTime          float64           `json:"wallTime"`
 }
 
 // applyNetEvent folds one CDP event into the per-request state. Callers hold
 // netMu. It returns the entry to publish now (nil when nothing should be sent
 // yet) and, for a finished request worth hashing, the job that fetches and
 // hashes the body before publishing.
-func applyNetEvent(key, uiID, method string, p *netEvent, tab int, sessionID string) (*netRequest, *netHashJob) {
+func applyNetEvent(key, uiID, method string, p *netEvent, tab int, sessionID string) (*netRequest, *netHashJob, bool) {
 	switch method {
 	case "Network.requestWillBeSent":
 		// Redirects reuse the requestId with a redirectResponse — treat as
@@ -192,12 +279,37 @@ func applyNetEvent(key, uiID, method string, p *netEvent, tab int, sessionID str
 			netRequests[key] = r
 			rememberOrder(key) // insertion order for replay
 		}
+		if p.RedirectResponse != nil {
+			// Record the hop before the URL is overwritten. Without this the
+			// chain collapses to its final URL and the status codes are lost.
+			from := r.url
+			if from == "" {
+				from = p.RedirectResponse.URL
+			}
+			r.redirects = append(r.redirects, netRedirect{
+				Status: p.RedirectResponse.Status,
+				From:   from,
+				To:     p.Request.URL,
+			})
+		}
 		r.url = p.Request.URL
 		r.method = p.Request.Method
 		if p.Type != "" {
 			r.typ = p.Type
 		}
-		return r, nil
+		if strings.EqualFold(r.typ, "Document") {
+			if isMainFrameDocument(scopeOf(key), p.FrameId) {
+				r.originHost = hostOfURL(r.url)
+				netOriginByTab[tab] = r.originHost
+			} else if origin := netOriginByTab[tab]; origin != "" {
+				// An iframe document inherits the page's origin instead of
+				// replacing it.
+				r.originHost = origin
+			}
+		} else if origin := netOriginByTab[tab]; origin != "" {
+			r.originHost = origin
+		}
+		return r, nil, false
 	case "Network.responseReceived":
 		r := netRequests[key]
 		if r == nil {
@@ -219,11 +331,73 @@ func applyNetEvent(key, uiID, method string, p *netEvent, tab int, sessionID str
 			r.mime = p.Response.MimeType
 			r.typ = p.Type
 		}
-		return r, nil
+		r.cached = p.Response.FromDiskCache
+		r.sw = p.Response.FromServiceWorker
+		r.tlsState = p.Response.SecurityState
+		if sd := p.Response.SecurityDetails; sd != nil {
+			r.tls = &netTLS{
+				Protocol:      sd.Protocol,
+				Cipher:        sd.Cipher,
+				Issuer:        sd.Issuer,
+				Subject:       sd.SubjectName,
+				ValidFrom:     sd.ValidFrom,
+				ValidTo:       sd.ValidTo,
+				SANs:          clipStrings(sd.SANList, 20),
+				SecurityState: p.Response.SecurityState,
+			}
+		}
+		if t := p.Response.Timing; t != nil && t.ReceiveHeadersEnd > 0 {
+			r.ttfbMs = int64(t.ReceiveHeadersEnd)
+		}
+		if headersWanted(r.typ) {
+			hadHeaders := r.headers != nil
+			r.headers = mergeHeaders(r.headers, p.Response.Headers)
+			if !hadHeaders && r.headers != nil {
+				netHeadered++
+			}
+			shedHeaders()
+		} else {
+			if r.headers != nil {
+				netHeadered--
+			}
+			r.headers = nil
+		}
+		if len(r.headers) > 0 && strings.EqualFold(r.typ, "Document") {
+			r.posture = assessPosture(r.headers, r.tlsState)
+			return r, nil, true
+		}
+		return r, nil, false
+	case "Network.responseReceivedExtraInfo":
+		// Set-Cookie rides here too, but cookies have their own tap; this case
+		// exists for the raw header block (headersText) and for responses whose
+		// header map carried nothing usable. It never *creates* a row: the cookie
+		// tap must not leave blank entries in the panel, and requestWillBeSent
+		// always precedes a real response.
+		r := netRequests[key]
+		if r == nil {
+			return nil, nil, false
+		}
+		if p.StatusCode > 0 && r.status == 0 {
+			r.status = p.StatusCode
+		}
+		if headersWanted(r.typ) {
+			hadHeaders := r.headers != nil
+			r.headers = mergeHeaders(r.headers, p.Headers)
+			r.headers = mergeHeaderText(r.headers, p.HeadersText)
+			if !hadHeaders && r.headers != nil {
+				netHeadered++
+			}
+			shedHeaders()
+		}
+		if len(r.headers) > 0 && strings.EqualFold(r.typ, "Document") {
+			r.posture = assessPosture(r.headers, r.tlsState)
+			return r, nil, true
+		}
+		return r, nil, false
 	case "Network.loadingFinished":
 		r := netRequests[key]
 		if r == nil {
-			return nil, nil
+			return nil, nil, false
 		}
 		r.bytes = int64(p.EncodedDataLength)
 		rememberOrder(key)
@@ -232,20 +406,75 @@ func applyNetEvent(key, uiID, method string, p *netEvent, tab int, sessionID str
 		// the hash settles, or after a short grace if it never does.
 		if shouldHashBody(r, sessionID) {
 			r.hashPending = true
-			return nil, &netHashJob{r: r, key: key, sessionID: sessionID}
+			return nil, &netHashJob{r: r, key: key, sessionID: sessionID}, false
 		}
-		return r, nil
+		return r, nil, false
 	case "Network.loadingFailed":
 		r := netRequests[key]
 		if r == nil {
-			return nil, nil
+			return nil, nil, false
 		}
 		r.failed = true
 		r.err = p.ErrorText
 		rememberOrder(key)
-		return r, nil
+		return r, nil, false
 	}
-	return nil, nil
+	return nil, nil, false
+}
+
+// scopeOf recovers the CDP target id from a capture key ("scope|requestId").
+func scopeOf(key string) string {
+	scope, _, _ := strings.Cut(key, "|")
+	return scope
+}
+
+// isMainFrameDocument reports whether this Document request belongs to the
+// target's main frame. The first document frame seen for a fresh target is the
+// main frame; anything else is an iframe. When CDP omits frameId, assume main
+// so classification keeps working rather than silently freezing the origin.
+func isMainFrameDocument(scope, frameID string) bool {
+	if frameID == "" {
+		return true
+	}
+	main, ok := netMainFrameByTarget[scope]
+	if !ok {
+		netMainFrameByTarget[scope] = frameID
+		return true
+	}
+	return main == frameID
+}
+
+// shedHeaders keeps at most netHeaderEntries entries holding headers, dropping
+// the oldest first. Callers hold netMu.
+func shedHeaders() {
+	if netHeadered <= netHeaderEntriesLimit {
+		return
+	}
+	for _, key := range netOrder {
+		r := netRequests[key]
+		if r == nil || r.headers == nil {
+			continue
+		}
+		r.headers = nil
+		r.posture = nil
+		netHeadered--
+		if netHeadered <= netHeaderEntriesLimit {
+			return
+		}
+	}
+}
+
+// clipStrings caps a slice copied onto the wire.
+func clipStrings(in []string, max int) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	if len(in) > max {
+		in = in[:max]
+	}
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
 }
 
 // hashableType reports whether a loaded file is a kind worth hashing: the
@@ -352,6 +581,9 @@ func rememberOrder(key string) {
 		old := netOrder[0]
 		netOrder = netOrder[1:]
 		delete(netOrdered, old)
+		if r := netRequests[old]; r != nil && r.headers != nil {
+			netHeadered--
+		}
 		delete(netRequests, old)
 	}
 }
@@ -363,13 +595,22 @@ func replayNetTo(fn func(map[string]any)) {
 	fn(map[string]any{"type": "net_init", "entries": []any{}})
 	netMu.Lock()
 	msgs := make([]map[string]any, 0, len(netOrder))
+	var headerMsgs []map[string]any
 	for _, id := range netOrder {
 		if r, ok := netRequests[id]; ok {
 			msgs = append(msgs, netWireMessage(r))
+			// Document headers are not part of the compact entry, so a viewer
+			// that attaches after the first load would otherwise never get them.
+			if len(r.headers) > 0 && strings.EqualFold(r.typ, "Document") {
+				headerMsgs = append(headerMsgs, netHeadersMessage(r))
+			}
 		}
 	}
 	netMu.Unlock()
 	for _, msg := range msgs {
+		fn(msg)
+	}
+	for _, msg := range headerMsgs {
 		fn(msg)
 	}
 }
@@ -406,7 +647,60 @@ func netEntryWire(r *netRequest) map[string]any {
 	if r.sha1 != "" {
 		e["h"] = r.sha1
 	}
+	if len(r.redirects) > 0 {
+		e["rd"] = r.redirects
+	}
+	if r.ttfbMs > 0 {
+		e["ttfb"] = r.ttfbMs
+	}
+	if r.cached {
+		e["dc"] = true
+	}
+	if r.sw {
+		e["sw"] = true
+	}
+	if thirdParty, tracker := classifyEntry(r); thirdParty || tracker != "" {
+		if thirdParty {
+			e["tp"] = true
+		}
+		if tracker != "" {
+			e["tr"] = tracker
+		}
+	}
+	if isBeaconType(r.typ) {
+		e["bc"] = true
+	}
 	return e
+}
+
+// classifyEntry derives first-/third-party status and a tracker label from the
+// URL and the tab's document host. It never resolves DNS.
+func classifyEntry(r *netRequest) (thirdParty bool, tracker string) {
+	host := hostOfURL(r.url)
+	if host != "" && r.originHost != "" {
+		thirdParty = !strings.EqualFold(registrableDomain(host), registrableDomain(r.originHost))
+	}
+	return thirdParty, trackerForURL(r.url, host)
+}
+
+// netHeadersMessage is the document-header side channel. It is separate from
+// the compact entry so subresources do not carry header maps on the wire; the
+// full set stays available in the /network dump.
+func netHeadersMessage(r *netRequest) map[string]any {
+	e := map[string]any{
+		"id":  r.id,
+		"url": clip(r.url),
+		"s":   r.status,
+		"tb":  r.tab,
+		"hd":  r.headers,
+	}
+	if r.posture != nil {
+		e["pst"] = r.posture
+	}
+	if r.tls != nil {
+		e["tls"] = r.tls
+	}
+	return map[string]any{"type": "headers", "e": e}
 }
 
 // netWireMessage wraps one serialised entry for the wire. Callers must hold
@@ -448,40 +742,61 @@ func isNetEventType(method string) bool {
 
 // netDumpEntry is the full-fidelity shape returned by GET /network (MCP/API).
 type netDumpEntry struct {
-	ID           string `json:"id"`
-	URL          string `json:"url"`
-	Method       string `json:"method"`
-	Status       int    `json:"status"`
-	Type         string `json:"type"`
-	Mime         string `json:"mime,omitempty"`
-	IP           string `json:"ip,omitempty"`
-	Protocol     string `json:"protocol,omitempty"`
-	ConnectionID int64  `json:"connection_id,omitempty"`
-	Bytes        int64  `json:"bytes"`
-	SHA1         string `json:"sha1,omitempty"`
-	Failed       bool   `json:"failed"`
-	Error        string `json:"error,omitempty"`
-	Tab          int    `json:"tab"`
-	TS           int64  `json:"ts"`
+	ID            string            `json:"id"`
+	URL           string            `json:"url"`
+	Method        string            `json:"method"`
+	Status        int               `json:"status"`
+	Type          string            `json:"type"`
+	Mime          string            `json:"mime,omitempty"`
+	IP            string            `json:"ip,omitempty"`
+	Protocol      string            `json:"protocol,omitempty"`
+	ConnectionID  int64             `json:"connection_id,omitempty"`
+	Bytes         int64             `json:"bytes"`
+	SHA1          string            `json:"sha1,omitempty"`
+	Failed        bool              `json:"failed"`
+	Error         string            `json:"error,omitempty"`
+	Tab           int               `json:"tab"`
+	TS            int64             `json:"ts"`
+	TTFBMs        int64             `json:"ttfb_ms,omitempty"`
+	Cached        bool              `json:"from_disk_cache,omitempty"`
+	ServiceWorker bool              `json:"from_service_worker,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty"`
+	TLS           *netTLS           `json:"tls,omitempty"`
+	Redirects     []netRedirect     `json:"redirects,omitempty"`
+	Posture       *postureReport    `json:"posture,omitempty"`
+	ThirdParty    bool              `json:"third_party,omitempty"`
+	Tracker       string            `json:"tracker,omitempty"`
+	Beacon        bool              `json:"beacon,omitempty"`
 }
 
 func netRequestToDump(r *netRequest) netDumpEntry {
+	thirdParty, tracker := classifyEntry(r)
 	return netDumpEntry{
-		ID:           r.id,
-		URL:          r.url,
-		Method:       r.method,
-		Status:       r.status,
-		Type:         r.typ,
-		Mime:         r.mime,
-		IP:           r.ip,
-		Protocol:     r.protocol,
-		ConnectionID: r.connectionID,
-		Bytes:        r.bytes,
-		SHA1:         r.sha1,
-		Failed:       r.failed,
-		Error:        r.err,
-		Tab:          r.tab,
-		TS:           r.startedAt,
+		ID:            r.id,
+		URL:           r.url,
+		Method:        r.method,
+		Status:        r.status,
+		Type:          r.typ,
+		Mime:          r.mime,
+		IP:            r.ip,
+		Protocol:      r.protocol,
+		ConnectionID:  r.connectionID,
+		Bytes:         r.bytes,
+		SHA1:          r.sha1,
+		Failed:        r.failed,
+		Error:         r.err,
+		Tab:           r.tab,
+		TS:            r.startedAt,
+		TTFBMs:        r.ttfbMs,
+		Cached:        r.cached,
+		ServiceWorker: r.sw,
+		Headers:       r.headers,
+		TLS:           r.tls,
+		Redirects:     r.redirects,
+		Posture:       r.posture,
+		ThirdParty:    thirdParty,
+		Tracker:       tracker,
+		Beacon:        isBeaconType(r.typ),
 	}
 }
 

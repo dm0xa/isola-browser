@@ -72,6 +72,24 @@ Control and video share that mailbox: `stream_reset` cannot overtake the last fr
 
 They are separate so a large video write cannot stall a click. Auth and the `host=1` flag are in [API → WebSocket](api.md#websocket).
 
+### Analysis side channel (server → client)
+
+The input socket also carries the observation stream, so a viewer renders
+traffic without a second connection. Unknown `type` values must be ignored —
+the set grows over time.
+
+| `type` | Payload |
+| :--- | :--- |
+| `net_init` | `{ entries: [...] }` — replay of the capture window when a viewer attaches. |
+| `net` | `{ e: {...} }` — one request snapshot; merge by `e.id` (the streamer publishes the same row several times as it progresses). |
+| `headers` | `{ e: { id, url, s, tb, hd, pst, tls } }` — document response headers, the posture grade and the certificate summary. `tls.security_state` is CDP's verdict (`secure`, `neutral`, `insecure`, …), and `pst.tls_state`/`pst.note` report it with the grade it capped. Sent separately from `net` so subresources stay small. |
+| `console` | `{ l, t, tb, ts }` — one console line. |
+| `cookie` | `{ d, n, v, h, s, fp? }` — one parsed `Set-Cookie`; `fp` is the product-family label when the name matches a known fingerprint. |
+| `tabs` | `{ tabs: [...] }` — the in-container tab strip. |
+
+Analysis is descriptive: raw CDP, response bodies and `Set-Cookie` header maps
+are never forwarded (the cookies tab owns cookie data).
+
 ```
 ws://localhost:8080/ws/<SESSION_ID>?channel=isola&mode=webcodecs&session_token=<TOKEN>
 ws://localhost:8080/ws/<SESSION_ID>?channel=input&host=1&session_token=<TOKEN>

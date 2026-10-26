@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BrowserTab, ConsoleEntry, CookieEntry, NetEntry } from '../components/IsolaNetworkPanel';
 import { mergeConsoleEntry } from '../lib/consoleEntries';
 import { cookieFromWire, mergeCookieEntry } from '../lib/cookieEntries';
+import type { DocumentHeaders } from '../lib/intel';
 import { getNetworkLogMaxEntries } from '../lib/config';
 import { mergeNetEntry } from '../lib/netEntries';
 
@@ -22,6 +23,8 @@ interface Snapshot {
   consoleEntries: ConsoleEntry[];
   cookieEntries: CookieEntry[];
   tabs: BrowserTab[];
+  /** Document headers + posture, keyed by network entry id. */
+  docHeaders: Record<string, DocumentHeaders>;
 }
 
 interface WireMessage {
@@ -40,7 +43,7 @@ interface WireMessage {
   ts?: number;
 }
 
-const EMPTY: Snapshot = { entries: [], consoleEntries: [], cookieEntries: [], tabs: [] };
+const EMPTY: Snapshot = { entries: [], consoleEntries: [], cookieEntries: [], tabs: [], docHeaders: {} };
 
 /**
  * Attaches to a session's isola input WebSocket and collects the
@@ -59,6 +62,7 @@ export function useNetworkStream(wsUrl: string | null) {
   const netRef = useRef<NetEntry[]>([]);
   const consoleRef = useRef<ConsoleEntry[]>([]);
   const cookieRef = useRef<CookieEntry[]>([]);
+  const docHeadersRef = useRef<Record<string, DocumentHeaders>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aliveRef = useRef(false);
@@ -80,6 +84,7 @@ export function useNetworkStream(wsUrl: string | null) {
       netRef.current = [];
       consoleRef.current = [];
       cookieRef.current = [];
+      docHeadersRef.current = {};
       setSnapshot(EMPTY);
     };
 
@@ -165,6 +170,16 @@ export function useNetworkStream(wsUrl: string | null) {
             if (next.length > MAX_COOKIE) next = next.slice(next.length - MAX_COOKIE);
             cookieRef.current = next;
             setSnapshot((p) => ({ ...p, cookieEntries: next }));
+            break;
+          }
+          case 'headers': {
+            // Document headers arrive separately from the compact entry; merge by
+            // entry id, newest response wins.
+            const doc = (msg as unknown as { e?: DocumentHeaders }).e;
+            if (!doc || !doc.id || !doc.hd) return;
+            const next = { ...docHeadersRef.current, [doc.id]: doc };
+            docHeadersRef.current = next;
+            setSnapshot((p) => ({ ...p, docHeaders: next }));
             break;
           }
           case 'tabs': {

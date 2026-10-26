@@ -81,7 +81,35 @@ func newFakeStreamer() (*httptest.Server, *streamerHits) {
 	mux.HandleFunc("/network", func(w http.ResponseWriter, r *http.Request) {
 		record("/network", w, map[string]any{
 			"entries": []map[string]any{
-				{"id": "t:1", "url": "https://example.com/full-path-unclipped", "method": "GET", "status": 200, "protocol": "h2", "connection_id": 7},
+				{"id": "t:1", "url": "https://example.com/full-path-unclipped", "method": "GET", "status": 200, "protocol": "h2", "connection_id": 7, "type": "Document", "tls": map[string]any{"protocol": "TLS 1.3", "issuer": "Test CA"}, "headers": map[string]string{"strict-transport-security": "max-age=31536000", "server": "nginx"}, "posture": map[string]any{"score": 1, "total": 7, "grade": "D"}, "redirects": []map[string]any{{"status": 301, "from": "http://example.com/", "to": "https://example.com/"}}},
+				{"id": "t:2", "url": "https://cdn.other.example/app.js", "method": "GET", "status": 200, "type": "Script", "third_party": true, "tracker": "Example Tracker", "bytes": 2048, "ttfb_ms": 55},
+			},
+		})
+	})
+	mux.HandleFunc("/posture", func(w http.ResponseWriter, r *http.Request) {
+		record("/posture", w, map[string]any{
+			"total": 1,
+			"entries": []map[string]any{
+				{"id": "t:1", "url": "https://example.com/", "status": 200, "tab": 1, "posture": map[string]any{"score": 4, "total": 7, "grade": "C", "checks": []map[string]any{{"name": "hsts", "present": true}}}, "tls": map[string]any{"protocol": "TLS 1.3"}},
+			},
+		})
+	})
+	mux.HandleFunc("/trackers", func(w http.ResponseWriter, r *http.Request) {
+		record("/trackers", w, map[string]any{
+			"origin": "example.com", "requests": 2, "third_party_hosts": 1, "beacons": 1,
+			"trackers":            []map[string]any{{"host": "www.google-analytics.com", "domain": "google-analytics.com", "requests": 1, "tracker": "Google Analytics"}},
+			"third_party":         []map[string]any{{"host": "cdn.other.example", "domain": "other.example", "requests": 1}},
+			"cookie_fingerprints": []map[string]any{{"name": "_ga", "domain": "example.com", "product": "Google Analytics"}},
+		})
+	})
+	mux.HandleFunc("/intel", func(w http.ResponseWriter, r *http.Request) {
+		record("/intel", w, map[string]any{
+			"host": r.URL.Query().Get("host"),
+			"dns": map[string]any{
+				"example.com": map[string]any{"host": "example.com", "ips": []string{"93.184.216.34"}, "cname": "edge.example.net", "ptr": map[string]string{"93.184.216.34": "example.com"}, "asn": []map[string]any{{"ip": "93.184.216.34", "asn": 15133, "org": "EDGECAST"}}},
+			},
+			"probes": map[string]any{
+				"robots": map[string]any{"check": "robots", "status": "ok", "data": map[string]any{"disallow": []string{"/admin"}}},
 			},
 		})
 	})
@@ -197,7 +225,11 @@ func TestMCPAllToolsAgainstFakeStreamer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantTools := []string{"create_session", "navigate", "inspect_session", "snapshot", "screenshot", "click", "type", "get_network", "resource_graph", "get_links", "close_session"}
+	wantTools := []string{
+		"create_session", "navigate", "inspect_session", "snapshot", "screenshot", "click", "type",
+		"get_network", "get_headers", "get_posture", "get_redirects", "get_trackers", "host_intel", "probe_host",
+		"resource_graph", "get_links", "close_session",
+	}
 	if len(tools.Tools) != len(wantTools) {
 		t.Fatalf("tools = %d, want %d", len(tools.Tools), len(wantTools))
 	}
@@ -247,6 +279,42 @@ func TestMCPAllToolsAgainstFakeStreamer(t *testing.T) {
 	netBody := callToolText(t, mcpSess, "get_network", map[string]any{"session_id": sessionID})
 	if !strings.Contains(netBody, "connection_id") || !strings.Contains(netBody, "full-path-unclipped") {
 		t.Fatalf("get_network body: %s", netBody)
+	}
+
+	// A filtered/limited get_network must not strip fields added later.
+	limitedNet := callToolText(t, mcpSess, "get_network", map[string]any{"session_id": sessionID, "type": "Document", "limit": 1})
+	if !strings.Contains(limitedNet, "connection_id") {
+		t.Fatalf("filtered get_network dropped fields: %s", limitedNet)
+	}
+
+	headersBody := callToolText(t, mcpSess, "get_headers", map[string]any{"session_id": sessionID, "limit": 1})
+	if !strings.Contains(headersBody, "strict-transport-security") || !strings.Contains(headersBody, "TLS 1.3") {
+		t.Fatalf("get_headers body: %s", headersBody)
+	}
+
+	postureBody := callToolText(t, mcpSess, "get_posture", map[string]any{"session_id": sessionID})
+	if !strings.Contains(postureBody, `"grade":"C"`) {
+		t.Fatalf("get_posture body: %s", postureBody)
+	}
+
+	redirectsBody := callToolText(t, mcpSess, "get_redirects", map[string]any{"session_id": sessionID})
+	if !strings.Contains(redirectsBody, `"status":301`) {
+		t.Fatalf("get_redirects body: %s", redirectsBody)
+	}
+
+	trackersBody := callToolText(t, mcpSess, "get_trackers", map[string]any{"session_id": sessionID})
+	if !strings.Contains(trackersBody, "Google Analytics") || !strings.Contains(trackersBody, "cookie_fingerprints") {
+		t.Fatalf("get_trackers body: %s", trackersBody)
+	}
+
+	hostBody := callToolText(t, mcpSess, "host_intel", map[string]any{"session_id": sessionID, "host": "example.com"})
+	if !strings.Contains(hostBody, "EDGECAST") {
+		t.Fatalf("host_intel body: %s", hostBody)
+	}
+
+	probeBody := callToolText(t, mcpSess, "probe_host", map[string]any{"session_id": sessionID, "host": "example.com", "checks": "robots"})
+	if !strings.Contains(probeBody, `"status":"ok"`) {
+		t.Fatalf("probe_host body: %s", probeBody)
 	}
 	if hits.count("/network") < 2 {
 		t.Fatalf("network hits = %d, want >=2 (inspect_session + get_network)", hits.count("/network"))

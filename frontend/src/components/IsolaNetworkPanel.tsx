@@ -1,5 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { cookieDomainLabel, cookieExpiryLabel } from '../lib/cookieEntries';
+import {
+  formatProbeData,
+  postureGradeClass,
+  probeStatusClass,
+  tlsStateClass,
+  tlsStateLabel,
+  tlsValidity,
+  type DocumentHeaders,
+  type IntelFetch,
+  type IntelResponse,
+  type PostureReport,
+} from '../lib/intel';
 import { CLASS_ACCENT, CLASS_ACCENT_LIGHT, CLASS_LABEL, CLASS_NAME, CLASS_ORDER, classifyResource, type ResourceClass } from '../lib/resourceType';
 import { useTheme } from '../lib/ThemeContext';
 import { ResourceGraph } from './ResourceGraph';
@@ -20,6 +32,23 @@ export interface NetEntry {
   h?: string;
   /** The URL shown here was clipped by the streamer's wire budget. */
   ut?: boolean;
+  /** Redirect hops, oldest first. */
+  rd?: NetRedirect[];
+  /** Time to first byte, milliseconds (CDP response.timing). */
+  ttfb?: number;
+  /** Served from the disk cache / by a service worker. */
+  dc?: boolean;
+  sw?: boolean;
+  /** Third-party request, tracker label and beacon flag (computed in Go). */
+  tp?: boolean;
+  tr?: string;
+  bc?: boolean;
+}
+
+export interface NetRedirect {
+  status: number;
+  from: string;
+  to: string;
 }
 
 export interface ConsoleEntry {
@@ -41,9 +70,11 @@ export interface CookieEntry {
   maxAge?: number;
   httpOnly: boolean;
   secure: boolean;
+  /** Product family the cookie name belongs to (e.g. "Google Analytics"). */
+  fp?: string;
 }
 
-export type PanelTab = 'network' | 'graph' | 'console' | 'cookies' | 'domains';
+export type PanelTab = 'network' | 'graph' | 'domains' | 'headers' | 'trackers' | 'recon' | 'console' | 'cookies';
 export type PanelLayout = 'bottom' | 'side';
 
 // One entry of the in-container browser tab strip (broadcast by the streamer
@@ -328,7 +359,19 @@ const FLAG_LABEL: Record<keyof NetFlags, string> = {
   oddPort: 'odd port',
 };
 
-const TABS: PanelTab[] = ['network', 'graph', 'domains', 'console', 'cookies'];
+const TABS: PanelTab[] = ['network', 'graph', 'domains', 'headers', 'trackers', 'recon', 'console', 'cookies'];
+
+// Recon checks offered in the UI. Every one of them fetches the host being
+// investigated; recon contacts no provider.
+const RECON_CHECKS: Array<[string, string]> = [
+  ['robots', 'robots.txt'],
+  ['securitytxt', 'security.txt'],
+  ['sitemap', 'sitemap.xml'],
+  ['wellknown', 'change-password'],
+  ['favicon', 'favicon hash'],
+];
+
+const DEFAULT_RECON_CHECKS = ['robots', 'securitytxt', 'sitemap'];
 
 const LS_BOTTOM_HEIGHT = 'isola-panel-bottom-h';
 const LS_SIDE_WIDTH = 'isola-panel-side-w';
@@ -355,6 +398,13 @@ interface Props {
   onSizeChange?: (size: PanelSize) => void;
   // Browser tab strip state, used to name the per-tab filter by domain.
   tabs?: BrowserTab[];
+  // Document headers broadcast by the streamer, keyed by entry id. Posture and
+  // TLS are computed in Go; the panel only renders them.
+  docHeaders?: Record<string, DocumentHeaders>;
+  // Runs recon through the session's API proxy. Omit to hide the recon actions.
+  onIntel?: IntelFetch;
+  // True when the operator disabled recon (ISOLA_INTEL_ENABLED=false).
+  intelDisabled?: boolean;
   // Standalone mode (the /session/:id/network tab): fill the parent instead of
   // docking to an edge, and drop the resize/dock controls that only make sense
   // beside the live view.
@@ -364,7 +414,7 @@ interface Props {
   closeTitle?: string;
 }
 
-export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layout, tab, onTab, onLayout, onClose, onSizeChange, tabs, full, onPopOut, closeTitle }: Props) {
+export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layout, tab, onTab, onLayout, onClose, onSizeChange, tabs, docHeaders, onIntel, intelDisabled, full, onPopOut, closeTitle }: Props) {
   const { theme } = useTheme();
   const [filter, setFilter] = useState('');
   const [onlyFlagged, setOnlyFlagged] = useState(false);
@@ -375,6 +425,12 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
   const [hot, setHot] = useState(false);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [copiedTag, setCopiedTag] = useState('');
+  const [reconHost, setReconHost] = useState('');
+  const [reconChecks, setReconChecks] = useState<ReadonlySet<string>>(new Set(DEFAULT_RECON_CHECKS));
+  const [reconResult, setReconResult] = useState<IntelResponse | null>(null);
+  const [reconBusy, setReconBusy] = useState('');
+  const [reconError, setReconError] = useState('');
+  const [enriched, setEnriched] = useState<Record<string, IntelResponse>>({});
   const listRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
   const draggingRef = useRef(false);
@@ -585,6 +641,94 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
     });
   }, [analyzed, filter, onlyFlagged]);
 
+  // The host the recon tab starts from: the page the user is looking at.
+  const defaultHost = useMemo(() => graphOriginHost(tabs, tabFilter), [tabs, tabFilter]);
+
+  // Document responses that carried headers, newest first. Posture and TLS ride
+  // along from the streamer; nothing is scored here.
+  const docHeaderRows = useMemo(() => {
+    const rows = Object.values(docHeaders ?? {});
+    return rows
+      .filter((r) => r && r.hd && Object.keys(r.hd).length > 0)
+      .sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
+  }, [docHeaders]);
+
+  interface TrackerRow {
+    host: string;
+    requests: number;
+    bytes: number;
+    tracker: string;
+    thirdParty: boolean;
+    ips: string[];
+  }
+
+  // Tracker inventory. Classification (third-party, family label, beacon) is
+  // done by the streamer per request; this only groups the labelled rows.
+  const trackerAgg = useMemo(() => {
+    const byHost = new Map<string, TrackerRow & { ipSet: Set<string> }>();
+    let beacons = 0;
+    for (const e of entries) {
+      const { host } = analyze(e.url);
+      if (!host) continue;
+      let row = byHost.get(host);
+      if (!row) {
+        row = { host, requests: 0, bytes: 0, tracker: '', thirdParty: false, ips: [], ipSet: new Set() };
+        byHost.set(host, row);
+      }
+      row.requests += 1;
+      row.bytes += e.b || 0;
+      if (e.tr) row.tracker = e.tr;
+      if (e.tp) row.thirdParty = true;
+      if (e.bc) beacons += 1;
+      if (e.ip) row.ipSet.add(e.ip);
+    }
+    const rows = Array.from(byHost.values()).map((r) => ({ ...r, ips: Array.from(r.ipSet) }));
+    const byCount = (a: TrackerRow, b: TrackerRow) => b.requests - a.requests || a.host.localeCompare(b.host);
+    return {
+      trackers: rows.filter((r) => r.tracker).sort(byCount),
+      thirdParty: rows.filter((r) => r.thirdParty).sort(byCount),
+      beacons,
+      cookieFamilies: cookieEntries.filter((c) => !!c.fp),
+    };
+  }, [entries, cookieEntries]);
+
+  const runRecon = useCallback(async (checks?: string) => {
+    if (!onIntel) return;
+    const host = (reconHost.trim() || defaultHost).toLowerCase();
+    if (!host) {
+      setReconError('No document host captured yet — type one.');
+      return;
+    }
+    setReconBusy(checks ? 'probe' : 'dns');
+    setReconError('');
+    try {
+      const res = checks
+        ? await onIntel({ host, checks, mode: 'probe' })
+        : await onIntel({ host, mode: 'dns' });
+      setReconResult((prev) => ({ ...(prev || {}), ...res, dns: res.dns ?? prev?.dns }));
+    } catch (err) {
+      setReconError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReconBusy('');
+    }
+  }, [onIntel, reconHost, defaultHost]);
+
+  const enrichDomain = useCallback(async (host: string, ips: Set<string>) => {
+    if (!onIntel) return;
+    setReconBusy('enrich:' + host);
+    setReconError('');
+    try {
+      const res = ips.size > 0
+        ? await onIntel({ ips: Array.from(ips).join(','), mode: 'dns' })
+        : await onIntel({ host, mode: 'dns' });
+      setEnriched((prev) => ({ ...prev, [host]: res }));
+    } catch (err) {
+      setReconError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReconBusy('');
+    }
+  }, [onIntel]);
+
   const [domainOpenKey, setDomainOpenKey] = useState<string | null>(null);
 
   useEffect(() => {
@@ -729,8 +873,8 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
   }, [layout]);
 
   // The standalone page fills its parent with an opaque panel. The in-viewer
-  // panel instead floats over the stream like the debug overlay: a translucent,
-  // blurred card inset from the edges that does not reserve canvas space.
+  // panel floats over the stream: a solid card inset from the edges that does
+  // not reserve canvas space.
   const panelBg = theme === 'light' ? 'rgba(255, 255, 255, 0.97)' : 'rgba(17, 24, 39, 0.97)';
   const FLOAT_INSET = 12;
   const panelStyle: CSSProperties = full
@@ -747,7 +891,7 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
       className={
         full
           ? 'absolute inset-0 z-30 flex flex-col font-mono text-xs text-zinc-800 dark:text-gray-200'
-          : `absolute z-30 flex flex-col overflow-hidden rounded-xl border border-cyan-500/30 bg-white/80 font-mono text-xs text-zinc-800 shadow-2xl backdrop-blur transition-opacity duration-200 dark:border-cyan-500/20 dark:bg-slate-950/70 dark:text-gray-200 ${hot ? 'opacity-100' : 'opacity-60'}`
+          : `absolute z-30 flex flex-col overflow-hidden rounded-xl border border-cyan-500/30 bg-white font-mono text-xs text-zinc-800 shadow-2xl transition-opacity duration-200 dark:border-cyan-500/20 dark:bg-slate-950 dark:text-gray-200 ${hot ? 'opacity-100' : 'opacity-60'}`
       }
       style={panelStyle}
     >
@@ -821,6 +965,9 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
             {t === 'network' && ` (${tabFiltered.length})`}
             {t === 'graph' && ` (${tabFiltered.length})`}
             {t === 'domains' && ` (${domainRows.length})`}
+            {t === 'headers' && ` (${docHeaderRows.length})`}
+            {t === 'trackers' && ` (${trackerAgg.trackers.length})`}
+            {t === 'recon' && reconResult ? ` (${Object.keys(reconResult.probes || reconResult.dns || {}).length})` : null}
             {t === 'console' && ` (${consoleFiltered.length})`}
             {t === 'cookies' && ` (${cookieEntries.length})`}
           </button>
@@ -980,8 +1127,30 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
                         <span>type {e.t || '—'}</span>
                         <span>size {fmtSize(e.b)}</span>
                         <span>ip {e.ip || '—'}</span>
+                        {e.ttfb ? <span>ttfb {e.ttfb} ms</span> : null}
+                        {e.dc && <span className="text-cyan-700 dark:text-cyan-300">disk cache</span>}
+                        {e.sw && <span className="text-cyan-700 dark:text-cyan-300">service worker</span>}
+                        {e.tp && <span className="text-amber-700 dark:text-amber-300">third party</span>}
+                        {e.tr && <span className="text-amber-700 dark:text-amber-300">tracker: {e.tr}</span>}
+                        {e.bc && <span className="text-amber-700 dark:text-amber-300">beacon</span>}
                         {e.e && <span className="text-red-600 dark:text-red-400">error {e.e}</span>}
                       </div>
+                      {e.rd && e.rd.length > 0 && (
+                        <div className="mt-1 text-[10px]">
+                          <div className="text-zinc-500 dark:text-gray-500">redirect chain</div>
+                          {e.rd.map((hop, i) => (
+                            <div key={`${hop.from}#${i}`} className="flex items-center gap-2 text-zinc-600 dark:text-gray-400">
+                              <span className="w-8 shrink-0 text-amber-700 dark:text-amber-300">{hop.status}</span>
+                              <span className="min-w-0 flex-1 truncate font-mono" title={hop.from}>{hop.from}</span>
+                              <span className="text-zinc-400 dark:text-gray-600">→</span>
+                            </div>
+                          ))}
+                          <div className="flex items-center gap-2 text-zinc-600 dark:text-gray-400">
+                            <span className="w-8 shrink-0 text-emerald-700 dark:text-emerald-300">{e.s || '…'}</span>
+                            <span className="min-w-0 flex-1 truncate font-mono" title={e.url}>{e.url}</span>
+                          </div>
+                        </div>
+                      )}
                       {e.h && (
                         <div className="mt-1 flex items-center gap-2 text-[10px]">
                           <span className="text-zinc-500 dark:text-gray-500">sha1</span>
@@ -1051,6 +1220,14 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
                     <span className="w-16 shrink-0 text-right text-zinc-600 dark:text-gray-400">{fmtSize(d.bytes)}</span>
                     <span className="w-28 shrink-0 truncate text-zinc-500 dark:text-gray-500">{d.ips.size > 0 ? Array.from(d.ips).join(', ') : '—'}</span>
                     <button
+                      onClick={(ev) => { ev.stopPropagation(); void enrichDomain(d.host, d.ips); }}
+                      disabled={!onIntel || !!intelDisabled || !!reconBusy}
+                      className="hidden shrink-0 rounded px-1 text-zinc-400 hover:text-cyan-700 disabled:opacity-40 group-hover:block dark:text-gray-400 dark:hover:text-cyan-200"
+                      title="Enrich via DNS: PTR, ASN/org, CNAME"
+                    >
+                      {reconBusy === 'enrich:' + d.host ? '…' : '＋intel'}
+                    </button>
+                    <button
                       onClick={(ev) => { ev.stopPropagation(); copyText(d.host + (d.ips.size > 0 ? '\t' + Array.from(d.ips).join(',') : ''), rowKey); }}
                       className="hidden shrink-0 rounded px-1 text-zinc-400 hover:text-cyan-700 group-hover:block dark:text-gray-400 dark:hover:text-cyan-200"
                       title="Copy domain + IPs"
@@ -1060,6 +1237,21 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
                   </div>
                   {open && (
                     <div className="border-b border-zinc-200 bg-zinc-100/90 px-2 py-1 dark:border-gray-800 dark:bg-gray-900/90">
+                      {enriched[d.host]?.dns && (
+                        <div className="mb-1 rounded bg-white/70 px-2 py-1 text-[10px] text-zinc-600 dark:bg-gray-950/50 dark:text-gray-400">
+                          {Object.values(enriched[d.host]!.dns!).map((h, i) => (
+                            <div key={(h.host || 'h') + i}>
+                              <span className="font-mono">{h.host || '—'}</span>
+                              {h.cname ? <span> → CNAME {h.cname}</span> : null}
+                              {h.ptr && Object.values(h.ptr).length > 0 ? <span> · PTR {Object.values(h.ptr).join(', ')}</span> : null}
+                              {h.asn?.map((a) => (
+                                <span key={a.ip + String(a.asn)}> · AS{a.asn || '?'}{a.org ? ` ${a.org}` : ''}{a.country ? ` ${a.country}` : ''}</span>
+                              ))}
+                              {h.private ? <span className="text-amber-700 dark:text-amber-300"> · private</span> : null}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       {d.entries.slice(-30).reverse().map(({ e }) => (
                         <div key={e.id + e.url} className="flex items-center gap-2 py-0.5 text-[11px]">
                           <span className="w-[92px] shrink-0 text-zinc-500 dark:text-gray-500">{fmtTime(e.ts)}</span>
@@ -1079,6 +1271,201 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
             })}
           </div>
         </>
+      )}
+      {tab === 'headers' && (
+        <div className="flex-1 overflow-y-auto">
+          {docHeaderRows.length === 0 && (
+            <div className="px-2 py-3 text-zinc-500 dark:text-gray-500">No document headers captured yet — open a page.</div>
+          )}
+          {docHeaderRows.map((doc) => {
+            const host = analyze(doc.url).host;
+            const posture: PostureReport | undefined = doc.pst;
+            const headers = Object.entries(doc.hd).sort(([a], [b]) => a.localeCompare(b));
+            return (
+              <div key={`${doc.id}#${doc.url}`} className="border-b border-zinc-200 dark:border-gray-800">
+                <div className="flex flex-wrap items-center gap-2 bg-zinc-50 px-2 py-1 dark:bg-gray-900/60">
+                  <span className="min-w-0 flex-1 truncate text-zinc-800 dark:text-gray-200" title={doc.url}>{host}</span>
+                  {posture && (
+                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${postureGradeClass(posture.grade)}`} title={`${posture.score}/${posture.total} security headers${posture.note ? ` — ${posture.note}` : ''}`}>
+                      {posture.grade} · {posture.score}/{posture.total}
+                    </span>
+                  )}
+                  {doc.tls && (
+                    <span className="text-[10px] text-zinc-500 dark:text-gray-500" title={doc.tls.cipher || ''}>
+                      {doc.tls.protocol || 'TLS'}{doc.tls.issuer ? ` · ${doc.tls.issuer}` : ''}
+                    </span>
+                  )}
+                  {tlsStateLabel(doc.tls?.security_state) && (
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${tlsStateClass(doc.tls?.security_state)}`}
+                      title="Chromium's verdict on the connection (CDP securityState)"
+                    >
+                      {tlsStateLabel(doc.tls?.security_state)}
+                    </span>
+                  )}
+                  <span className="text-[10px] text-zinc-400 dark:text-gray-600">{headers.length} headers</span>
+                </div>
+                {posture && (
+                  <div className="flex flex-wrap gap-1 px-2 py-1 text-[10px]">
+                    {posture.checks.map((c) => (
+                      <span
+                        key={c.name}
+                        title={c.value || c.note || ''}
+                        className={c.present
+                          ? 'rounded bg-emerald-500/10 px-1 text-emerald-700 dark:text-emerald-300'
+                          : 'rounded bg-red-500/10 px-1 text-red-600 dark:text-red-400'}
+                      >
+                        {c.present ? '✓' : '✗'} {c.name}{c.note ? ` — ${c.note}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {posture?.note && (
+                  <div className="px-2 pb-1 text-[10px] font-medium text-amber-700 dark:text-amber-300">{posture.note}</div>
+                )}
+                {doc.tls && tlsValidity(doc.tls) && (
+                  <div className="px-2 pb-1 text-[10px] text-zinc-500 dark:text-gray-500">
+                    cert {tlsValidity(doc.tls)}{doc.tls.sans && doc.tls.sans.length > 0 ? ` · ${doc.tls.sans.slice(0, 4).join(', ')}` : ''}
+                  </div>
+                )}
+                <table className="w-full table-fixed border-collapse text-left text-[11px]">
+                  <tbody>
+                    {headers.map(([name, value]) => (
+                      <tr key={name} className="border-t border-zinc-200/60 hover:bg-zinc-200/40 dark:border-gray-800/40 dark:hover:bg-gray-800/30">
+                        <td className="w-48 truncate px-2 py-0.5 align-top font-mono text-cyan-700 dark:text-cyan-200/90" title={name}>{name}</td>
+                        <td className="break-all px-2 py-0.5 align-top font-mono text-zinc-700 dark:text-gray-300">{value}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {tab === 'trackers' && (
+        <div className="flex-1 overflow-y-auto">
+          <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-zinc-200 px-2 py-1 text-[10px] text-zinc-500 dark:border-gray-800 dark:text-gray-500">
+            <span>{trackerAgg.thirdParty.length} third-party hosts</span>
+            <span>{trackerAgg.trackers.length} known tracker families</span>
+            <span>{trackerAgg.beacons} beacons</span>
+            <span>{trackerAgg.cookieFamilies.length} fingerprinted cookies</span>
+          </div>
+          <div className="px-2 pt-1 text-[10px] uppercase tracking-wide text-zinc-500 dark:text-gray-500">trackers</div>
+          {trackerAgg.trackers.length === 0 && <div className="px-2 py-1 text-[11px] text-zinc-500 dark:text-gray-500">No known tracker hosts captured.</div>}
+          {trackerAgg.trackers.map((r) => (
+            <div key={'tr-' + r.host} className="flex items-center gap-2 border-b border-zinc-200/60 px-2 py-0.5 text-[11px] dark:border-gray-800/40">
+              <span className="w-40 shrink-0 truncate text-amber-700 dark:text-amber-300" title={r.tracker}>{r.tracker}</span>
+              <span className="min-w-0 flex-1 truncate text-zinc-800 dark:text-gray-300" title={r.ips.join(', ')}>{r.host}</span>
+              <span className="w-10 shrink-0 text-right text-zinc-600 dark:text-gray-400">{r.requests}</span>
+              <span className="w-16 shrink-0 text-right text-zinc-500 dark:text-gray-500">{fmtSize(r.bytes)}</span>
+            </div>
+          ))}
+          <div className="px-2 pt-2 text-[10px] uppercase tracking-wide text-zinc-500 dark:text-gray-500">third-party hosts</div>
+          {trackerAgg.thirdParty.length === 0 && <div className="px-2 py-1 text-[11px] text-zinc-500 dark:text-gray-500">No third-party requests captured.</div>}
+          {trackerAgg.thirdParty.map((r) => (
+            <div key={'tp-' + r.host} className="flex items-center gap-2 border-b border-zinc-200/60 px-2 py-0.5 text-[11px] dark:border-gray-800/40">
+              <span className="min-w-0 flex-1 truncate text-zinc-800 dark:text-gray-300" title={r.ips.join(', ')}>{r.host}</span>
+              <span className="w-10 shrink-0 text-right text-zinc-600 dark:text-gray-400">{r.requests}</span>
+              <span className="w-16 shrink-0 text-right text-zinc-500 dark:text-gray-500">{fmtSize(r.bytes)}</span>
+            </div>
+          ))}
+          <div className="px-2 pt-2 text-[10px] uppercase tracking-wide text-zinc-500 dark:text-gray-500">cookie families</div>
+          {trackerAgg.cookieFamilies.length === 0 && <div className="px-2 py-1 text-[11px] text-zinc-500 dark:text-gray-500">No fingerprinted cookies captured.</div>}
+          {trackerAgg.cookieFamilies.map((c) => (
+            <div key={`${c.domain}\0${c.name}`} className="flex items-center gap-2 border-b border-zinc-200/60 px-2 py-0.5 text-[11px] dark:border-gray-800/40">
+              <span className="w-40 shrink-0 truncate text-amber-700 dark:text-amber-300">{c.fp}</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-zinc-700 dark:text-gray-300">{c.name}</span>
+              <span className="w-48 shrink-0 truncate text-right text-zinc-500 dark:text-gray-500">{cookieDomainLabel(c.domain)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {tab === 'recon' && (
+        <div className="flex-1 overflow-y-auto p-2 text-[11px]">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              value={reconHost}
+              onChange={(e) => setReconHost(e.target.value)}
+              placeholder={defaultHost || 'example.com'}
+              className="w-56 rounded border border-zinc-300 bg-white px-2 py-0.5 text-zinc-800 outline-none focus:border-cyan-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+            />
+            <button
+              onClick={() => void runRecon()}
+              disabled={!onIntel || !!intelDisabled || !!reconBusy}
+              className="rounded border border-zinc-300 px-2 py-0.5 text-cyan-600 hover:bg-zinc-200 disabled:opacity-40 dark:border-gray-700 dark:text-cyan-400 dark:hover:bg-gray-800"
+              title="Passive: IPs, PTR, ASN/org and CNAME via DNS"
+            >
+              {reconBusy === 'dns' ? '…' : 'DNS intel'}
+            </button>
+            <button
+              onClick={() => void runRecon(Array.from(reconChecks).join(','))}
+              disabled={!onIntel || !!intelDisabled || !!reconBusy || reconChecks.size === 0}
+              className="rounded border border-zinc-300 px-2 py-0.5 text-cyan-600 hover:bg-zinc-200 disabled:opacity-40 dark:border-gray-700 dark:text-cyan-400 dark:hover:bg-gray-800"
+              title="Run the selected probes once, from the sandbox"
+            >
+              {reconBusy === 'probe' ? '…' : 'Run probes'}
+            </button>
+            {reconBusy && <span className="text-zinc-500 dark:text-gray-500">working…</span>}
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+            {RECON_CHECKS.map(([id, label]) => (
+              <label key={id} className="flex cursor-pointer items-center gap-1 text-[10px] text-zinc-600 dark:text-gray-400">
+                <input
+                  type="checkbox"
+                  checked={reconChecks.has(id)}
+                  onChange={() => setReconChecks((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(id)) next.delete(id); else next.add(id);
+                    return next;
+                  })}
+                  className="accent-cyan-500"
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <div className="mt-1 text-[10px] text-zinc-400 dark:text-gray-600">
+            Probes are single requests made from the sandbox to that host — recon never sends the hostname to a provider.
+          </div>
+          {intelDisabled && (
+            <div className="mt-2 rounded bg-amber-500/10 px-2 py-1 text-amber-700 dark:text-amber-300">
+              Recon is disabled by the operator (ISOLA_INTEL_ENABLED=false).
+            </div>
+          )}
+          {reconError && (
+            <div className="mt-2 rounded bg-red-500/10 px-2 py-1 text-red-600 dark:text-red-400">{reconError}</div>
+          )}
+          {reconResult?.dns && Object.entries(reconResult.dns).map(([key, h]) => (
+            <div key={'dns-' + key} className="mt-2 rounded border border-zinc-200 p-2 dark:border-gray-800">
+              <div className="font-semibold text-zinc-800 dark:text-gray-200">{h.host || key}</div>
+              {h.resolve_error && <div className="text-red-600 dark:text-red-400">{h.resolve_error}</div>}
+              <div className="text-zinc-600 dark:text-gray-400">IPs: {h.ips && h.ips.length > 0 ? h.ips.join(', ') : '—'}</div>
+              {h.cname && <div className="text-zinc-600 dark:text-gray-400">CNAME: <span className="font-mono">{h.cname}</span></div>}
+              {h.private && <div className="text-amber-700 dark:text-amber-300">private address — ownership lookup skipped</div>}
+              {h.ptr && Object.entries(h.ptr).map(([ip, name]) => (
+                <div key={ip} className="text-zinc-600 dark:text-gray-400">PTR {ip} → <span className="font-mono">{name}</span></div>
+              ))}
+              {h.asn?.map((a) => (
+                <div key={a.ip + String(a.asn)} className="text-zinc-600 dark:text-gray-400">
+                  AS{a.asn || '?'}{a.org ? ` · ${a.org}` : ''}{a.country ? ` · ${a.country}` : ''}{a.prefix ? <span className="ml-1 font-mono text-zinc-500 dark:text-gray-500">{a.prefix}</span> : null}
+                </div>
+              ))}
+            </div>
+          ))}
+          {reconResult?.probes && Object.values(reconResult.probes).map((p) => (
+            <details key={'probe-' + p.check} className="mt-1 rounded border border-zinc-200 dark:border-gray-800" open={p.status === 'ok' ? undefined : true}>
+              <summary className="flex cursor-pointer flex-wrap items-center gap-2 px-2 py-1">
+                <span className="font-semibold text-zinc-800 dark:text-gray-200">{p.check}</span>
+                <span className={probeStatusClass(p.status)}>{p.status}{p.http_status ? ` ${p.http_status}` : ''}</span>
+                {p.cached && <span className="text-[10px] text-zinc-400 dark:text-gray-600">cached</span>}
+                {p.error && <span className="min-w-0 flex-1 truncate text-red-600 dark:text-red-400">{p.error}</span>}
+              </summary>
+              <pre className="max-h-64 overflow-auto border-t border-zinc-200 bg-zinc-50 px-2 py-1 font-mono text-[10px] text-zinc-700 dark:border-gray-800 dark:bg-gray-900/60 dark:text-gray-300">{formatProbeData(p.data)}</pre>
+            </details>
+          ))}
+        </div>
       )}
       {tab === 'console' && (
         <div className="flex-1 overflow-y-auto p-1">

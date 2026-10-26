@@ -53,6 +53,11 @@ type WarmPool struct {
 	// window cannot be changed after launch, and a claimed container must
 	// match a cold one.
 	networkLogMaxEntries int
+	// intelEnabled is baked in for the same reason: a claimed container must
+	// carry the same INTEL_PROBES as the session that would have cold-started.
+	intelEnabled bool
+	// intelCAPEM is baked in so a claimed container trusts the same CAs.
+	intelCAPEM string
 
 	// injectable for tests
 	provisioner func(ctx context.Context, p WarmPoolParams) (*SessionInfo, error)
@@ -176,6 +181,8 @@ func NewWarmPool(orch *Orchestrator, cfg *config.Config) *WarmPool {
 		dnsServers:           cfg.DNSServers,
 		dnsMode:              cfg.DNSMode,
 		networkLogMaxEntries: cfg.NetworkLogMaxEntries,
+		intelEnabled:         cfg.IntelEnabled,
+		intelCAPEM:           cfg.IntelCAPEM,
 		nower:                time.Now,
 	}
 	p.provisioner = p.provisionWarm
@@ -737,6 +744,8 @@ func (p *WarmPool) provisionWarm(ctx context.Context, params WarmPoolParams) (*S
 		// this for the transport); baking it in keeps claims identical.
 		NetworkMonitor:       true,
 		NetworkLogMaxEntries: p.networkLogMaxEntries,
+		IntelEnabled:         p.intelEnabled,
+		IntelCAPEM:           p.intelCAPEM,
 		DockerImage:          params.Image,
 		DNSMode:              p.dnsMode,
 		DNSServers:           p.dnsServers,

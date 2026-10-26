@@ -47,6 +47,8 @@ services:
       - ISOLA_BROWSER_IMAGE=${ISOLA_BROWSER_IMAGE:-}
       - ISOLA_MAX_SESSIONS=${ISOLA_MAX_SESSIONS:-}
       - ISOLA_NETWORK_LOG_MAX_ENTRIES=${ISOLA_NETWORK_LOG_MAX_ENTRIES:-}
+      - ISOLA_INTEL_ENABLED=${ISOLA_INTEL_ENABLED:-true}
+      - ISOLA_INTEL_CA_FILE=${ISOLA_INTEL_CA_FILE:-}
       - SESSION_DEFAULT_MIN=${SESSION_DEFAULT_MIN:-10}
       - SESSION_MAX_MIN=${SESSION_MAX_MIN:-30}
       - SESSION_EXTEND_MIN=${SESSION_EXTEND_MIN:-5}
@@ -68,6 +70,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./backend/config.yaml:/config.yaml:ro
       - ./browsers/isola-base/seccomp.json:/etc/isola/seccomp.json:ro
+      # Extra root CAs for recon (TLS-inspecting networks). Put the PEM in
+      # ./certs/ and point ISOLA_INTEL_CA_FILE at /etc/isola/certs/<name>.pem.
+      - ./certs:/etc/isola/certs:ro
       - isola-data:/var/lib/isola
     depends_on:
       browser-node-electron:

@@ -126,6 +126,18 @@ mcp:
   enabled: false
   token: ""
 
+# On-demand recon (/api/sessions/{id}/intel and the MCP host_intel/probe_host
+# tools). When disabled the endpoint answers 403 and the viewer hides the recon
+# actions. Nothing runs until a caller names a host, and the probes fetch only
+# that host (plus the resolver and the Team Cymru ASN TXT). Disable it to
+# guarantee that a session only renders.
+# Env: ISOLA_INTEL_ENABLED
+intel:
+  enabled: true
+  # PEM bundle with extra root CAs for recon (TLS-inspecting networks such as a
+  # corporate proxy). Unreadable path fails startup. Env: ISOLA_INTEL_CA_FILE
+  ca_file: ""
+
 logging:
   level: "info"        # debug | info | warn | error
 

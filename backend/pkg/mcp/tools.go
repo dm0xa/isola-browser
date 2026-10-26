@@ -290,6 +290,13 @@ func (s *Service) toolInspectSession(ctx context.Context, _ *mcp.CallToolRequest
 		return nil, nil, err
 	}
 	out := buildInspectSummary(snapBody, netBody)
+	// One-line intel summary: best-effort, and never allowed to fail the call.
+	if postureBody, _, perr := s.streamerGET(ctx, p.SessionID, "/posture?headers=0"); perr == nil {
+		mergePostureSummary(out, postureBody)
+	}
+	if trackerBody, _, terr := s.streamerGET(ctx, p.SessionID, "/trackers?limit=1"); terr == nil {
+		mergeTrackerSummary(out, trackerBody)
+	}
 	b, _ := json.Marshal(out)
 	return textResult(string(b))
 }
@@ -568,8 +575,32 @@ func registerTools(server *mcp.Server, svc *Service) {
 	}, svc.toolType)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_network",
-		Description: "Network log (optional type, host_contains, limit filters). Full streamer window when unfiltered.",
+		Description: "Network log (optional type, host_contains, limit filters). Entries carry response headers, TLS, redirect chains, first/third-party flags and tracker labels; pass a limit to trim the list without losing those fields.",
 	}, svc.toolGetNetwork)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_headers",
+		Description: "Response headers (and TLS certificate summary) captured per request, documents only by default. Filters: host_contains, url_contains, type, limit, include_tls. Use get_posture for the security-header verdict.",
+	}, svc.toolGetHeaders)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_posture",
+		Description: "Security-header posture per document: HSTS, CSP, frame protection, nosniff, Referrer-Policy, Permissions-Policy, COOP/COEP, with a 0-7 score and A-F grade. This is the 'site headers' audit.",
+	}, svc.toolGetPosture)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_redirects",
+		Description: "Redirect chains with each hop's status code, for every request that had one (documents only by default). Filters: host_contains, limit.",
+	}, svc.toolGetRedirects)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_trackers",
+		Description: "Third-party/tracker inventory for the session: per-host request counts and bytes, known tracker families, beacon count and cookie-family fingerprints. Filters: third_party_only, include_beacons, include_cookies, limit.",
+	}, svc.toolGetTrackers)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "host_intel",
+		Description: "DNS intelligence for a host: resolved IPs, PTR, ASN/org/country (Team Cymru over DNS) and the CNAME chain. Omit host to use the most recently captured document host. Passive: no requests to the target.",
+	}, svc.toolHostIntel)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "probe_host",
+		Description: "Active recon from the sandbox, one bounded request per check: robots, securitytxt, sitemap, wellknown, favicon (mmh3 + sha1). Defaults to robots,securitytxt,sitemap. Every check fetches the host itself; recon never contacts a provider. Omit host to use the document host.",
+	}, svc.toolProbeHost)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "resource_graph",
 		Description: "Render the captured network as a resource-graph PNG (hosts → resource types → files) and return it as an image block. theme=dark|light, direction=horizontal|vertical, expand=origin|all|collapsed, types=<comma list>, failed_only, scale=1-4.",

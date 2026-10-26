@@ -6,6 +6,49 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Security
+
+- The control plane now runs with the same hardening as the sandbox: read-only
+  root filesystem, dropped capabilities, no privilege escalation and
+  configurable resource limits.
+- API request bodies are capped at 64 KiB; oversized requests are rejected.
+- Seccomp remains opt-in, and the documentation now says so.
+
+### Added
+
+- **Analysis panel.** New Headers and Trackers tabs show response headers, the
+  TLS certificate summary, a graded security-posture audit, and the page's
+  tracker, beacon and cookie inventory.
+- **Recon.** An on-demand Recon tab and API endpoint provide DNS/ASN enrichment
+  and bounded probes of the target host. Nothing runs until a host is named, and
+  no third-party service is contacted.
+- **Redirect chains** are preserved with each hop's status code.
+- **MCP.** Six new tools expose headers, posture, redirects, trackers, host
+  intelligence and probing; network entries now carry headers, TLS and tracker
+  labels.
+- **[docs/third-parties.md](docs/third-parties.md)** documents what leaves the
+  sandbox.
+
+### Changed
+
+- Recon follows the Tor circuit in Tor sessions; ASN lookups are reported as
+  unavailable there.
+- Posture accounts for transport trust: a document served over an untrusted or
+  plaintext connection is labelled and its grade capped.
+- Session inspection reports the posture grade and tracker counts.
+- The viewer hides recon actions when an operator disables the feature.
+- The in-viewer network panel is now opaque, so request rows stay legible.
+
+### Fixed
+
+- Switching a page's country no longer leaves stale or blank regions in the
+  viewport.
+- Emoji flags render in the sandbox.
+- The request graph keeps the opened page in the leftmost column.
+- Filtering the network log no longer drops fields from the returned entries.
+- Recon can trust an operator-supplied CA bundle on TLS-inspecting networks;
+  certificate verification stays enabled.
+
 ## [1.3.0] - 2026-10-22
 
 ### Added
@@ -28,11 +71,6 @@ publishes the section matching the tag.
 
 ### Fixed
 
-- The request graph now keeps the page you opened in the leftmost column. A
-  script from a third party was inferred as the page's trigger, closing a loop
-  that parked that host at depth 0 and pushed the origin to the far right;
-  trigger cycles are now condensed into one column instead of being mislaid, so
-  the panel and `graph.png` both read `[request] → origin → third parties`.
 - MCP `create_session` no longer fails with `401 unauthorized` when
   `ISOLA_API_TOKEN` is also configured.
 - Deleting a session while its container was still being created no longer

@@ -51,7 +51,7 @@ The whole design follows from one constraint: the browser you are looking at sho
 - **Disposable containers** — Wiped on close. Seccomp, dropped capabilities, read-only rootfs.
 - **Electron sandbox** — Offscreen Chromium in Docker (`isola-browser:electron`).
 - **Isola transport** — H.264 Annex-B over WebSocket; JSON input to CDP. No VNC, no WebRTC. See [docs/transport.md](./docs/transport.md).
-- **Traffic panel** — Per-tab requests, request graph, domains, console and cookies, captured over CDP and streamed beside the video. See [Traffic panel](#traffic-panel).
+- **Traffic panel** — Per-tab requests, request graph, domains, response headers + security posture, tracker inventory and on-demand recon, captured over CDP and streamed beside the video. See [Traffic panel](#traffic-panel).
 - **One TCP port** — UI, API, and WebSocket relay share a single port (default `8080`), so it drops cleanly behind a reverse proxy with one hostname, one TLS certificate, and one firewall rule — no extra media or VNC ports to open.
 - **Optional Tor** — SOCKS for the session.
 - **Share links** — View-only tokens.
@@ -202,6 +202,7 @@ Defense in depth so a hostile page stays in the box:
 - **Non-root** — Entrypoint sets the firewall as root, then `gosu isolauser`. `no-new-privileges`.
 - **CDP** — Chromium debug port is `127.0.0.1` inside the container.
 - **Seccomp + limits** — Memory, CPU, PIDs.
+- **Third parties** — nothing leaves the sandbox except to your resolver and, for ASN, one DNS TXT. Recon has no provider lookups; the details (and the Tor behaviour) are in [docs/third-parties.md](./docs/third-parties.md).
 
 Full list: [docs/security.md](./docs/security.md).
 
@@ -234,10 +235,13 @@ Isola streams CDP traffic to the viewer alongside the video, so a page can be in
 | **Network** | Every request — method, status, resource type, size, source IP — filterable by browser tab, text, method, status family and resource type. |
 | **Graph** | The request chain (initiator → host → resource) as a diagram, colour-coded by resource class with per-class facets. |
 | **Domains** | One row per host: request count, bytes and the IPs it resolved to, expandable to that host's most recent requests. |
+| **Headers** | Document response headers, the TLS certificate summary, and a security-header posture grade (HSTS, CSP, frame protection, nosniff, Referrer-Policy, Permissions-Policy, COOP/COEP). |
+| **Trackers** | Third-party hosts, known tracker families, beacons and cookie-family fingerprints — who the page talks to, not just what it loaded. |
+| **Recon** | On-demand intelligence for a host: passive DNS/PTR/ASN/CNAME and bounded active probes (robots.txt, security.txt, sitemap, favicon hash). Every probe fetches that host; no provider is contacted. |
 | **Console** | Console output for the selected browser tab, with errors and warnings highlighted. |
 | **Cookies** | Name, value, domain, path, expiry, SameSite and flags. |
 
-Requests are flagged when they are worth a second look — an IP-literal host, plain `http`, a risky TLD, a random-looking hostname, an odd port — and the `flagged` filter narrows the list to just those; a domain row inherits the flags of its worst request.
+Requests are flagged when they are worth a second look — an IP-literal host, plain `http`, a risky TLD, a random-looking hostname, an odd port — and the `flagged` filter narrows the list to just those; a domain row inherits the flags of its worst request. Entries also carry redirect chains with each hop's status code, time-to-first-byte, cache/service-worker badges, and first-party/third-party + tracker labels. Recon only runs when you press its buttons: nothing leaves the sandbox on navigation.
 
 | Requests | Request graph |
 | :--- | :--- |
@@ -287,7 +291,7 @@ Raw CDP / WebDriver BiDi is not exposed. Input messages: [docs/automation.md](./
 
 ## MCP
 
-Off unless `ISOLA_MCP_ENABLED=true` and at least one `ISOLA_MCP_TOKEN` is ≥ 32 characters (startup fails if MCP is on without a usable token). Several tokens may be listed. Streamable HTTP at `POST /mcp`. Tools: `create_session`, `navigate`, `inspect_session`, `snapshot`, `screenshot`, `click`, `type`, `get_network`, `get_links`, `close_session`.
+Off unless `ISOLA_MCP_ENABLED=true` and at least one `ISOLA_MCP_TOKEN` is ≥ 32 characters (startup fails if MCP is on without a usable token). Several tokens may be listed. Streamable HTTP at `POST /mcp`. Tools: `create_session`, `navigate`, `inspect_session`, `snapshot`, `screenshot`, `click`, `type`, `get_network`, `get_headers`, `get_posture`, `get_redirects`, `get_trackers`, `host_intel`, `probe_host`, `resource_graph`, `get_links`, `close_session`. Every analysis surface the panel shows is also a tool, so a script sees the same numbers as the viewer.
 
 Any MCP client works: point it at `POST /mcp` with `Authorization: Bearer <token>`.
 

@@ -113,14 +113,21 @@ func TestTabForTarget(t *testing.T) {
 func resetNetCapture() func() {
 	netMu.Lock()
 	prevRequests, prevOrder, prevOrdered, prevSeq := netRequests, netOrder, netOrdered, netSeenSeq
+	prevOrigins, prevHeadered := netOriginByTab, netHeadered
+	prevFrames := netMainFrameByTarget
 	netRequests = map[string]*netRequest{}
 	netOrder = nil
 	netOrdered = nil
 	netSeenSeq = 0
+	netOriginByTab = map[int]string{}
+	netHeadered = 0
+	netMainFrameByTarget = map[string]string{}
 	netMu.Unlock()
 	return func() {
 		netMu.Lock()
 		netRequests, netOrder, netOrdered, netSeenSeq = prevRequests, prevOrder, prevOrdered, prevSeq
+		netOriginByTab, netHeadered = prevOrigins, prevHeadered
+		netMainFrameByTarget = prevFrames
 		netMu.Unlock()
 	}
 }
