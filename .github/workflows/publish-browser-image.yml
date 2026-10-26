@@ -22,7 +22,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # arm64 is built under emulation, so the Electron npm ci inside the
       # node-builder stage runs for a foreign arch. That is the one part of this
