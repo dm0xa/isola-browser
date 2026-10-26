@@ -72,9 +72,11 @@ updates:
       prefix: "ci"
 
   # ── Base images ──
-  # Tag moves inside a major (node 22.x, golang 1.26.x) are routine; a new
-  # runtime major (Node 24, Go 1.28) is a deliberate migration, so keep it out
-  # of the automated stream. Security patches still flow.
+  # Only patch releases flow on their own (1.26.9 → 1.26.10, 3.20.2 → 3.20.3).
+  # A new minor line is a migration, not a bump — and semver counts it as
+  # "minor": the major of 1.26.10 is 1, so golang 1.26 → 1.27 and alpine
+  # 3.20 → 3.24 are semver-minor. Ignoring only semver-major let those through.
+  # Security patches still flow.
   - package-ecosystem: docker
     directory: /backend
     schedule:
@@ -84,11 +86,11 @@ updates:
       prefix: "chore(deps)"
     ignore:
       - dependency-name: "node"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "golang"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "alpine"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /browsers/browser-node-electron
@@ -99,8 +101,8 @@ updates:
       prefix: "chore(deps)"
     ignore:
       - dependency-name: "node"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "golang"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "debian"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
