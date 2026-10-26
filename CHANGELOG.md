@@ -6,20 +6,27 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-10-26
+
+### Security
+
+- Dependency refresh: Electron 44.9.1, `follow-redirects` 1.16.1,
+  `react-router-dom` 6.30.6 and the frontend dev chain. Every high-severity
+  advisory is cleared.
+
 ### Changed
 
-- Automatic renderer recovery is now budgeted (one per URL, three per ten
-  minutes); manual recover is unaffected.
-- Inactive tabs, and sessions with no viewer attached, composite at 1 fps
-  instead of the capture rate.
-- Page loads read the surface back twice instead of five times.
+- Automatic renderer recovery shares one budget (one per URL, three per ten
+  minutes); manual recover is unaffected. Inactive tabs and viewer-less
+  sessions composite at 1 fps, and page loads read the surface back twice
+  instead of five times.
 
 ### Fixed
 
 - The installer fetches the release-matched sandbox image even when a local
-  `isola-browser:electron` tag exists; it previously kept a leftover image that
-  could mismatch the binary. A detached install no longer prints a `/dev/tty`
-  error before taking its prompt defaults.
+  `isola-browser:electron` tag exists; a leftover image could mismatch the
+  binary. A detached install no longer prints a `/dev/tty` error before taking
+  its prompt defaults.
 
 ## [1.4.0] - 2026-10-26
 
@@ -303,7 +310,8 @@ publishes the section matching the tag.
 Initial release: a Go control plane that boots a disposable Docker sandbox
 running offscreen Chromium.
 
-[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/dm0xa/isola-browser/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/dm0xa/isola-browser/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/dm0xa/isola-browser/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/dm0xa/isola-browser/compare/v1.1.1...v1.2.0
