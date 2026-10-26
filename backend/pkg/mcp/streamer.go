@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -88,9 +89,22 @@ func (s *Service) streamerGETLimited(ctx context.Context, sessionID, path string
 }
 
 func (s *Service) streamerPOST(ctx context.Context, sessionID, path string, payload any) ([]byte, int, error) {
+	return s.streamerPOSTLimited(ctx, sessionID, path, payload, defaultStreamerTimeout)
+}
+
+// streamerPOSTLimited is streamerPOST with an explicit deadline. Without one a
+// wedged renderer pins the tool call until the client gives up: the caller's
+// context carries no deadline of its own.
+func (s *Service) streamerPOSTLimited(ctx context.Context, sessionID, path string, payload any, timeout time.Duration) ([]byte, int, error) {
 	addr, err := s.containerAddr(ctx, sessionID)
 	if err != nil {
 		return nil, 0, err
+	}
+	reqCtx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		reqCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 	var bodyReader io.Reader
 	if payload != nil {
@@ -100,7 +114,7 @@ func (s *Service) streamerPOST(ctx context.Context, sessionID, path string, payl
 		}
 		bodyReader = strings.NewReader(string(b))
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+path, bodyReader)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "http://"+addr+path, bodyReader)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -134,7 +148,10 @@ func (s *Service) navigateStreamer(ctx context.Context, sessionID, targetURL str
 			return nil
 		}
 		lastErr = err
-		if status == http.StatusServiceUnavailable {
+		// 503 means the runner ctrl socket is not connected yet; a per-attempt
+		// timeout means the renderer did not answer in time. Both are worth
+		// retrying while the overall deadline holds.
+		if status == http.StatusServiceUnavailable || retryableTransportError(err) {
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
@@ -146,13 +163,37 @@ func (s *Service) navigateStreamer(ctx context.Context, sessionID, targetURL str
 	return fmt.Errorf("navigate: timed out waiting for runner ctrl socket")
 }
 
+// navigateAttemptTimeout bounds one POST /navigate attempt so the retry loop can
+// make progress instead of blocking on a single hung request.
+const defaultNavigateAttemptTimeout = 5 * time.Second
+
+// navigateAttempt resolves the per-attempt navigate budget.
+func (s *Service) navigateAttemptTimeout() time.Duration {
+	if s.navigateAttempt > 0 {
+		return s.navigateAttempt
+	}
+	return defaultNavigateAttemptTimeout
+}
+
+// retryableTransportError reports whether a failed attempt is worth repeating
+// within the navigate deadline.
+func retryableTransportError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
 func (s *Service) navigateStreamerOnce(ctx context.Context, sessionID, targetURL string) (int, error) {
 	addr, err := s.containerAddr(ctx, sessionID)
 	if err != nil {
 		return 0, err
 	}
+	reqCtx, cancel := context.WithTimeout(ctx, s.navigateAttemptTimeout())
+	defer cancel()
 	u := fmt.Sprintf("http://%s/navigate?url=%s", addr, url.QueryEscape(targetURL))
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, u, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -218,7 +259,11 @@ func (s *Service) waitForDocumentNetwork(ctx context.Context, sessionID string, 
 	return false
 }
 
-func (s *Service) sessionInspectMap(ctx context.Context, sessionID string) (map[string]any, error) {
+// inspectSummary builds the compact page summary every entry point returns.
+// create_session and navigate take the shallow form (snapshot + network);
+// inspect_session asks for the deep form so the shape never depends on how the
+// agent arrived here.
+func (s *Service) inspectSummary(ctx context.Context, sessionID string, deep bool) (map[string]any, error) {
 	snapBody, _, err := s.streamerGET(ctx, sessionID, "/snapshot")
 	if err != nil {
 		return nil, err
@@ -227,7 +272,19 @@ func (s *Service) sessionInspectMap(ctx context.Context, sessionID string) (map[
 	if err != nil {
 		return nil, err
 	}
-	return buildInspectSummary(snapBody, netBody), nil
+	summary := buildInspectSummary(snapBody, netBody)
+	if !deep {
+		return summary, nil
+	}
+	// Both extras are best-effort: a streamer image without the analysis
+	// endpoints must not fail the summary.
+	if postureBody, _, perr := s.streamerGET(ctx, sessionID, "/posture?headers=0"); perr == nil {
+		mergePostureSummary(summary, postureBody)
+	}
+	if trackerBody, _, terr := s.streamerGET(ctx, sessionID, "/trackers?limit=1"); terr == nil {
+		mergeTrackerSummary(summary, trackerBody)
+	}
+	return summary, nil
 }
 
 const waitRunningTimeout = 90 * time.Second

@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/rs/zerolog/log"
 
 	"github.com/dm0xa/isola-browser/backend/pkg/api"
 	"github.com/dm0xa/isola-browser/backend/pkg/graphopts"
@@ -30,6 +32,14 @@ type Service struct {
 	// defaults.
 	graphTimeout  time.Duration
 	graphMaxBytes int64
+
+	// networkMaxBytes caps the /network payload get_network reads, overridable in
+	// tests. Zero means maxGraphBytes.
+	networkMaxBytes int64
+
+	// navigateAttempt bounds one POST /navigate attempt, overridable in tests.
+	// Zero means defaultNavigateAttemptTimeout.
+	navigateAttempt time.Duration
 }
 
 // graphLimits resolves the resource-graph deadline and payload cap.
@@ -42,6 +52,14 @@ func (s *Service) graphLimits() (time.Duration, int64) {
 		maxBytes = maxGraphBytes
 	}
 	return timeout, maxBytes
+}
+
+// networkLimit resolves the /network payload cap.
+func (s *Service) networkLimit() int64 {
+	if s.networkMaxBytes > 0 {
+		return s.networkMaxBytes
+	}
+	return maxGraphBytes
 }
 
 // byteLimitLabel renders a byte limit for an error message.
@@ -93,7 +111,8 @@ type navigateParams struct {
 type getNetworkParams struct {
 	SessionID    string `json:"session_id"`
 	Type         string `json:"type,omitempty" jsonschema:"Filter by resource type, e.g. Document or Script"`
-	HostContains string `json:"host_contains,omitempty" jsonschema:"Filter URLs whose host contains this substring"`
+	HostContains string `json:"host_contains,omitempty" jsonschema:"Only entries whose hostname contains this substring (a path or query does not match here; use url_contains)"`
+	URLContains  string `json:"url_contains,omitempty" jsonschema:"Only entries whose full URL contains this substring"`
 	Limit        int    `json:"limit,omitempty" jsonschema:"Max entries to return after filtering"`
 }
 
@@ -136,6 +155,11 @@ type resourceGraphParams struct {
 // docs/automation.md: MCP create_session is not gated by ISOLA_API_TOKEN).
 func newCreateSessionRequest(ctx context.Context, body []byte) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions", bytes.NewReader(body))
+	// Keep the caller's address so the API handler's rate-limit guard sees the
+	// real client instead of httptest's placeholder.
+	if addr := clientAddrFromContext(ctx); addr != "" {
+		req.RemoteAddr = addr
+	}
 	return req.WithContext(api.WithInternalSessionCreate(ctx))
 }
 
@@ -154,6 +178,15 @@ func (s *Service) toolCreateSession(ctx context.Context, _ *mcp.CallToolRequest,
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		return nil, nil, err
 	}
+
+	created := false
+	defer func() {
+		if created {
+			return
+		}
+		s.abandonSession(ctx, resp.ID)
+	}()
+
 	if err := s.waitSessionRunning(ctx, resp.ID); err != nil {
 		return nil, nil, err
 	}
@@ -195,11 +228,12 @@ func (s *Service) toolCreateSession(ctx context.Context, _ *mcp.CallToolRequest,
 		result["tor_country"] = torCountry
 	}
 	if automationReady {
-		if inspect, err := s.sessionInspectMap(ctx, resp.ID); err == nil {
+		if inspect, err := s.inspectSummary(ctx, resp.ID, false); err == nil {
 			result["inspect"] = inspect
 		}
 	}
 	out, _ := json.Marshal(result)
+	created = true
 	return textResult(string(out))
 }
 
@@ -220,7 +254,7 @@ func (s *Service) toolNavigate(ctx context.Context, _ *mcp.CallToolRequest, p *n
 	result := map[string]any{"status": "ok", "url": strings.TrimSpace(p.URL)}
 	if waitDoc {
 		result["document_seen"] = s.waitForDocumentNetwork(ctx, p.SessionID, 25*time.Second)
-		if inspect, err := s.sessionInspectMap(ctx, p.SessionID); err == nil {
+		if inspect, err := s.inspectSummary(ctx, p.SessionID, false); err == nil {
 			result["inspect"] = inspect
 		}
 	}
@@ -281,21 +315,9 @@ func (s *Service) toolInspectSession(ctx context.Context, _ *mcp.CallToolRequest
 	if err := s.ensureSession(ctx, p.SessionID); err != nil {
 		return nil, nil, err
 	}
-	snapBody, _, err := s.streamerGET(ctx, p.SessionID, "/snapshot")
+	out, err := s.inspectSummary(ctx, p.SessionID, true)
 	if err != nil {
 		return nil, nil, err
-	}
-	netBody, _, err := s.streamerGET(ctx, p.SessionID, "/network")
-	if err != nil {
-		return nil, nil, err
-	}
-	out := buildInspectSummary(snapBody, netBody)
-	// One-line intel summary: best-effort, and never allowed to fail the call.
-	if postureBody, _, perr := s.streamerGET(ctx, p.SessionID, "/posture?headers=0"); perr == nil {
-		mergePostureSummary(out, postureBody)
-	}
-	if trackerBody, _, terr := s.streamerGET(ctx, p.SessionID, "/trackers?limit=1"); terr == nil {
-		mergeTrackerSummary(out, trackerBody)
 	}
 	b, _ := json.Marshal(out)
 	return textResult(string(b))
@@ -355,6 +377,16 @@ func buildInspectSummary(snapBody, netBody []byte) map[string]any {
 	return summary
 }
 
+// screenshotResponse is the streamer's /screenshot payload: the encoded image
+// plus the dimensions a client without image support can quote.
+type screenshotResponse struct {
+	Format     string `json:"format"`
+	MIME       string `json:"mime"`
+	Width      int    `json:"width"`
+	Height     int    `json:"height"`
+	DataBase64 string `json:"data_base64"`
+}
+
 func (s *Service) toolScreenshot(ctx context.Context, _ *mcp.CallToolRequest, p *screenshotParams) (*mcp.CallToolResult, any, error) {
 	if p == nil || p.SessionID == "" {
 		return nil, nil, fmt.Errorf("session_id is required")
@@ -378,7 +410,50 @@ func (s *Service) toolScreenshot(ctx context.Context, _ *mcp.CallToolRequest, p 
 	if err != nil {
 		return nil, nil, err
 	}
-	return textResult(string(body))
+
+	var shot screenshotResponse
+	if err := json.Unmarshal(body, &shot); err != nil {
+		return nil, nil, fmt.Errorf("screenshot: unexpected streamer payload: %w", err)
+	}
+	if shot.DataBase64 == "" {
+		return nil, nil, fmt.Errorf("screenshot: streamer returned no image data")
+	}
+	data, err := base64.StdEncoding.DecodeString(shot.DataBase64)
+	if err != nil {
+		return nil, nil, fmt.Errorf("screenshot: decode image: %w", err)
+	}
+	mime := strings.TrimSpace(shot.MIME)
+	if mime == "" {
+		mime = "image/png"
+		if strings.EqualFold(strings.TrimSpace(shot.Format), "jpeg") {
+			mime = "image/jpeg"
+		}
+	}
+	fmtName := strings.TrimSpace(shot.Format)
+	if fmtName == "" {
+		fmtName = "png"
+	}
+
+	// Same two-block shape as resource_graph: the image travels as an image
+	// block a client can render, and the text block carries the metadata a
+	// client without image support can quote. base64 is not duplicated into the
+	// text block.
+	meta, err := json.Marshal(map[string]any{
+		"format": fmtName,
+		"mime":   mime,
+		"width":  shot.Width,
+		"height": shot.Height,
+		"bytes":  len(data),
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: string(meta)},
+			&mcp.ImageContent{Data: data, MIMEType: mime},
+		},
+	}, nil, nil
 }
 
 const (
@@ -467,17 +542,31 @@ func (s *Service) toolGetNetwork(ctx context.Context, _ *mcp.CallToolRequest, p 
 	if err := s.ensureSession(ctx, p.SessionID); err != nil {
 		return nil, nil, err
 	}
-	body, _, err := s.streamerGET(ctx, p.SessionID, "/network")
+	maxBytes := s.networkLimit()
+	body, _, err := s.streamerGETLimited(ctx, p.SessionID, "/network", defaultStreamerTimeout, maxBytes)
+	if err != nil {
+		if errors.Is(err, ErrResponseTooLarge) {
+			return nil, nil, fmt.Errorf("network log exceeds the %s limit; retry with limit=200, or add a type/host_contains/url_contains filter", byteLimitLabel(maxBytes))
+		}
+		return nil, nil, err
+	}
+	if p.Type == "" && p.HostContains == "" && p.URLContains == "" && p.Limit <= 0 {
+		return textResult(string(body))
+	}
+
+	typ := strings.TrimSpace(p.Type)
+	hostNeedle := needle(p.HostContains)
+	urlNeedle := needle(p.URLContains)
+	out, err := filterEntries(body, p.Limit, func(meta entryMeta, _ map[string]json.RawMessage) bool {
+		if typ != "" && !strings.EqualFold(meta.Type, typ) {
+			return false
+		}
+		return matchesHost(meta, hostNeedle) && matchesURL(meta, urlNeedle)
+	})
 	if err != nil {
 		return nil, nil, err
 	}
-	if p.Type != "" || p.HostContains != "" || p.Limit > 0 {
-		body, err = filterNetworkBody(body, p.Type, p.HostContains, p.Limit)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	return textResult(string(body))
+	return textResult(string(out))
 }
 
 func (s *Service) toolGetLinks(ctx context.Context, _ *mcp.CallToolRequest, p *getLinksParams) (*mcp.CallToolResult, any, error) {
@@ -512,21 +601,42 @@ func (s *Service) toolCloseSession(ctx context.Context, _ *mcp.CallToolRequest, 
 	if p == nil || p.SessionID == "" {
 		return nil, nil, fmt.Errorf("session_id is required")
 	}
-	token, err := s.deps.Cache.Get(ctx, controlTokenKey(p.SessionID))
+	if err := s.terminateSession(ctx, p.SessionID); err != nil {
+		return nil, nil, err
+	}
+	return textResult("terminated")
+}
+
+// abandonSession tears down a session the caller never received an id for — so
+// nothing else can close it. It detaches from the caller's context, which may be
+// exactly what failed, and never masks the original error.
+func (s *Service) abandonSession(ctx context.Context, sessionID string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	if err := s.terminateSession(cleanupCtx, sessionID); err != nil {
+		log.Error().Err(err).Str("session_id", sessionID).Msg("mcp: abandoned session not terminated")
+	}
+}
+
+// terminateSession deletes a session through the API handler so the owner's
+// DELETE and the MCP path run the same finalize (container stop, cache cleanup,
+// hooks).
+func (s *Service) terminateSession(ctx context.Context, sessionID string) error {
+	token, err := s.deps.Cache.Get(ctx, controlTokenKey(sessionID))
 	if err != nil || token == "" {
-		return nil, nil, fmt.Errorf("session control token not found")
+		return fmt.Errorf("session control token not found")
 	}
 	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("id", p.SessionID)
-	req := httptest.NewRequest(http.MethodDelete, "/api/sessions/"+p.SessionID, nil)
+	rctx.URLParams.Add("id", sessionID)
+	req := httptest.NewRequest(http.MethodDelete, "/api/sessions/"+sessionID, nil)
 	req.Header.Set("X-Session-Token", token)
 	req = req.WithContext(context.WithValue(ctx, chi.RouteCtxKey, rctx))
 	w := httptest.NewRecorder()
 	s.deps.API.DeleteSession(w, req)
 	if w.Code != http.StatusOK {
-		return nil, nil, fmt.Errorf("close session failed (%d): %s", w.Code, strings.TrimSpace(w.Body.String()))
+		return fmt.Errorf("close session failed (%d): %s", w.Code, strings.TrimSpace(w.Body.String()))
 	}
-	return textResult("terminated")
+	return nil
 }
 
 func (s *Service) ensureSession(ctx context.Context, sessionID string) error {

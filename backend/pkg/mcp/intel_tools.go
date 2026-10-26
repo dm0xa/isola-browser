@@ -16,16 +16,6 @@ import (
 // call the streamer and shape the reply for an agent. Every new OSINT surface
 // must land here as a named tool — a panel-only feature is a bug.
 
-// headerEntryMeta is the subset used for filtering. The full entry is passed
-// through verbatim as json.RawMessage so numbers and nested objects are never
-// re-encoded.
-type headerEntryMeta struct {
-	URL    string `json:"url"`
-	Method string `json:"method"`
-	Status int    `json:"status"`
-	Type   string `json:"type"`
-}
-
 type getHeadersParams struct {
 	SessionID     string `json:"session_id"`
 	HostContains  string `json:"host_contains,omitempty" jsonschema:"Only entries whose host contains this substring"`
@@ -44,6 +34,7 @@ type getPostureParams struct {
 type getRedirectsParams struct {
 	SessionID     string `json:"session_id"`
 	HostContains  string `json:"host_contains,omitempty" jsonschema:"Only chains whose host contains this substring"`
+	URLContains   string `json:"url_contains,omitempty" jsonschema:"Only chains whose URL contains this substring"`
 	DocumentsOnly *bool  `json:"documents_only,omitempty" jsonschema:"Only document requests (default true)"`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max chains (default 20)"`
 }
@@ -87,11 +78,11 @@ func (s *Service) toolGetHeaders(ctx context.Context, _ *mcp.CallToolRequest, p 
 	}
 	documentsOnly := p.DocumentsOnly == nil || *p.DocumentsOnly
 	includeTLS := p.IncludeTLS == nil || *p.IncludeTLS
-	hostNeedle := strings.ToLower(strings.TrimSpace(p.HostContains))
-	urlNeedle := strings.ToLower(strings.TrimSpace(p.URLContains))
+	hostNeedle := needle(p.HostContains)
+	urlNeedle := needle(p.URLContains)
 	typ := strings.TrimSpace(p.Type)
 
-	out, err := filterRawEntries(body, limit, func(meta headerEntryMeta, fields map[string]json.RawMessage) bool {
+	out, err := filterEntries(body, limit, func(meta entryMeta, fields map[string]json.RawMessage) bool {
 		if !hasNonEmptyObject(fields, "headers") {
 			return false
 		}
@@ -101,10 +92,7 @@ func (s *Service) toolGetHeaders(ctx context.Context, _ *mcp.CallToolRequest, p 
 		if typ != "" && !strings.EqualFold(meta.Type, typ) {
 			return false
 		}
-		if hostNeedle != "" && !strings.Contains(strings.ToLower(meta.URL), hostNeedle) {
-			return false
-		}
-		if urlNeedle != "" && !strings.Contains(strings.ToLower(meta.URL), urlNeedle) {
+		if !matchesHost(meta, hostNeedle) || !matchesURL(meta, urlNeedle) {
 			return false
 		}
 		if !includeTLS {
@@ -154,19 +142,17 @@ func (s *Service) toolGetRedirects(ctx context.Context, _ *mcp.CallToolRequest, 
 		limit = 20
 	}
 	documentsOnly := p.DocumentsOnly == nil || *p.DocumentsOnly
-	hostNeedle := strings.ToLower(strings.TrimSpace(p.HostContains))
+	hostNeedle := needle(p.HostContains)
+	urlNeedle := needle(p.URLContains)
 
-	out, err := filterRawEntries(body, limit, func(meta headerEntryMeta, fields map[string]json.RawMessage) bool {
+	out, err := filterEntries(body, limit, func(meta entryMeta, fields map[string]json.RawMessage) bool {
 		if !hasNonEmptyArray(fields, "redirects") {
 			return false
 		}
 		if documentsOnly && !strings.EqualFold(meta.Type, "Document") {
 			return false
 		}
-		if hostNeedle != "" && !strings.Contains(strings.ToLower(meta.URL), hostNeedle) {
-			return false
-		}
-		return true
+		return matchesHost(meta, hostNeedle) && matchesURL(meta, urlNeedle)
 	})
 	if err != nil {
 		return nil, nil, err
@@ -324,60 +310,6 @@ func intelToolError(code int, body []byte, fallback error) error {
 		}
 	}
 	return fallback
-}
-
-// filterRawEntries selects entries while preserving their exact JSON (numbers,
-// nested header maps and all). Callers may mutate `fields` to drop parts.
-func filterRawEntries(body []byte, limit int, keep func(headerEntryMeta, map[string]json.RawMessage) bool) ([]byte, error) {
-	var parsed struct {
-		Entries []json.RawMessage `json:"entries"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return body, err
-	}
-	out := make([]json.RawMessage, 0, len(parsed.Entries))
-	for _, raw := range parsed.Entries {
-		var meta headerEntryMeta
-		if err := json.Unmarshal(raw, &meta); err != nil {
-			continue
-		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &fields); err != nil {
-			continue
-		}
-		if !keep(meta, fields) {
-			continue
-		}
-		// Field values stay json.RawMessage, so re-encoding preserves every
-		// value verbatim (numbers included); only the callback's deletions change.
-		encoded, err := json.Marshal(fields)
-		if err != nil {
-			continue
-		}
-		out = append(out, encoded)
-		if limit > 0 && len(out) >= limit {
-			break
-		}
-	}
-	return json.Marshal(map[string]any{"entries": out, "count": len(out)})
-}
-
-func hasNonEmptyObject(fields map[string]json.RawMessage, key string) bool {
-	raw, ok := fields[key]
-	if !ok {
-		return false
-	}
-	s := strings.TrimSpace(string(raw))
-	return s != "" && s != "{}" && s != "null"
-}
-
-func hasNonEmptyArray(fields map[string]json.RawMessage, key string) bool {
-	raw, ok := fields[key]
-	if !ok {
-		return false
-	}
-	s := strings.TrimSpace(string(raw))
-	return s != "" && s != "[]" && s != "null"
 }
 
 // mergePostureSummary adds the newest document's grade to inspect_session.

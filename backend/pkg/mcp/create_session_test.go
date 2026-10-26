@@ -111,6 +111,24 @@ func TestMCPCreateSessionAdvertisesTor(t *testing.T) {
 	}
 }
 
+// TestMCPCreateSessionRequestKeepsCallerAddress guards the identity hand-off:
+// the API handler's rate-limit guard keys on RemoteAddr, and httptest's
+// placeholder value would put every MCP client in one bucket.
+func TestMCPCreateSessionRequestKeepsCallerAddress(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.WithValue(context.Background(), clientAddrKey{}, "203.0.113.7:5555")
+	req := newCreateSessionRequest(ctx, []byte(`{}`))
+	if req.RemoteAddr != "203.0.113.7:5555" {
+		t.Fatalf("RemoteAddr = %q, want the caller's address", req.RemoteAddr)
+	}
+
+	// Without a caller address the request keeps working (default placeholder).
+	if fallback := newCreateSessionRequest(context.Background(), []byte(`{}`)); fallback.RemoteAddr == "" {
+		t.Fatal("RemoteAddr must never be empty")
+	}
+}
+
 // TestMCPCreateSessionRequestBypassesAPITokenGate guards the wiring between the
 // MCP tool and the REST handler: create_session must not run into
 // ISOLA_API_TOKEN, because the caller already authenticated on /mcp.

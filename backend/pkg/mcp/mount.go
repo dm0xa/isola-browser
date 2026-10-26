@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -11,6 +12,18 @@ import (
 	isomw "github.com/dm0xa/isola-browser/backend/pkg/middleware"
 	"github.com/dm0xa/isola-browser/backend/pkg/version"
 )
+
+// clientAddrKey carries the real peer address of the /mcp request into tool
+// handlers. The SDK forwards the request context to them, so an in-process call
+// to the API handler keeps the caller's identity — the rate-limit guard keys on
+// RemoteAddr, and httptest's placeholder would put every MCP client in one
+// bucket.
+type clientAddrKey struct{}
+
+func clientAddrFromContext(ctx context.Context) string {
+	addr, _ := ctx.Value(clientAddrKey{}).(string)
+	return addr
+}
 
 // Mount registers the Streamable HTTP MCP endpoint when enabled in config.
 func Mount(r chi.Router, cfg *config.Config, deps Deps) {
@@ -39,7 +52,8 @@ func Mount(r chi.Router, cfg *config.Config, deps Deps) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		mcpHandler.ServeHTTP(w, req)
+		ctx := context.WithValue(req.Context(), clientAddrKey{}, req.RemoteAddr)
+		mcpHandler.ServeHTTP(w, req.WithContext(ctx))
 	}))
 	log.Info().Msg("MCP server mounted at POST /mcp (Bearer token required)")
 }

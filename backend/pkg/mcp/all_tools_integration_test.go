@@ -159,7 +159,7 @@ func connectTestMCP(t *testing.T, endpoint string, token string) *mcp.ClientSess
 	return sess
 }
 
-func callToolText(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any) string {
+func callToolResult(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult {
 	t.Helper()
 	res, err := sess.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
@@ -168,6 +168,11 @@ func callToolText(t *testing.T, sess *mcp.ClientSession, name string, args map[s
 	if res.IsError {
 		t.Fatalf("%s: tool error: %v", name, res.Content)
 	}
+	return res
+}
+
+// textOf joins the text blocks of a tool result, ignoring image blocks.
+func textOf(res *mcp.CallToolResult) string {
 	var parts []string
 	for _, c := range res.Content {
 		if tc, ok := c.(*mcp.TextContent); ok {
@@ -175,6 +180,11 @@ func callToolText(t *testing.T, sess *mcp.ClientSession, name string, args map[s
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func callToolText(t *testing.T, sess *mcp.ClientSession, name string, args map[string]any) string {
+	t.Helper()
+	return textOf(callToolResult(t, sess, name, args))
 }
 
 func TestMCPAllToolsAgainstFakeStreamer(t *testing.T) {
@@ -253,9 +263,22 @@ func TestMCPAllToolsAgainstFakeStreamer(t *testing.T) {
 		t.Fatalf("inspect_session: %s", inspect)
 	}
 
-	shot := callToolText(t, mcpSess, "screenshot", map[string]any{"session_id": sessionID, "format": "png"})
-	if !strings.Contains(shot, "data_base64") {
-		t.Fatalf("screenshot missing image data: %s", shot)
+	shotRes := callToolResult(t, mcpSess, "screenshot", map[string]any{"session_id": sessionID, "format": "png"})
+	shotText := textOf(shotRes)
+	if strings.Contains(shotText, "data_base64") {
+		t.Fatalf("screenshot text block must not duplicate the image: %s", shotText)
+	}
+	var shotImages int
+	for _, c := range shotRes.Content {
+		if img, ok := c.(*mcp.ImageContent); ok {
+			shotImages++
+			if img.MIMEType != "image/png" || len(img.Data) == 0 {
+				t.Fatalf("screenshot image block: mime=%q bytes=%d", img.MIMEType, len(img.Data))
+			}
+		}
+	}
+	if shotImages != 1 {
+		t.Fatalf("screenshot image blocks = %d, want 1", shotImages)
 	}
 
 	snap := callToolText(t, mcpSess, "snapshot", map[string]any{"session_id": sessionID})
@@ -285,6 +308,25 @@ func TestMCPAllToolsAgainstFakeStreamer(t *testing.T) {
 	limitedNet := callToolText(t, mcpSess, "get_network", map[string]any{"session_id": sessionID, "type": "Document", "limit": 1})
 	if !strings.Contains(limitedNet, "connection_id") {
 		t.Fatalf("filtered get_network dropped fields: %s", limitedNet)
+	}
+
+	// host_contains matches the hostname; a path or query only matches
+	// url_contains. Both tools that read the capture must agree.
+	byHost := callToolText(t, mcpSess, "get_network", map[string]any{"session_id": sessionID, "host_contains": "cdn.other.example"})
+	if !strings.Contains(byHost, "app.js") || strings.Contains(byHost, "full-path-unclipped") {
+		t.Fatalf("get_network host_contains: %s", byHost)
+	}
+	byPath := callToolText(t, mcpSess, "get_network", map[string]any{"session_id": sessionID, "host_contains": "/full-path"})
+	if !strings.Contains(byPath, `"count":0`) {
+		t.Fatalf("get_network host_contains must not match a path: %s", byPath)
+	}
+	byURL := callToolText(t, mcpSess, "get_network", map[string]any{"session_id": sessionID, "url_contains": "/full-path"})
+	if !strings.Contains(byURL, "full-path-unclipped") {
+		t.Fatalf("get_network url_contains: %s", byURL)
+	}
+	headersByHost := callToolText(t, mcpSess, "get_headers", map[string]any{"session_id": sessionID, "host_contains": "example.com"})
+	if !strings.Contains(headersByHost, "strict-transport-security") {
+		t.Fatalf("get_headers host_contains: %s", headersByHost)
 	}
 
 	headersBody := callToolText(t, mcpSess, "get_headers", map[string]any{"session_id": sessionID, "limit": 1})

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -45,5 +46,35 @@ func TestNavigateStreamerRetries503(t *testing.T) {
 	}
 	if attempts.Load() != 3 {
 		t.Fatalf("attempts = %d, want 3", attempts.Load())
+	}
+}
+
+// TestNavigateStreamerRetriesTimeout guards the per-attempt deadline: a streamer
+// that stops answering must not end the navigation, because the retry loop still
+// has budget left.
+func TestNavigateStreamerRetriesTimeout(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/navigate" {
+			http.NotFound(w, r)
+			return
+		}
+		if attempts.Add(1) == 1 {
+			time.Sleep(150 * time.Millisecond) // longer than the attempt budget
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	id := uuid.New().String()
+	svc := newStreamerService(t, id, srv.Listener.Addr().String())
+	svc.navigateAttempt = 40 * time.Millisecond
+
+	if err := svc.navigateStreamer(context.Background(), id, "https://example.com/"); err != nil {
+		t.Fatal(err)
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("attempts = %d, want 2 (first attempt timed out)", attempts.Load())
 	}
 }

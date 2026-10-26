@@ -35,36 +35,40 @@ Every request must send `Authorization: Bearer <token>`. Session ownership is ke
 | `navigate`        | Go to a URL (ctrl-socket retries); returns JSON with `inspect` and `document_seen` when `wait_document` is true (default).             |
 | `inspect_session` | Compact summary: page title, snapshot node count, document HTTP statuses.                                                              |
 | `snapshot`        | Accessibility tree with `ref` values for click/type.                                                                                   |
-| `screenshot`      | Visual capture via CDP (`format`: png/jpeg, optional `quality` for jpeg).                                                              |
+| `screenshot`      | Visual capture via CDP, returned as an image block plus a metadata text block (`format`, `mime`, `width`, `height`, `bytes`); `format` png/jpeg, optional `quality` for jpeg. |
 | `click`           | Click by `ref` from the latest snapshot.                                                                                               |
 | `type`            | Type text; optional `ref` to focus first.                                                                                              |
-| `get_network`     | Network log; optional `type`, `host_contains`, `limit` filters. Entries also carry headers, TLS, redirect chains, first/third-party flags and tracker labels. |
-| `get_headers`     | Response headers (and TLS) per request, documents only by default; `host_contains`, `url_contains`, `type`, `limit`, `include_tls`. |
+| `get_network`     | Network log; optional `type`, `host_contains` (hostname substring), `url_contains` (anywhere in the URL), `limit` filters. Entries also carry headers, TLS, redirect chains, first/third-party flags and tracker labels; a filtered read keeps every field. Refuses a window larger than 8 MiB with an actionable error. |
+| `get_headers`     | Response headers (and TLS) per request, documents only by default; `host_contains` (hostname), `url_contains`, `type`, `limit`, `include_tls`. |
 | `get_posture`     | Security-header audit per document: HSTS, CSP, frame protection, nosniff, Referrer-Policy, Permissions-Policy, COOP/COEP, with a 0–7 score and A–F grade. `tls_state`/`note` report the transport verdict; an untrusted or plaintext connection caps the grade at C. |
-| `get_redirects`   | Redirect chains with each hop's status code; `host_contains`, `documents_only`, `limit`. |
+| `get_redirects`   | Redirect chains with each hop's status code; `host_contains` (hostname), `url_contains`, `documents_only`, `limit`. |
 | `get_trackers`    | Third-party/tracker inventory: per-host counts and bytes, known tracker families, beacons and cookie-family fingerprints; `third_party_only`, `include_beacons`, `include_cookies`, `limit`. |
 | `host_intel`      | Passive DNS intelligence for a host: IPs, PTR, ASN/org/country and the CNAME chain. Omit `host` to use the most recently captured document host. |
-| `probe_host`      | Active recon from the sandbox, one bounded request per check: `robots`, `securitytxt`, `sitemap`, `wellknown`, `favicon` (mmh3 + SHA-1). Defaults to the first three. Every check fetches the host itself; no provider is contacted. |
+| `probe_host`      | Active recon from the sandbox, one bounded request per check: `robots`, `securitytxt`, `sitemap`, `wellknown`, `favicon` (mmh3 + SHA-1). Defaults to the first three. Every check fetches the host itself; no provider is contacted. `host` is optional (omit to use the captured document host) and `checks` takes a comma list or `all`. Requires `intel.enabled` (`ISOLA_INTEL_ENABLED`). |
 | `resource_graph`  | Render the capture as a resource-graph PNG (hosts → resource types → files); `theme`, `direction`, `expand`, `types`, `failed_only`, `scale` (1–4). Returns the image plus a metadata block; bounded to 45 s and 8 MiB. |
 | `get_links`       | Links on the active page (`href` + text, plus page url/title); optional `limit`, `host_contains`. Each link carries a snapshot `ref` when it can be matched, so `click` and `navigate` are interchangeable. |
-| `host_intel` / `probe_host` | `host` (omit to use the captured document host); `probe_host` also takes `checks` (comma list or `all`). Recon contacts no provider, so the hostname never travels anywhere but the target and the resolver. Requires `intel.enabled` (`ISOLA_INTEL_ENABLED`). |
 | `close_session`   | Terminate the session and destroy the container.                                                                                       |
 
 ### Tool parameters (common)
 
 | Tool             | Notable arguments                                                                                                                                                 |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `create_session` | `url`; `tor` (default false) routes the session through Tor — the browser has no unproxied egress, so startup waits for a live circuit; `tor_country` (e.g. `se` or `se,no`) pins Tor exits to those ISO 3166-1 alpha-2 countries and requires `tor`; `wait_ready` (default true); `wait_document` (default true). Returns `session_id`, `tor_enabled`, `tor_country` (the effective pin), `automation_ready`, `document_seen`, and `inspect` when checks succeed. |
+| `create_session` | `url`; `tor` (default false) routes the session through Tor — the browser has no unproxied egress, so startup waits for a live circuit; `tor_country` (e.g. `se` or `se,no`) pins Tor exits to those ISO 3166-1 alpha-2 countries and requires `tor`; `wait_ready` (default true); `wait_document` (default true). Returns `session_id`, `tor_enabled`, `tor_country` (the effective pin), `automation_ready`, `document_seen`, and `inspect` when checks succeed. If the session never becomes usable the tool terminates it and returns the error, so a failed launch cannot leave an orphan behind. |
 | `navigate`       | `session_id`, `url`; `wait_document` (default true). Retries while the control socket is not ready (HTTP 503).                                                    |
-| `get_network`    | `type` (e.g. `Document`), `host_contains`, `limit`.                                                                                                               |
+| `get_network`    | `type` (e.g. `Document`), `host_contains` (hostname), `url_contains` (full URL), `limit`.                                                                          |
+| `get_redirects`  | `host_contains` (hostname), `url_contains` (full URL), `documents_only`, `limit`.                                                                                  |
 | `resource_graph` | `theme` `dark` (default) or `light`; `direction` `horizontal`/`vertical`; `expand` `origin` (default) / `all` / `collapsed`; `types` comma list (`document`, `script`, `stylesheet`, `image`, `font`, `xhr`, `media`, `other`); `failed_only`; `scale` 1–4 (default 2). Returns an image block with the PNG and a text block carrying `format`, `bytes`, `theme`, `width`, `height`. Invalid values are rejected before the renderer is called; the call times out after 45 s and refuses a PNG over 8 MiB (retry with `scale=1` or `expand=collapsed`). |
 | `get_links`      | `limit` (default 200, max 1000), `host_contains`. Returns `{url, title, count, links:[{href, text, ref}]}`; `href` values are absolute. `ref` is present when the link maps to a snapshot node (refresh happens automatically), so you can `click` the `ref` or `navigate` to the `href`. |
-| `screenshot`     | `format` `png` or `jpeg`; `quality` 1–100 for JPEG (default 85). Response includes `data_base64`, `mime`, `width`, `height`.                                      |
+| `screenshot`     | `format` `png` or `jpeg`; `quality` 1–100 for JPEG (default 85). Returns an image block plus a text block with `format`, `mime`, `width`, `height` and `bytes`; the base64 payload is not repeated in the text. |
 | `click` / `type` | `ref` from the **latest** `snapshot` (call `snapshot` again after navigation).                                                                                    |
 
 A `tor` session always cold-starts — the SOCKS proxy is wired at container creation, so it is never served from the [warm pool](configuration.md#warm_pool). Pinning an exit country (`tor_country`) is a strict guarantee: if no reachable exit exists in the country, the session fails to start rather than egressing elsewhere.
 
-Network data comes from the same capture as the in-viewer Network panel, but `get_network` returns the streamer's full in-memory window with fields the UI omits or clips. The window holds the most recent `session.network_log_max_entries` requests (default 1000; see [Configuration → `session`](configuration.md#session)).
+Network data comes from the same capture as the in-viewer Network panel, but `get_network` returns the streamer's full in-memory window with fields the UI omits or clips. The window holds the most recent `session.network_log_max_entries` requests (default 1000; see [Configuration → `session`](configuration.md#session)). An unfiltered read of a heavy page can be large: the tool refuses anything over 8 MiB and tells you to pass `limit` or a filter rather than truncating silently.
+
+### Matching entries
+
+`host_contains` matches the **hostname** of a captured request; a path, query or scheme belongs in `url_contains`. The two are separate because a phishing page routinely hides its real host behind a look-alike URL, and a filter that silently matched paths made `get_network` and `get_headers` disagree about the same argument. `get_links` is the one exception: its `host_contains` matches the link URL (a hostname is a valid substring of a URL, so passing one works there too).
 
 ### Snapshot, screenshot and graph
 
@@ -115,7 +119,8 @@ get_network     {"session_id":"9f1c2b3d-...","type":"Document","limit":5}
   → {"entries":[{"url":"https://example.com/","method":"GET","status":200,"type":"Document"}]}
 
 screenshot      {"session_id":"9f1c2b3d-...","format":"jpeg","quality":70}
-  → {"format":"jpeg","mime":"image/jpeg","width":1280,"height":720,"data_base64":"/9j/4AAQSk..."}
+  → {"format":"jpeg","mime":"image/jpeg","width":1280,"height":720,"bytes":42118}
+    + an image/jpeg content block with the pixels
 
 resource_graph  {"session_id":"9f1c2b3d-...","theme":"light","expand":"all"}
   → {"bytes":184213,"format":"png","height":986,"theme":"light","width":2412}
@@ -128,7 +133,7 @@ close_session   {"session_id":"9f1c2b3d-..."}
 Two things worth knowing:
 
 - **`ref` values are renumbered on every `snapshot`.** After `navigate`, or a click that replaces the page, call `snapshot` again before the next `click` / `type`; an `e2` from an older snapshot points at nothing useful.
-- **A filter narrows the fields, not just the rows.** Unfiltered, `get_network` returns the streamer's full window with `id`, `mime`, `ip`, `protocol`, `connection_id`, `bytes`, `sha1`, `failed`, `error` and `tab`; with `type`, `host_contains` or `limit` set, entries come back as only `url`, `method`, `status`, `type`. Drop the filters when you need `connection_id` (the agent-to-agent shape a phishing page often hides) or the source `ip`.
+- **A filter narrows the rows, not the fields.** `get_network` always returns each entry whole — `id`, `mime`, `ip`, `protocol`, `connection_id`, `bytes`, `sha1`, `failed`, `error`, `tab`, `headers`, `tls`, `redirects`, `posture` — whether or not `type`, `host_contains` or `limit` is set. Use `connection_id` (the agent-to-agent shape a phishing page often hides) and the source `ip` freely on a filtered read.
 
 ### Calling it without an SDK
 
