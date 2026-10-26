@@ -6,76 +6,60 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-26
+
 ### Security
 
-- The control plane now runs with the same hardening as the sandbox: read-only
-  root filesystem, dropped capabilities, no privilege escalation and
-  configurable resource limits.
-- API request bodies are capped at 64 KiB; oversized requests are rejected.
-- Seccomp remains opt-in, and the documentation now says so.
+- The control plane runs with the sandbox's hardening: read-only rootfs, dropped
+  capabilities, no privilege escalation and configurable limits.
+- API request bodies are capped at 64 KiB. Seccomp remains opt-in, now
+  documented.
 
 ### Added
 
-- **Analysis panel.** New Headers and Trackers tabs show response headers, the
-  TLS certificate summary, a graded security-posture audit, and the page's
-  tracker, beacon and cookie inventory.
-- **Recon.** An on-demand Recon tab and API endpoint provide DNS/ASN enrichment
-  and bounded probes of the target host. Nothing runs until a host is named, and
-  no third-party service is contacted.
-- **Redirect chains** are preserved with each hop's status code.
-- **MCP.** Six new tools expose headers, posture, redirects, trackers, host
+- **Analysis panel.** Headers, Trackers and Recon tabs, with a security-posture
+  grade, TLS summary, tracker/beacon/cookie inventory and redirect chains that
+  keep each hop's status.
+- **Recon.** DNS/ASN enrichment and bounded host probes on demand; nothing runs
+  until a host is named and no third-party service is contacted.
+- **MCP.** Six tools for headers, posture, redirects, trackers, host
   intelligence and probing; network entries now carry headers, TLS and tracker
   labels.
-- **[docs/third-parties.md](docs/third-parties.md)** documents what leaves the
+- [`docs/third-parties.md`](docs/third-parties.md) lists what leaves the
   sandbox.
 
 ### Changed
 
-- **GPU acceleration is opt-in, and the dev frontend is loopback-only.** The
-  base Compose stack no longer mounts `/dev/dri`: the device is absent on macOS
-  and on GPU-less hosts, where the unconditional mount made `docker compose up`
-  fail outright. Enable hardware encoding with the new overlay,
-  `docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d`,
-  which adds the device and `ISOLA_GPU=1` together (the backend checks the device
-  itself, so one without the other silently falls back to libx264). The Vite dev
-  server now publishes on `127.0.0.1:5173` instead of all interfaces.
-- Recon follows the Tor circuit in Tor sessions; ASN lookups are reported as
-  unavailable there.
-- Posture accounts for transport trust: a document served over an untrusted or
-  plaintext connection is labelled and its grade capped.
-- Session inspection reports the posture grade and tracker counts.
-- **MCP `screenshot` returns an image block.** The pixels now arrive as an
-  `image/png` or `image/jpeg` content block, the same shape `resource_graph`
-  already used, with a metadata-only text block beside it. The `data_base64`
-  field no longer appears in the reply, so a client renders the pixels directly
-  instead of decoding JSON.
-- **MCP filters mean one thing.** `host_contains` now matches the request's
-  hostname on `get_network`, `get_headers` and `get_redirects`; a path, query or
-  scheme belongs in the new `url_contains` argument (also added to
-  `get_network` and `get_redirects`). Previously the same argument matched the
-  hostname in one tool and anywhere in the URL in the others, so a filtered
-  read could disagree with itself across tools.
-- The viewer hides recon actions when an operator disables the feature.
-- The in-viewer network panel is now opaque, so request rows stay legible.
+- **GPU encoding is opt-in** via `deploy/docker-compose.gpu.yml`, which adds
+  `/dev/dri` and `ISOLA_GPU=1` together. The base stack no longer mounts the
+  device, so `docker compose up` works on GPU-less hosts, and the Vite dev
+  server publishes on loopback only.
+- **MCP `screenshot` returns an image block** instead of `data_base64`.
+- **MCP filters mean one thing:** `host_contains` matches the hostname in every
+  tool, and paths or queries use `url_contains`.
+- Posture accounts for transport trust and caps the grade on untrusted or
+  plaintext connections. Recon follows the Tor circuit, where ASN lookups are
+  unavailable.
+- Session inspection reports the posture grade and tracker counts; the viewer
+  hides recon actions when an operator disables the feature, and the network
+  panel is opaque.
 
 ### Fixed
 
-- Emoji flags render in the sandbox.
-- The request graph keeps the opened page in the leftmost column.
-- Filtering the network log no longer drops fields from the returned entries.
-- MCP input and read calls are bounded in time: `click`, `type` and `navigate`
-  used to wait forever on a wedged renderer, and `navigate` now retries a
-  timed-out attempt instead of giving up.
-- An MCP `create_session` that never becomes usable is terminated instead of
-  left running with an id the caller never received.
-- MCP `create_session` forwards the caller's address to the API, so the
-  per-client session rate limit no longer counts every agent as one client.
-- `get_network` refuses a capture window over 8 MiB with an actionable error
-  (`limit`, `host_contains`, `url_contains`) instead of returning megabytes of
-  text, and `inspect_session` and `create_session` now report the same summary
-  shape.
-- Recon can trust an operator-supplied CA bundle on TLS-inspecting networks;
-  certificate verification stays enabled.
+- Text and emoji fonts ship in the image; regional-indicator flags no longer
+  render as tofu.
+- Blank frames painted during navigation are withheld from the viewer.
+- Deleting a session while its container is being created no longer leaves the
+  container running.
+- MCP `create_session` works when `ISOLA_API_TOKEN` is set, forwards the
+  caller's address to the per-client rate limit, and terminates a session that
+  never becomes usable.
+- MCP `click`, `type` and `navigate` are time-bounded; `navigate` retries once,
+  and `get_network` refuses a capture window over 8 MiB with an actionable
+  error.
+- Filtering the network log no longer drops fields, and the request graph keeps
+  the opened page in the leftmost column.
+- Recon can trust an operator-supplied CA bundle on TLS-inspecting networks.
 
 ## [1.3.0] - 2026-10-22
 
@@ -304,7 +288,8 @@ publishes the section matching the tag.
 Initial release: a Go control plane that boots a disposable Docker sandbox
 running offscreen Chromium.
 
-[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/dm0xa/isola-browser/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/dm0xa/isola-browser/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/dm0xa/isola-browser/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/dm0xa/isola-browser/compare/v1.1.0...v1.1.1
