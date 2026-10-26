@@ -228,9 +228,36 @@ test('isBlankBitmap rejects a frame with real content', () => {
   assert.equal(isBlankBitmap(makeSurface(64, 64)), false);
 });
 
+test('isBlankBitmap accepts a blank that keeps the site chrome bar', () => {
+  // Measured on unibet.com's country gateway: the navigation-commit blank is
+  // white with the site's responsible-play bar across the top — 1.6-3.4% of a
+  // 3448x1797 surface. At the old 2% allowance that real case read as content
+  // and the white page went out, which is the flash this rule exists to stop.
+  const w = 100;
+  const h = 100;
+  const buf = flat(w * h);
+  for (let y = 0; y < 4; y++) {
+    for (let x = 0; x < w; x++) {
+      const off = (y * w + x) * 4;
+      buf[off] = 0x14;
+      buf[off + 1] = 0x3a;
+      buf[off + 2] = 0x14;
+      buf[off + 3] = 0xff;
+    }
+  }
+  assert.equal(isBlankBitmap(buf), true);
+});
+
+test('the blank allowance stays under a sparse but real page', () => {
+  // 8% differing pixels is still content: 5% must not swallow it.
+  const buf = flat(100 * 100);
+  for (let px = 0; px < 800; px++) buf[px * 4 + 1] = 0x10;
+  assert.equal(isBlankBitmap(buf), false);
+});
+
 test('isBlankBitmap rejects a page that is mostly one colour', () => {
   // The least-uniform real frame measured was 84.8% one colour, so 85% must
-  // still count as content: the 2% allowance cannot swallow a real page.
+  // still count as content: the 5% allowance cannot swallow a real page.
   const buf = flat(100 * 100);
   for (let px = 1500; px < 10000; px++) buf[px * 4 + 1] = 0x00;
   assert.equal(isBlankBitmap(buf), false);
@@ -296,12 +323,11 @@ test('a small damage update costs a fraction of a full frame', () => {
   );
 });
 
-// shouldHoldBlank is the anti-flash rule for full-surface blanks. It lives here
-// so the branch that used to delay a brand-new tab is covered: the runner
-// withholds a blank only when the surface it would replace holds a picture.
+// shouldHoldBlank is the anti-flash rule for blanks. It lives here so the
+// branch that used to delay a brand-new tab is covered: the runner withholds a
+// blank only when the surface it would replace holds a picture.
 test('a blank is withheld once the tab has established the surface', () => {
   const base = {
-    isFull: true,
     blank: true,
     streamerSeeded: true,
     surfaceEstablished: true,
@@ -321,7 +347,6 @@ test('the first frame of an active tab is never held (new tab opens at once)', (
   // hold window — "new tab opens too slow".
   assert.strictEqual(
     shouldHoldBlank({
-      isFull: true,
       blank: true,
       streamerSeeded: true,
       surfaceEstablished: false,
@@ -334,7 +359,6 @@ test('the first frame of an active tab is never held (new tab opens at once)', (
 
 test('a blank is only withheld when it would replace a picture', () => {
   const pictured = {
-    isFull: true,
     blank: true,
     streamerSeeded: true,
     surfaceEstablished: true,
@@ -345,13 +369,28 @@ test('a blank is only withheld when it would replace a picture', () => {
   assert.strictEqual(shouldHoldBlank({ ...pictured, blank: false }), false);
   // Nothing is withheld before the streamer has a surface at all (the seed).
   assert.strictEqual(shouldHoldBlank({ ...pictured, streamerSeeded: false }), false);
-  // Partial damage is not a full surface and never goes through this rule.
-  assert.strictEqual(shouldHoldBlank({ ...pictured, isFull: false }), false);
   // The hold is bounded: once the window closes, a page that really is one
   // flat colour still appears.
   assert.strictEqual(
     shouldHoldBlank({ ...pictured, loading: false, withinHoldWindow: false }),
     false,
+  );
+});
+
+test('a blank partial patch is withheld like a blank full frame', () => {
+  // The recorded tear: Chromium repaints part of the viewport white at a
+  // navigation commit and the runner blitted it onto the composed surface,
+  // leaving the untouched remainder on screen as the previous document. The
+  // rule must not care whether the blank arrived as a whole surface or a rect.
+  assert.strictEqual(
+    shouldHoldBlank({
+      blank: true,
+      streamerSeeded: true,
+      surfaceEstablished: true,
+      loading: false,
+      withinHoldWindow: true,
+    }),
+    true,
   );
 });
 

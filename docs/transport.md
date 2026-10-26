@@ -180,6 +180,7 @@ A remote browser fails in ways a webcam does not: the renderer wedges, paint ret
 Isola treats those as first-class:
 
 - **Empty captures** — a rolling window. After paint recovers, the window is pruned even if no new empties arrive, so the viewer badge does not stick.
+- **Blank commits** — a navigation paints a blank document before the new page has anything on it. A blank takes several forms: an empty image, a whole surface of one colour, or — the one that used to get through — a blank *patch* of the viewport blitted onto a surface still holding the previous page, which is a half-white frame no browser ever presents. All three are withheld for up to `BLANK_HOLD_MS` after a navigation so the viewer keeps the last real picture; the hold is bounded, so a page that really is one flat colour still appears.
 - **Renderer stall** — detected both from CDP probe timeouts (early) and from the runner's capture verdict (authoritative). The runner can replace the renderer and reload; the UI can show *why* the picture froze instead of only a low fps number.
 - **`metrics`** — those signals are exposed so a custom client can do the same.
 

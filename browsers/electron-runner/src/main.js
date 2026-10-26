@@ -74,6 +74,11 @@ let streamerSeeded = false;
 // How long after a navigation or load a blank full frame is withheld. Bounded
 // on purpose: a page that really is one flat colour must still appear.
 const BLANK_HOLD_MS = 3000;
+// A blank PARTIAL patch is withheld only when it covers this share of the
+// surface. Below it the rect is ordinary content — a button fill, a panel
+// background — and holding it would freeze a legitimate update; the measured
+// tear was 40% of the page.
+const BLANK_PATCH_MIN_SHARE = 0.2;
 let blankHoldUntil = 0;
 let bgColor = { r: 255, g: 255, b: 255, a: 255 };
 // Whether anyone is watching. With no viewer attached, composing the surface
@@ -407,18 +412,39 @@ function writeFrame(dirtyRects, nativeImage) {
   // so this must not read as a capture stall.
   const loading = !!(activeWin && activeWin.win && !activeWin.win.isDestroyed()
     && activeWin.win.webContents.isLoading());
+  // A blank arrives as a partial patch at least as often as it arrives as a
+  // whole surface: Chromium repaints part of the viewport at a navigation
+  // commit, and blitting that patch onto the composed surface leaves the rest
+  // of the frame showing the PREVIOUS document — a tear no browser presents.
+  // Measured on unibet.com's country gateway: 40% of the page white on the
+  // right, the old page intact on the left, twice in one country switch.
+  //
+  // Only a patch big enough to read as "the picture" is tested, and only while a
+  // hold is possible at all: the scan costs ~22 ms on a full 1760p surface, which
+  // an ordinary large partial (a scroll, an animation) must not pay on every
+  // paint. A small uniform rect is content either way.
   const blank = isFull && isBlankBitmap(payload);
+  const patchLargeEnough = !isFull
+    && rect.w * rect.h >= w * h * BLANK_PATCH_MIN_SHARE
+    && (loading || Date.now() < blankHoldUntil);
+  const blankPatch = patchLargeEnough && isBlankBitmap(payload);
+  // TRACE (temporary)
+  if (blank || !isFull && rect.w * rect.h >= w * h * BLANK_PATCH_MIN_SHARE) {
+    console.log(
+      `[trace] rect=${rect.x},${rect.y},${rect.w},${rect.h} full=${isFull} bmp=${bmpW}x${bmpH} surf=${w}x${h} payloadBlank=${isBlankBitmap(payload)} patch=${blankPatch} loading=${loading} inWindow=${Date.now() < blankHoldUntil} est=${!!(activeWin && activeWin.surfaceEstablished)} seeded=${streamerSeeded}`,
+    );
+  }
   // Both decisions read the surface's state BEFORE this frame: whether a blank is
   // worth hiding depends on what is being replaced, not on what this frame is.
   const established = !!(activeWin && activeWin.surfaceEstablished);
   if (shouldHoldBlank({
-    isFull,
-    blank,
+    blank: blank || blankPatch,
     streamerSeeded,
     surfaceEstablished: established,
     loading,
     withinHoldWindow: Date.now() < blankHoldUntil,
   })) {
+    if (blank || blankPatch) console.log('[trace] HELD');
     dedupTotal++;
     return FRAME_DEDUP;
   }
@@ -705,6 +731,7 @@ function resetFrameState() {
   // A new document also opens the window in which a blank full frame is
   // withheld instead of forwarded — see writeFrame.
   blankHoldUntil = Date.now() + BLANK_HOLD_MS;
+  console.log(`[trace] new document, hold until +${BLANK_HOLD_MS}ms`);
 }
 
 // Applies the theme and returns the WINDOW backdrop. The two colours are

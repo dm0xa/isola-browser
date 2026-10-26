@@ -97,28 +97,61 @@ function sameRect(a, b) {
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
+// dominantColour returns the most common 32-bit pixel value in an evenly spaced
+// sample of at most `sampleMax` pixels. The step is a multiple of 4 so every read
+// is pixel-aligned, and ties keep the earliest sample so the result is stable
+// frame to frame. A page's own colour wins this comfortably over a chrome bar:
+// the bar is a few percent of the surface, the page colour is the rest.
+function dominantColour(bitmap, sampleMax = 1024) {
+  const pixels = bitmap.length >>> 2;
+  const step = Math.max(1, Math.floor(pixels / sampleMax)) * 4;
+  const counts = new Map();
+  let best = bitmap.readUInt32LE(0);
+  let bestCount = 0;
+  for (let i = 0; i + 4 <= bitmap.length; i += step) {
+    const key = bitmap.readUInt32LE(i);
+    const n = (counts.get(key) || 0) + 1;
+    counts.set(key, n);
+    if (n > bestCount) {
+      bestCount = n;
+      best = key;
+    }
+  }
+  return best;
+}
+
 // isBlankBitmap reports whether all but a sliver of a BGRA bitmap is one
 // colour — which is how a *blank* frame actually arrives. Measured on Electron
 // 44 over a real page load: the unpainted document at a navigation commit comes
 // back as a full-surface white frame at ~100% one colour but with a handful of
 // stray pixels (3-22 distinct values, not one flat value), so an exact-uniformity
 // test lets it through. Real content sits far away — the least-uniform page
-// measured was 84.8% one colour — so `maxDifferingRatio` (2%) is an order of
-// magnitude above the blank case and well below any page with content on it.
+// measured was 84.8% one colour (15.2% differing).
 //
-// Counting beats building a histogram: a real frame exceeds the allowance within
-// its first few hundred pixels and exits at once, so only a blank pays the whole
-// scan (3.7 MB at 720p, ~1 ms).
-function isBlankBitmap(bitmap, maxDifferingRatio = 0.02) {
+// The reference colour is the MODE of a sparse sample, not the first pixel.
+// A navigation-commit blank keeps whatever the site paints above the fold
+// before its app mounts, and on unibet.com's country gateway that is a dark
+// responsible-play bar across the very top (1.6-3.4% of a 3448x1797 surface).
+// Picking bitmap[0] then made the bar the reference and a white page read as
+// 96% content — which is why the flash got out. Finding the page's own colour
+// first costs 256-1024 reads, nothing next to the scan below.
+//
+// The allowance is 5%, not 2%: a blank is not perfectly flat either. The same
+// chrome bar is 1.6-3.4% of the surface, so the old 2% allowance called a white
+// page "content" and forwarded it — the flash this rule exists to stop. 5%
+// covers the chrome and still leaves a 3x margin under the least-uniform real
+// page.
+//
+// The scan itself counts rather than builds a histogram: a real frame exceeds
+// the allowance within its first few hundred pixels and exits at once, so only
+// a blank pays the whole pass (3.7 MB at 720p, ~1 ms).
+function isBlankBitmap(bitmap, maxDifferingRatio = 0.05) {
   if (bitmap.length < 8) return true;
   const allowed = Math.floor((bitmap.length / 4) * maxDifferingRatio);
-  const r = bitmap[0];
-  const g = bitmap[1];
-  const b = bitmap[2];
-  const a = bitmap[3];
+  const ref = dominantColour(bitmap);
   let differing = 0;
-  for (let i = 4; i < bitmap.length; i += 4) {
-    if (bitmap[i] !== r || bitmap[i + 1] !== g || bitmap[i + 2] !== b || bitmap[i + 3] !== a) {
+  for (let i = 0; i + 4 <= bitmap.length; i += 4) {
+    if (bitmap.readUInt32LE(i) !== ref) {
       differing++;
       if (differing > allowed) return false;
     }
@@ -126,10 +159,20 @@ function isBlankBitmap(bitmap, maxDifferingRatio = 0.02) {
   return true;
 }
 
-// shouldHoldBlank decides whether a full-surface blank frame must be kept off
-// the wire so the viewer keeps the picture it already has. This is the
-// anti-flash rule: a link click commits a blank document before the new page
-// paints, and forwarding that blank is the white flash the viewer shows.
+// shouldHoldBlank decides whether a blank update must be kept off the wire so
+// the viewer keeps the picture it already has. This is the anti-flash rule: a
+// link click commits a blank document before the new page paints, and forwarding
+// that blank is the white flash the viewer shows.
+//
+// `blank` is the caller's verdict that this update would replace the picture
+// with one flat colour. A FULL-surface blank is the obvious case. A PARTIAL patch
+// qualifies too when it is itself blank and large enough to read as the picture:
+// blitting it leaves the untouched remainder showing the PREVIOUS document, a
+// tear no browser ever presents. Measured on unibet.com's gateway, a country
+// switch produced exactly that — 40% of the page white on the right with the old
+// page intact on the left, twice. Small uniform patches (a button fill, a panel
+// background) are ordinary content and the runner must keep sending them, which
+// is why the caller applies a size test before passing `blank`.
 //
 // The gate is surfaceEstablished — the CURRENT TAB has already put a frame on
 // the viewer's single shared surface. The surface belongs to a tab, and only
@@ -144,10 +187,8 @@ function isBlankBitmap(bitmap, maxDifferingRatio = 0.02) {
 //
 // The seed frame is exempt (streamerSeeded): the streamer owns one surface and
 // must always get a full frame before damage-only updates mean anything.
-function shouldHoldBlank({ isFull, blank, streamerSeeded, surfaceEstablished, loading, withinHoldWindow }) {
-  return Boolean(
-    isFull && blank && streamerSeeded && surfaceEstablished && (loading || withinHoldWindow),
-  );
+function shouldHoldBlank({ blank, streamerSeeded, surfaceEstablished, loading, withinHoldWindow }) {
+  return Boolean(blank && streamerSeeded && surfaceEstablished && (loading || withinHoldWindow));
 }
 
 // surfaceBlankAfterFrame is what the viewer's single surface holds once a frame
