@@ -27,7 +27,7 @@ jobs:
           - { goos: darwin, goarch: amd64 }
           - { goos: darwin, goarch: arm64 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history + tags so the build can derive the version.
           fetch-depth: 0
@@ -86,7 +86,7 @@ jobs:
       # The release body is the CHANGELOG.md section for this tag. GitHub's own
       # generation lists merged pull requests, and this repository commits
       # straight to main, so it could only produce a bare compare link.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Extract release notes
         run: node scripts/changelog-section.mjs "$GITHUB_REF_NAME" release-notes.md
