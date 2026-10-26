@@ -70,6 +70,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # default` when the orchestrator runs on the host (no ISOLA_PROXY_IP).
     ffmpeg socat tor iptables iproute2 pulseaudio pulseaudio-utils \
     xvfb ca-certificates \
+    # Text and colour emoji. Until now the image named no font at all and glyph
+    # coverage depended on whatever the GTK stack happened to pull in through a
+    # recommends chain; nothing covered emoji, so flags — two regional-indicator
+    # codepoints, U+1F1F8 U+1F1EA for Sweden — rendered as one tofu box each in
+    # unibet.com's region picker. Naming both makes text deterministic and gives
+    # emoji a real font (Noto Color Emoji, ~10 MB).
+    fonts-dejavu-core fonts-noto-color-emoji \
     # Electron's bundled V8 links libatomic on arm64; the Node base image
     # happened to provide it, a bare Debian slim does not.
     libatomic1 \
