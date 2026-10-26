@@ -27,7 +27,7 @@ ship unedited).
 
 | Module | Version | License | Copyright |
 |---|---|---|---|
-| `github.com/go-chi/chi/v5` | `v5.1.0` | MIT | Copyright (c) 2015-present Peter Kieltyka (https://github.com/pkieltyka), Google Inc. |
+| `github.com/go-chi/chi/v5` | `v5.3.0` | MIT | Copyright (c) 2015-present Peter Kieltyka (https://github.com/pkieltyka), Google Inc. |
 | `github.com/go-chi/cors` | `v1.2.1` | MIT | Copyright (c) 2014 Olivier Poitrey <rs@dailymotion.com>; Copyright (c) 2016-Present https://github.com/go-chi authors |
 | `github.com/google/jsonschema-go` | `v0.4.3` | MIT | Copyright (c) 2025 JSON Schema Go Project Authors |
 | `github.com/google/uuid` | `v1.6.0` | BSD-3-Clause | Copyright (c) 2009,2014 Google Inc. All rights reserved. |
@@ -41,7 +41,7 @@ ship unedited).
 | `github.com/yosida95/uritemplate/v3` | `v3.0.2` | BSD-3-Clause | Copyright (C) 2016, Kohei YOSHIDA <https://yosida95.com/>. All rights reserved. |
 | `golang.org/x/oauth2` | `v0.35.0` | BSD-3-Clause | Copyright 2009 The Go Authors. |
 | `golang.org/x/sync` | `v0.20.0` | BSD-3-Clause | Copyright 2009 The Go Authors. |
-| `golang.org/x/sys` | `v0.42.0` | BSD-3-Clause | Copyright 2009 The Go Authors. |
+| `golang.org/x/sys` | `v0.49.0` | BSD-3-Clause | Copyright 2009 The Go Authors. |
 | `golang.org/x/time` | `v0.15.0` | BSD-3-Clause | Copyright 2009 The Go Authors. |
 | `gopkg.in/yaml.v3` | `v3.0.1` | Apache-2.0 AND MIT | Copyright (c) 2006-2010 Kirill Simonov; Copyright (c) 2011-2019 Canonical Ltd |
 
