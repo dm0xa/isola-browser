@@ -9,6 +9,6 @@
     "test": "node --test"
   },
   "dependencies": {
-    "electron": "44.9.0"
+    "electron": "44.9.1"
   }
 }
