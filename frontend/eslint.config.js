@@ -18,7 +18,14 @@ export default tseslint.config(
       'react-refresh': reactRefresh,
     },
     rules: {
-      ...reactHooks.configs.recommended.rules,
+      // eslint-plugin-react-hooks 7 folds the React Compiler rules into
+      // `recommended` (refs, set-state-in-effect, immutability, purity, …).
+      // They flag ~35 deliberate patterns in the viewer and stream hooks, so
+      // enabling the set wholesale would fail lint; adopt them rule by rule as
+      // those files are refactored. The two classic rules keep their 5.x
+      // severities here.
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
       '@typescript-eslint/no-explicit-any': 'off',
       // The codebase marks intentionally-unused args/vars with a leading
       // underscore (e.g. ws.onerror = (_event) => ...); respect that here.
