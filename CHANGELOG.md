@@ -6,6 +6,8 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-31
+
 ### Changed
 
 - Frontend styling moved to Tailwind CSS 4, compiled by the `@tailwindcss/vite`
