@@ -6,6 +6,8 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-31
+
 ### Changed
 
 - Dependency refresh: React 19, Vite 8 with `@vitejs/plugin-react` 6 (Rolldown
