@@ -27,7 +27,7 @@ export type ViewerToolbarProps = {
   viewOnly: boolean;
   onExtend: () => Promise<boolean>;
   isFullscreen: boolean;
-  tabBarSlotRef: React.RefObject<HTMLDivElement>;
+  tabBarSlotRef: React.RefObject<HTMLDivElement | null>;
   rendererStallVisible: boolean;
   rendererStalledSec: number;
   captureStallVisible: boolean;
