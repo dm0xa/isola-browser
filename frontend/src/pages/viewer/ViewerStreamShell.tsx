@@ -5,8 +5,8 @@ import type { useIsolaStream } from '../../hooks/useIsolaStream';
 import type { DocumentHeaders, IntelFetch } from '../../lib/intel';
 
 export type ViewerStreamShellProps = {
-  shellRef: React.RefObject<HTMLDivElement>;
-  canvasRef: React.RefObject<HTMLDivElement>;
+  shellRef: React.RefObject<HTMLDivElement | null>;
+  canvasRef: React.RefObject<HTMLDivElement | null>;
   containerStyle: React.CSSProperties;
   networkCaptureEnabled: boolean;
   netPanel: PanelLayout | 'off';
