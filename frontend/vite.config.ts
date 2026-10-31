@@ -22,8 +22,10 @@ export default defineConfig({
     target: 'es2022',
   },
   optimizeDeps: {
-    esbuildOptions: {
-      target: 'es2022',
+    rolldownOptions: {
+      transform: {
+        target: 'es2022',
+      },
     },
   },
   server: {
