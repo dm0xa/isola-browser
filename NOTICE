@@ -70,177 +70,139 @@ Chromium's `LICENSES.chromium.html` for the full set.
 
 | Package | Range | License | Copyright |
 |---|---|---|---|
-| `electron` | `45.0.0` | MIT | Copyright (c) Electron contributors; Copyright (c) 2013-2020 GitHub Inc. |
+| `electron` | `45.1.0` | MIT | Copyright (c) Electron contributors; Copyright (c) 2013-2020 GitHub Inc. |
 
 ## 4. Frontend — npm runtime dependencies
 
-42 packages bundled into the frontend build. License mix: MIT × 41, ISC × 1.
+39 packages bundled into the frontend build. License mix: MIT × 38, ISC × 1.
 
 | Package | Version | License | Copyright |
 |---|---|---|---|
-| `@remix-run/router` | `1.23.4` | MIT | Copyright (c) React Training LLC 2015-2019; Copyright (c) Remix Software Inc. 2020-2021; Copyright (c) Shopify Inc. 2022-2023 |
-| `@tanstack/query-core` | `5.104.5` | MIT | Copyright (c) 2021-present Tanner Linsley |
-| `@tanstack/react-query` | `5.104.5` | MIT | Copyright (c) 2021-present Tanner Linsley |
-| `@types/prop-types` | `15.7.15` | MIT | Copyright (c) Microsoft Corporation. |
-| `@types/react` | `18.3.31` | MIT | Copyright (c) Microsoft Corporation. |
-| `agent-base` | `6.0.2` | MIT | Copyright (c) Nathan Rajlich <nathan@tootallnate.net> (http://n8.io/) |
-| `asynckit` | `0.4.0` | MIT | Copyright (c) 2016 Alex Indigo |
-| `axios` | `1.20.0` | MIT | Copyright (c) Matt Zabriskie |
-| `call-bind-apply-helpers` | `1.0.2` | MIT | Copyright (c) 2024 Jordan Harband |
-| `combined-stream` | `1.0.8` | MIT | Copyright (c) 2011 Debuggable Limited <felix@debuggable.com> |
-| `csstype` | `3.2.3` | MIT | Copyright (c) 2017-2018 Fredrik Nicol |
-| `debug` | `4.4.3` | MIT | Copyright (c) 2014-2017 TJ Holowaychuk <tj@vision-media.ca>; Copyright (c) 2018-2021 Josh Junon |
-| `delayed-stream` | `1.0.0` | MIT | Copyright (c) 2011 Debuggable Limited <felix@debuggable.com> |
-| `dunder-proto` | `1.0.1` | MIT | Copyright (c) 2024 ECMAScript Shims |
-| `es-define-property` | `1.0.1` | MIT | Copyright (c) 2024 Jordan Harband |
-| `es-errors` | `1.3.0` | MIT | Copyright (c) 2024 Jordan Harband |
-| `es-object-atoms` | `1.1.2` | MIT | Copyright (c) 2024 Jordan Harband |
-| `es-set-tostringtag` | `2.1.0` | MIT | Copyright (c) 2022 ECMAScript Shims |
-| `follow-redirects` | `1.16.1` | MIT | Copyright 2014–present Olivier Lalonde <olalonde@gmail.com>, James Talmage <james@talmage.io>, Ruben Verborgh |
-| `form-data` | `4.0.6` | MIT | Copyright (c) 2012 Felix Geisendörfer (felix@debuggable.com) and contributors |
-| `function-bind` | `1.1.2` | MIT | Copyright (c) 2013 Raynos. |
-| `get-intrinsic` | `1.3.0` | MIT | Copyright (c) 2020 Jordan Harband |
-| `get-proto` | `1.0.1` | MIT | Copyright (c) 2025 Jordan Harband |
-| `gopd` | `1.2.0` | MIT | Copyright (c) 2022 Jordan Harband |
-| `has-symbols` | `1.1.0` | MIT | Copyright (c) 2016 Jordan Harband |
-| `has-tostringtag` | `1.0.2` | MIT | Copyright (c) 2021 Inspect JS |
-| `hasown` | `2.0.4` | MIT | Copyright (c) Jordan Harband and contributors |
-| `https-proxy-agent` | `5.0.1` | MIT | Copyright (c) Nathan Rajlich <nathan@tootallnate.net> (http://n8.io/) |
-| `js-tokens` | `4.0.0` | MIT | Copyright (c) 2014, 2015, 2016, 2017, 2018 Simon Lydell |
-| `loose-envify` | `1.4.0` | MIT | Copyright (c) 2015 Andres Suarez <zertosh@gmail.com> |
-| `lucide-react` | `0.451.0` | ISC | Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022. |
-| `math-intrinsics` | `1.1.0` | MIT | Copyright (c) 2024 ECMAScript Shims |
-| `mime-db` | `1.52.0` | MIT | Copyright (c) 2014 Jonathan Ong <me@jongleberry.com>; Copyright (c) 2015-2022 Douglas Christopher Wilson <doug@somethingdoug.com> |
-| `mime-types` | `2.1.35` | MIT | Copyright (c) 2014 Jonathan Ong <me@jongleberry.com>; Copyright (c) 2015 Douglas Christopher Wilson <doug@somethingdoug.com> |
-| `ms` | `2.1.3` | MIT | Copyright (c) 2020 Vercel, Inc. |
-| `proxy-from-env` | `2.1.0` | MIT | Copyright (C) 2016-2018 Rob Wu <rob@robwu.nl> |
-| `react` | `18.3.1` | MIT | Copyright (c) Facebook, Inc. and its affiliates. |
-| `react-dom` | `18.3.1` | MIT | Copyright (c) Facebook, Inc. and its affiliates. |
-| `react-router` | `6.30.6` | MIT | Copyright (c) React Training LLC 2015-2019; Copyright (c) Remix Software Inc. 2020-2021; Copyright (c) Shopify Inc. 2022-2023 |
-| `react-router-dom` | `6.30.6` | MIT | Copyright (c) React Training LLC 2015-2019; Copyright (c) Remix Software Inc. 2020-2021; Copyright (c) Shopify Inc. 2022-2023 |
-| `scheduler` | `0.23.2` | MIT | Copyright (c) Facebook, Inc. and its affiliates. |
-| `zustand` | `5.0.16` | MIT | Copyright (c) 2019 Paul Henschel |
+| `@remix-run/router` | `1.23.4` | MIT | _(not stated in license file)_ |
+| `@tanstack/query-core` | `5.105.0` | MIT | _(not stated in license file)_ |
+| `@tanstack/react-query` | `5.105.0` | MIT | _(not stated in license file)_ |
+| `@types/react` | `19.3.0` | MIT | _(not stated in license file)_ |
+| `agent-base` | `6.0.2` | MIT | _(not stated in license file)_ |
+| `asynckit` | `0.4.0` | MIT | _(not stated in license file)_ |
+| `axios` | `1.21.0` | MIT | _(not stated in license file)_ |
+| `call-bind-apply-helpers` | `1.0.2` | MIT | _(not stated in license file)_ |
+| `combined-stream` | `1.0.8` | MIT | _(not stated in license file)_ |
+| `csstype` | `3.2.3` | MIT | _(not stated in license file)_ |
+| `debug` | `4.4.3` | MIT | _(not stated in license file)_ |
+| `delayed-stream` | `1.0.0` | MIT | _(not stated in license file)_ |
+| `dunder-proto` | `1.0.1` | MIT | _(not stated in license file)_ |
+| `es-define-property` | `1.0.1` | MIT | _(not stated in license file)_ |
+| `es-errors` | `1.3.0` | MIT | _(not stated in license file)_ |
+| `es-object-atoms` | `1.1.2` | MIT | _(not stated in license file)_ |
+| `es-set-tostringtag` | `2.1.0` | MIT | _(not stated in license file)_ |
+| `follow-redirects` | `1.16.1` | MIT | _(not stated in license file)_ |
+| `form-data` | `4.0.6` | MIT | _(not stated in license file)_ |
+| `function-bind` | `1.1.2` | MIT | _(not stated in license file)_ |
+| `get-intrinsic` | `1.3.0` | MIT | _(not stated in license file)_ |
+| `get-proto` | `1.0.1` | MIT | _(not stated in license file)_ |
+| `gopd` | `1.2.0` | MIT | _(not stated in license file)_ |
+| `has-symbols` | `1.1.0` | MIT | _(not stated in license file)_ |
+| `has-tostringtag` | `1.0.2` | MIT | _(not stated in license file)_ |
+| `hasown` | `2.0.4` | MIT | _(not stated in license file)_ |
+| `https-proxy-agent` | `5.0.1` | MIT | _(not stated in license file)_ |
+| `lucide-react` | `1.63.0` | ISC | _(not stated in license file)_ |
+| `math-intrinsics` | `1.1.0` | MIT | _(not stated in license file)_ |
+| `mime-db` | `1.52.0` | MIT | _(not stated in license file)_ |
+| `mime-types` | `2.1.35` | MIT | _(not stated in license file)_ |
+| `ms` | `2.1.3` | MIT | _(not stated in license file)_ |
+| `proxy-from-env` | `2.1.0` | MIT | _(not stated in license file)_ |
+| `react` | `19.3.1` | MIT | _(not stated in license file)_ |
+| `react-dom` | `19.3.1` | MIT | _(not stated in license file)_ |
+| `react-router` | `6.30.6` | MIT | _(not stated in license file)_ |
+| `react-router-dom` | `6.30.6` | MIT | _(not stated in license file)_ |
+| `scheduler` | `0.28.0` | MIT | _(not stated in license file)_ |
+| `zustand` | `5.0.16` | MIT | _(not stated in license file)_ |
 
 ## 5. Frontend — npm build/development dependencies
 
-324 packages used only to build, test and lint the frontend. They are
+290 packages used only to build, test and lint the frontend. They are
 not redistributed in the production bundle, but are listed for completeness.
-License mix: MIT × 264, Apache-2.0 × 18, ISC × 13, MPL-2.0 × 12, BSD-2-Clause × 8, BSD-3-Clause × 3, BlueOak-1.0.0 × 2, MIT-0 × 2, CC-BY-4.0 × 1, CC0-1.0 × 1.
+License mix: MIT × 218, MPL-2.0 × 24, Apache-2.0 × 18, ISC × 12, BSD-2-Clause × 8, BSD-3-Clause × 3, BlueOak-1.0.0 × 2, MIT-0 × 2, 0BSD × 1, CC-BY-4.0 × 1, CC0-1.0 × 1.
 
 | Package | Version | License | Copyright |
 |---|---|---|---|
-| `@adobe/css-tools` | `4.5.0` | MIT | Copyright (c) 2012 TJ Holowaychuk <tj@vision-media.ca>; Copyright (c) 2022 Jean-Philippe Zolesio <holblin@gmail.com> |
-| `@asamuzakjp/css-color` | `5.1.11` | MIT | Copyright (c) 2024 asamuzaK (Kazz) |
-| `@asamuzakjp/dom-selector` | `7.1.1` | MIT | Copyright (c) 2023 asamuzaK (Kazz) |
-| `@asamuzakjp/generational-cache` | `1.0.1` | MIT | Copyright (c) 2026 asamuzaK (Kazz) |
-| `@asamuzakjp/nwsapi` | `2.3.9` | MIT | Copyright (c) 2007-2019 Diego Perini (http://www.iport.it/) |
-| `@babel/code-frame` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/compat-data` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/core` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/generator` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/helper-compilation-targets` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/helper-globals` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/helper-module-imports` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/helper-module-transforms` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/helper-plugin-utils` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/helper-string-parser` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/helper-validator-identifier` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/helper-validator-option` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/helpers` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors; Copyright (c) 2014-present, Facebook, Inc. (ONLY ./src/helpers/regenerator* files) |
-| `@babel/parser` | `7.29.7` | MIT | Copyright (C) 2012-2014 by various contributors (see AUTHORS) |
-| `@babel/plugin-transform-react-jsx-self` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/plugin-transform-react-jsx-source` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/runtime` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/template` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/traverse` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@babel/types` | `7.29.7` | MIT | Copyright (c) 2014-present Sebastian McKenzie and other contributors |
-| `@bramus/specificity` | `2.4.2` | MIT | Copyright (c) 2022 Bramus Van Damme - https://www.bram.us/ |
-| `@cacheable/memory` | `2.2.0` | MIT | Copyright (c) Jared Wray <me@jaredwray.com> |
-| `@cacheable/utils` | `2.5.0` | MIT | Copyright (c) Jared Wray <me@jaredwray.com> |
-| `@csstools/color-helpers` | `6.0.2` | MIT-0 | Copyright © CSSTools Contributors |
-| `@csstools/css-calc` | `3.2.1` | MIT | Copyright 2022 Romain Menke, Antonio Laguna <antonio@laguna.es> |
-| `@csstools/css-color-parser` | `4.1.8` | MIT | Copyright 2022 Romain Menke, Antonio Laguna <antonio@laguna.es> |
-| `@csstools/css-parser-algorithms` | `4.0.0` | MIT | Copyright 2022 Romain Menke, Antonio Laguna <antonio@laguna.es> |
-| `@csstools/css-syntax-patches-for-csstree` | `1.1.5` | MIT-0 | Copyright © CSSTools Contributors |
-| `@csstools/css-tokenizer` | `4.0.0` | MIT | Copyright 2022 Romain Menke, Antonio Laguna <antonio@laguna.es> |
-| `@esbuild/aix-ppc64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/android-arm` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/android-arm64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/android-x64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/darwin-arm64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/darwin-x64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/freebsd-arm64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/freebsd-x64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/linux-arm` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/linux-arm64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/linux-ia32` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/linux-loong64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/linux-mips64el` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/linux-ppc64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/linux-riscv64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/linux-s390x` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/linux-x64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/netbsd-arm64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/netbsd-x64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/openbsd-arm64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/openbsd-x64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/openharmony-arm64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/sunos-x64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/win32-arm64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/win32-ia32` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@esbuild/win32-x64` | `0.25.12` | MIT | _(not stated in license file)_ |
-| `@eslint-community/eslint-utils` | `4.9.1` | MIT | Copyright (c) 2018 Toru Nagashima |
-| `@eslint-community/regexpp` | `4.12.2` | MIT | Copyright (c) 2018 Toru Nagashima |
-| `@eslint/config-array` | `0.23.5` | Apache-2.0 | Copyright (c) Nicholas C. Zakas |
+| `@adobe/css-tools` | `4.5.0` | MIT | _(not stated in license file)_ |
+| `@asamuzakjp/css-color` | `5.1.11` | MIT | _(not stated in license file)_ |
+| `@asamuzakjp/dom-selector` | `7.1.1` | MIT | _(not stated in license file)_ |
+| `@asamuzakjp/generational-cache` | `1.0.1` | MIT | _(not stated in license file)_ |
+| `@asamuzakjp/nwsapi` | `2.3.9` | MIT | _(not stated in license file)_ |
+| `@babel/code-frame` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/compat-data` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/core` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/generator` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/helper-compilation-targets` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/helper-globals` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/helper-module-imports` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/helper-module-transforms` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/helper-string-parser` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/helper-validator-identifier` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/helper-validator-option` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/helpers` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/parser` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/runtime` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/template` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/traverse` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@babel/types` | `7.29.7` | MIT | _(not stated in license file)_ |
+| `@bramus/specificity` | `2.4.2` | MIT | _(not stated in license file)_ |
+| `@cacheable/memory` | `2.2.0` | MIT | _(not stated in license file)_ |
+| `@cacheable/utils` | `2.5.0` | MIT | _(not stated in license file)_ |
+| `@csstools/color-helpers` | `6.0.2` | MIT-0 | _(not stated in license file)_ |
+| `@csstools/css-calc` | `3.2.1` | MIT | _(not stated in license file)_ |
+| `@csstools/css-color-parser` | `4.1.8` | MIT | _(not stated in license file)_ |
+| `@csstools/css-parser-algorithms` | `4.0.0` | MIT | _(not stated in license file)_ |
+| `@csstools/css-syntax-patches-for-csstree` | `1.1.5` | MIT-0 | _(not stated in license file)_ |
+| `@csstools/css-tokenizer` | `4.0.0` | MIT | _(not stated in license file)_ |
+| `@emnapi/core` | `1.11.1` | MIT | _(not stated in license file)_ |
+| `@emnapi/runtime` | `1.11.1` | MIT | _(not stated in license file)_ |
+| `@emnapi/wasi-threads` | `1.2.2` | MIT | _(not stated in license file)_ |
+| `@eslint-community/eslint-utils` | `4.9.1` | MIT | _(not stated in license file)_ |
+| `@eslint-community/regexpp` | `4.12.2` | MIT | _(not stated in license file)_ |
+| `@eslint/config-array` | `0.23.5` | Apache-2.0 | _(not stated in license file)_ |
 | `@eslint/config-helpers` | `0.7.0` | Apache-2.0 | _(not stated in license file)_ |
-| `@eslint/core` | `1.2.1` | Apache-2.0 | Copyright (c) Nicholas C. Zakas |
+| `@eslint/core` | `1.2.1` | Apache-2.0 | _(not stated in license file)_ |
 | `@eslint/js` | `9.39.4` | MIT | _(not stated in license file)_ |
-| `@eslint/object-schema` | `3.0.5` | Apache-2.0 | Copyright (c) Nicholas C. Zakas |
-| `@eslint/plugin-kit` | `0.7.3` | Apache-2.0 | Copyright (c) Nicholas C. Zakas |
-| `@exodus/bytes` | `1.15.1` | MIT | Copyright (c) 2024-2025 Exodus Movement |
-| `@humanfs/core` | `0.19.2` | Apache-2.0 | Copyright (c) Nicholas C. Zakas |
-| `@humanfs/node` | `0.16.8` | Apache-2.0 | Copyright (c) Nicholas C. Zakas |
-| `@humanfs/types` | `0.15.0` | Apache-2.0 | Copyright (c) Nicholas C. Zakas |
-| `@humanwhocodes/module-importer` | `1.0.1` | Apache-2.0 | Copyright (c) Nicholas C. Zaks |
-| `@humanwhocodes/retry` | `0.4.3` | Apache-2.0 | Copyright (c) Nicholas C. Zaks |
-| `@jridgewell/gen-mapping` | `0.3.13` | MIT | Copyright 2024 Justin Ridgewell <justin@ridgewell.name> |
-| `@jridgewell/remapping` | `2.3.5` | MIT | Copyright 2024 Justin Ridgewell <justin@ridgewell.name> |
-| `@jridgewell/resolve-uri` | `3.1.2` | MIT | Copyright 2019 Justin Ridgewell <jridgewell@google.com> |
-| `@jridgewell/sourcemap-codec` | `1.5.5` | MIT | Copyright 2024 Justin Ridgewell <justin@ridgewell.name> |
-| `@jridgewell/trace-mapping` | `0.3.31` | MIT | Copyright 2024 Justin Ridgewell <justin@ridgewell.name> |
-| `@keyv/bigmap` | `1.3.1` | MIT | Copyright (c) Jared Wray |
-| `@keyv/serialize` | `1.1.1` | MIT | Copyright (c) 2017-2021 Luke Childs; Copyright (c) 2021-2022 Jared Wray |
-| `@rolldown/pluginutils` | `1.0.0-beta.27` | MIT | Copyright (c) 2024-present VoidZero Inc. & Contributors |
-| `@rollup/rollup-android-arm-eabi` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-android-arm64` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-darwin-arm64` | `4.62.0` | MIT | Copyright (c) Lukas Taegert-Atkinson |
-| `@rollup/rollup-darwin-x64` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-freebsd-arm64` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-freebsd-x64` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-linux-arm-gnueabihf` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-linux-arm-musleabihf` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-linux-arm64-gnu` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-linux-arm64-musl` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-linux-loong64-gnu` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-linux-loong64-musl` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-linux-ppc64-gnu` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-linux-ppc64-musl` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-linux-riscv64-gnu` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-linux-riscv64-musl` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-linux-s390x-gnu` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-linux-x64-gnu` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-linux-x64-musl` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-openbsd-x64` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-openharmony-arm64` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-win32-arm64-msvc` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-win32-ia32-msvc` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-win32-x64-gnu` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@rollup/rollup-win32-x64-msvc` | `4.62.0` | MIT | _(not stated in license file)_ |
-| `@standard-schema/spec` | `1.1.0` | MIT | Copyright (c) 2024 Colin McDonnell |
-| `@tailwindcss/node` | `4.3.3` | MIT | Copyright (c) Tailwind Labs, Inc. |
-| `@tailwindcss/oxide` | `4.3.3` | MIT | Copyright (c) Tailwind Labs, Inc. |
+| `@eslint/object-schema` | `3.0.5` | Apache-2.0 | _(not stated in license file)_ |
+| `@eslint/plugin-kit` | `0.7.3` | Apache-2.0 | _(not stated in license file)_ |
+| `@exodus/bytes` | `1.15.1` | MIT | _(not stated in license file)_ |
+| `@humanfs/core` | `0.19.2` | Apache-2.0 | _(not stated in license file)_ |
+| `@humanfs/node` | `0.16.8` | Apache-2.0 | _(not stated in license file)_ |
+| `@humanfs/types` | `0.15.0` | Apache-2.0 | _(not stated in license file)_ |
+| `@humanwhocodes/module-importer` | `1.0.1` | Apache-2.0 | _(not stated in license file)_ |
+| `@humanwhocodes/retry` | `0.4.3` | Apache-2.0 | _(not stated in license file)_ |
+| `@jridgewell/gen-mapping` | `0.3.13` | MIT | _(not stated in license file)_ |
+| `@jridgewell/remapping` | `2.3.5` | MIT | _(not stated in license file)_ |
+| `@jridgewell/resolve-uri` | `3.1.2` | MIT | _(not stated in license file)_ |
+| `@jridgewell/sourcemap-codec` | `1.6.0` | MIT | _(not stated in license file)_ |
+| `@jridgewell/trace-mapping` | `0.3.31` | MIT | _(not stated in license file)_ |
+| `@keyv/bigmap` | `1.3.1` | MIT | _(not stated in license file)_ |
+| `@keyv/serialize` | `1.1.1` | MIT | _(not stated in license file)_ |
+| `@napi-rs/wasm-runtime` | `1.1.4` | MIT | _(not stated in license file)_ |
+| `@oxc-project/types` | `0.155.0` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-android-arm-eabi` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-android-arm64` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-darwin-arm64` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-darwin-x64` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-freebsd-x64` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-linux-arm-gnueabihf` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-linux-arm64-gnu` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-linux-arm64-musl` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-linux-ppc64-gnu` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-linux-s390x-gnu` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-linux-x64-gnu` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-linux-x64-musl` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-openharmony-arm64` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-win32-arm64-msvc` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/binding-win32-x64-msvc` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `@rolldown/pluginutils` | `1.0.1` | MIT | _(not stated in license file)_ |
+| `@tailwindcss/node` | `4.3.3` | MIT | _(not stated in license file)_ |
+| `@tailwindcss/oxide` | `4.3.3` | MIT | _(not stated in license file)_ |
 | `@tailwindcss/oxide-android-arm64` | `4.3.3` | MIT | _(not stated in license file)_ |
-| `@tailwindcss/oxide-darwin-arm64` | `4.3.3` | MIT | Copyright (c) Tailwind Labs, Inc. |
+| `@tailwindcss/oxide-darwin-arm64` | `4.3.3` | MIT | _(not stated in license file)_ |
 | `@tailwindcss/oxide-darwin-x64` | `4.3.3` | MIT | _(not stated in license file)_ |
 | `@tailwindcss/oxide-freebsd-x64` | `4.3.3` | MIT | _(not stated in license file)_ |
 | `@tailwindcss/oxide-linux-arm-gnueabihf` | `4.3.3` | MIT | _(not stated in license file)_ |
@@ -251,215 +213,216 @@ License mix: MIT × 264, Apache-2.0 × 18, ISC × 13, MPL-2.0 × 12, BSD-2-Claus
 | `@tailwindcss/oxide-wasm32-wasi` | `4.3.3` | MIT | _(not stated in license file)_ |
 | `@tailwindcss/oxide-win32-arm64-msvc` | `4.3.3` | MIT | _(not stated in license file)_ |
 | `@tailwindcss/oxide-win32-x64-msvc` | `4.3.3` | MIT | _(not stated in license file)_ |
-| `@tailwindcss/vite` | `4.3.3` | MIT | Copyright (c) Tailwind Labs, Inc. |
-| `@testing-library/dom` | `10.4.1` | MIT | Copyright (c) 2017 Kent C. Dodds |
-| `@testing-library/jest-dom` | `7.0.1` | MIT | Copyright (c) 2017 Kent C. Dodds |
-| `@testing-library/react` | `16.3.3` | MIT | Copyright (c) 2017-Present Kent C. Dodds |
-| `@types/aria-query` | `5.0.4` | MIT | Copyright (c) Microsoft Corporation. |
-| `@types/babel__core` | `7.20.5` | MIT | Copyright (c) Microsoft Corporation. |
-| `@types/babel__generator` | `7.27.0` | MIT | Copyright (c) Microsoft Corporation. |
-| `@types/babel__template` | `7.4.4` | MIT | Copyright (c) Microsoft Corporation. |
-| `@types/babel__traverse` | `7.28.0` | MIT | Copyright (c) Microsoft Corporation. |
-| `@types/chai` | `5.2.3` | MIT | Copyright (c) Microsoft Corporation. |
-| `@types/deep-eql` | `4.0.2` | MIT | Copyright (c) Microsoft Corporation. |
-| `@types/esrecurse` | `4.3.1` | MIT | Copyright (c) Microsoft Corporation. |
-| `@types/estree` | `1.0.9` | MIT | Copyright (c) Microsoft Corporation. |
-| `@types/json-schema` | `7.0.15` | MIT | Copyright (c) Microsoft Corporation. |
-| `@types/node` | `26.6.5` | MIT | Copyright (c) Microsoft Corporation. |
-| `@types/react-dom` | `18.3.7` | MIT | Copyright (c) Microsoft Corporation. |
-| `@typescript-eslint/eslint-plugin` | `8.72.0` | MIT | Copyright (c) 2019 typescript-eslint and other contributors |
-| `@typescript-eslint/parser` | `8.72.0` | MIT | Copyright (c) 2019 typescript-eslint and other contributors |
-| `@typescript-eslint/project-service` | `8.72.0` | MIT | Copyright (c) 2025 typescript-eslint and other contributors |
-| `@typescript-eslint/scope-manager` | `8.72.0` | MIT | Copyright (c) 2019 typescript-eslint and other contributors |
-| `@typescript-eslint/tsconfig-utils` | `8.72.0` | MIT | Copyright (c) 2025 typescript-eslint and other contributors |
-| `@typescript-eslint/type-utils` | `8.72.0` | MIT | Copyright (c) 2021 typescript-eslint and other contributors |
-| `@typescript-eslint/types` | `8.72.0` | MIT | Copyright (c) 2019 typescript-eslint and other contributors |
-| `@typescript-eslint/typescript-estree` | `8.72.0` | MIT | Copyright (c) 2019 typescript-eslint and other contributors |
-| `@typescript-eslint/utils` | `8.72.0` | MIT | Copyright (c) 2019 typescript-eslint and other contributors |
-| `@typescript-eslint/visitor-keys` | `8.72.0` | MIT | Copyright (c) 2019 typescript-eslint and other contributors |
-| `@vitejs/plugin-react` | `4.7.0` | MIT | Copyright (c) 2019-present, Yuxi (Evan) You and Vite contributors |
-| `@vitest/expect` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `@vitest/mocker` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `@vitest/pretty-format` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `@vitest/runner` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `@vitest/snapshot` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `@vitest/spy` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `@vitest/utils` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `acorn` | `8.19.0` | MIT | Copyright (C) 2012-2022 by various contributors (see AUTHORS) |
-| `acorn-jsx` | `5.3.2` | MIT | Copyright (C) 2012-2017 by Ingvar Stepanyan |
-| `ajv` | `6.15.0` | MIT | Copyright (c) 2015-2017 Evgeny Poberezkin |
-| `ansi-regex` | `5.0.1` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com) |
-| `ansi-styles` | `5.2.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com) |
-| `aria-query` | `5.3.0` | Apache-2.0 | Copyright 2020 A11yance |
-| `assertion-error` | `2.0.1` | MIT | Copyright (c) 2013 Jake Luer jake@qualiancy.com (http://qualiancy.com) |
+| `@tailwindcss/vite` | `4.3.3` | MIT | _(not stated in license file)_ |
+| `@testing-library/dom` | `10.4.1` | MIT | _(not stated in license file)_ |
+| `@testing-library/jest-dom` | `7.0.1` | MIT | _(not stated in license file)_ |
+| `@testing-library/react` | `16.3.3` | MIT | _(not stated in license file)_ |
+| `@tybys/wasm-util` | `0.10.2` | MIT | _(not stated in license file)_ |
+| `@types/aria-query` | `5.0.4` | MIT | _(not stated in license file)_ |
+| `@types/chai` | `5.2.3` | MIT | _(not stated in license file)_ |
+| `@types/deep-eql` | `4.0.2` | MIT | _(not stated in license file)_ |
+| `@types/esrecurse` | `4.3.1` | MIT | _(not stated in license file)_ |
+| `@types/estree` | `1.0.9` | MIT | _(not stated in license file)_ |
+| `@types/json-schema` | `7.0.15` | MIT | _(not stated in license file)_ |
+| `@types/node` | `26.6.5` | MIT | _(not stated in license file)_ |
+| `@types/react-dom` | `19.3.0` | MIT | _(not stated in license file)_ |
+| `@typescript-eslint/eslint-plugin` | `8.72.1` | MIT | _(not stated in license file)_ |
+| `@typescript-eslint/parser` | `8.72.1` | MIT | _(not stated in license file)_ |
+| `@typescript-eslint/project-service` | `8.72.1` | MIT | _(not stated in license file)_ |
+| `@typescript-eslint/scope-manager` | `8.72.1` | MIT | _(not stated in license file)_ |
+| `@typescript-eslint/tsconfig-utils` | `8.72.1` | MIT | _(not stated in license file)_ |
+| `@typescript-eslint/type-utils` | `8.72.1` | MIT | _(not stated in license file)_ |
+| `@typescript-eslint/types` | `8.72.1` | MIT | _(not stated in license file)_ |
+| `@typescript-eslint/typescript-estree` | `8.72.1` | MIT | _(not stated in license file)_ |
+| `@typescript-eslint/utils` | `8.72.1` | MIT | _(not stated in license file)_ |
+| `@typescript-eslint/visitor-keys` | `8.72.1` | MIT | _(not stated in license file)_ |
+| `@vitejs/plugin-react` | `6.1.2` | MIT | _(not stated in license file)_ |
+| `@vitest/mocker` | `5.0.5` | MIT | _(not stated in license file)_ |
+| `@vitest/spy` | `5.0.5` | MIT | _(not stated in license file)_ |
+| `acorn` | `8.19.0` | MIT | _(not stated in license file)_ |
+| `acorn-jsx` | `5.3.2` | MIT | _(not stated in license file)_ |
+| `ajv` | `6.15.0` | MIT | _(not stated in license file)_ |
+| `ansi-regex` | `5.0.1` | MIT | _(not stated in license file)_ |
+| `ansi-styles` | `5.2.0` | MIT | _(not stated in license file)_ |
+| `aria-query` | `5.3.0` | Apache-2.0 | _(not stated in license file)_ |
+| `assertion-error` | `2.0.1` | MIT | _(not stated in license file)_ |
 | `balanced-match` | `4.0.4` | MIT | _(not stated in license file)_ |
 | `baseline-browser-mapping` | `2.11.31` | Apache-2.0 | _(not stated in license file)_ |
-| `bidi-js` | `1.0.3` | MIT | Copyright (c) 2021 Jason Johnston |
+| `bidi-js` | `1.0.3` | MIT | _(not stated in license file)_ |
 | `brace-expansion` | `5.0.12` | MIT | _(not stated in license file)_ |
-| `browserslist` | `4.29.4` | MIT | Copyright 2014 Andrey Sitnik <andrey@sitnik.es> and other contributors |
-| `cacheable` | `2.5.0` | MIT | Copyright (c) Jared Wray <me@jaredwray.com> |
-| `caniuse-lite` | `1.0.30001819` | CC-BY-4.0 | Copyright (c) Ben Briggs |
-| `chai` | `6.3.0` | MIT | Copyright (c) 2017 Chai.js Assertion Library |
-| `convert-source-map` | `2.0.0` | MIT | Copyright 2013 Thorsten Lorenz. |
-| `cross-spawn` | `7.0.6` | MIT | Copyright (c) 2018 Made With MOXY Lda <hello@moxy.studio> |
-| `css-tree` | `3.2.1` | MIT | Copyright (C) 2016-2026 by Roman Dvornov |
-| `css.escape` | `1.5.1` | MIT | Copyright (c) Mathias Bynens |
-| `data-urls` | `7.0.0` | MIT | Copyright © Domenic Denicola <d@domenic.me> |
-| `decimal.js` | `10.6.0` | MIT | Copyright (c) 2025 Michael Mclaughlin |
-| `deep-is` | `0.1.4` | MIT | Copyright (c) 2012, 2013 Thorsten Lorenz <thlorenz@gmx.de>; Copyright (c) 2012 James Halliday <mail@substack.net>; Copyright (c) 2009 Thomas Robinson <280north.com> |
-| `dequal` | `2.0.3` | MIT | Copyright (c) Luke Edwards <luke.edwards05@gmail.com> (lukeed.com) |
-| `detect-libc` | `2.1.2` | Apache-2.0 | Copyright (c) Lovell Fuller <npm@lovell.info> |
-| `dom-accessibility-api` | `0.6.3` | MIT | Copyright (c) 2020 Sebastian Silbermann |
-| `dom-accessibility-api` | `0.5.16` | MIT | Copyright (c) 2020 Sebastian Silbermann |
-| `electron-to-chromium` | `1.5.463` | ISC | Copyright 2018 Kilian Valkhof |
-| `enhanced-resolve` | `5.26.0` | MIT | Copyright (c) Tobias Koppers @sokra |
-| `entities` | `8.0.0` | BSD-2-Clause | Copyright (c) Felix Böhm |
-| `es-module-lexer` | `2.1.0` | MIT | Copyright (C) 2018-2022 Guy Bedford |
-| `esbuild` | `0.25.12` | MIT | Copyright (c) 2020 Evan Wallace |
-| `escalade` | `3.2.0` | MIT | Copyright (c) Luke Edwards <luke.edwards05@gmail.com> (lukeed.com) |
-| `escape-string-regexp` | `4.0.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |
-| `eslint` | `10.13.0` | MIT | Copyright (c) Nicholas C. Zakas <nicholas+npm@nczconsulting.com> |
-| `eslint-plugin-react-hooks` | `7.1.1` | MIT | Copyright (c) Meta Platforms, Inc. and affiliates. |
-| `eslint-plugin-react-refresh` | `0.5.7` | MIT | Copyright (c) Arnaud Barré (https://github.com/ArnaudBarre) |
-| `eslint-scope` | `9.1.2` | BSD-2-Clause | Copyright (C) 2012-2013 Yusuke Suzuki (twitter: @Constellation) and other contributors. |
-| `eslint-visitor-keys` | `3.4.3` | Apache-2.0 | Copyright (c) Toru Nagashima (https://github.com/mysticatea) |
-| `eslint-visitor-keys` | `5.0.1` | Apache-2.0 | Copyright (c) Toru Nagashima (https://github.com/mysticatea) |
-| `espree` | `11.2.0` | BSD-2-Clause | Copyright (c) Open JS Foundation |
-| `esquery` | `1.7.0` | BSD-3-Clause | Copyright (c) 2013, Joel Feenstra |
+| `browserslist` | `4.29.4` | MIT | _(not stated in license file)_ |
+| `cacheable` | `2.5.0` | MIT | _(not stated in license file)_ |
+| `caniuse-lite` | `1.0.30001819` | CC-BY-4.0 | _(not stated in license file)_ |
+| `chai` | `6.3.0` | MIT | _(not stated in license file)_ |
+| `convert-source-map` | `2.0.0` | MIT | _(not stated in license file)_ |
+| `cross-spawn` | `7.0.6` | MIT | _(not stated in license file)_ |
+| `css-tree` | `3.2.1` | MIT | _(not stated in license file)_ |
+| `css.escape` | `1.5.1` | MIT | _(not stated in license file)_ |
+| `data-urls` | `7.0.0` | MIT | _(not stated in license file)_ |
+| `decimal.js` | `10.6.0` | MIT | _(not stated in license file)_ |
+| `deep-is` | `0.1.4` | MIT | _(not stated in license file)_ |
+| `dequal` | `2.0.3` | MIT | _(not stated in license file)_ |
+| `detect-libc` | `2.1.2` | Apache-2.0 | _(not stated in license file)_ |
+| `dom-accessibility-api` | `0.6.3` | MIT | _(not stated in license file)_ |
+| `dom-accessibility-api` | `0.5.16` | MIT | _(not stated in license file)_ |
+| `electron-to-chromium` | `1.5.463` | ISC | _(not stated in license file)_ |
+| `enhanced-resolve` | `5.26.0` | MIT | _(not stated in license file)_ |
+| `entities` | `8.0.0` | BSD-2-Clause | _(not stated in license file)_ |
+| `es-module-lexer` | `2.3.2` | MIT | _(not stated in license file)_ |
+| `escalade` | `3.2.0` | MIT | _(not stated in license file)_ |
+| `escape-string-regexp` | `4.0.0` | MIT | _(not stated in license file)_ |
+| `eslint` | `10.13.0` | MIT | _(not stated in license file)_ |
+| `eslint-plugin-react-hooks` | `7.1.1` | MIT | _(not stated in license file)_ |
+| `eslint-plugin-react-refresh` | `0.5.7` | MIT | _(not stated in license file)_ |
+| `eslint-scope` | `9.1.2` | BSD-2-Clause | _(not stated in license file)_ |
+| `eslint-visitor-keys` | `3.4.3` | Apache-2.0 | _(not stated in license file)_ |
+| `eslint-visitor-keys` | `5.0.1` | Apache-2.0 | _(not stated in license file)_ |
+| `espree` | `11.2.0` | BSD-2-Clause | _(not stated in license file)_ |
+| `esquery` | `1.7.0` | BSD-3-Clause | _(not stated in license file)_ |
 | `esrecurse` | `4.3.0` | BSD-2-Clause | _(not stated in license file)_ |
 | `estraverse` | `5.3.0` | BSD-2-Clause | _(not stated in license file)_ |
-| `estree-walker` | `3.0.3` | MIT | Copyright (c) 2015-20 [these people](https://github.com/Rich-Harris/estree-walker/graphs/contributors) |
+| `estree-walker` | `3.0.3` | MIT | _(not stated in license file)_ |
 | `esutils` | `2.0.3` | BSD-2-Clause | _(not stated in license file)_ |
-| `expect-type` | `1.3.0` | Apache-2.0 | Copyright 2024 Misha Kaletsky |
-| `fast-deep-equal` | `3.1.3` | MIT | Copyright (c) 2017 Evgeny Poberezkin |
-| `fast-json-stable-stringify` | `2.1.0` | MIT | Copyright (c) 2017 Evgeny Poberezkin; Copyright (c) 2013 James Halliday |
-| `fast-levenshtein` | `2.0.6` | MIT | Copyright (c) 2013 [Ramesh Nair](http://www.hiddentao.com/) |
-| `fdir` | `6.5.0` | MIT | Copyright 2023 Abdullah Atta |
-| `file-entry-cache` | `11.1.5` | MIT | Copyright (c) Jared Wray <me@jaredwray.com> |
-| `find-up` | `5.0.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |
-| `flat-cache` | `6.1.23` | MIT | Copyright (c) Jared Wray <me@jaredwray.com> |
-| `flatted` | `3.4.4` | ISC | Copyright (c) 2018-2020, Andrea Giammarchi, @WebReflection |
-| `fsevents` | `2.3.3` | MIT | Copyright (C) 2010-2020 by Philipp Dunkel, Ben Noordhuis, Elan Shankar, Paul Miller |
-| `gensync` | `1.0.0-beta.2` | MIT | Copyright 2018 Logan Smyth <loganfsmyth@gmail.com> |
-| `glob-parent` | `6.0.2` | ISC | Copyright (c) 2015, 2019 Elan Shanker, 2021 Blaine Bublitz <blaine.bublitz@gmail.com>, Eric Schoffstall <yo@contra.io> and other contributors |
-| `globals` | `17.13.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |
-| `graceful-fs` | `4.2.11` | ISC | Copyright (c) 2011-2022 Isaac Z. Schlueter, Ben Noordhuis, and Contributors |
-| `hashery` | `1.5.1` | MIT | Copyright (c) 2025 Jared Wray |
-| `hermes-estree` | `0.25.1` | MIT | Copyright (c) Meta Platforms, Inc. and affiliates. |
-| `hermes-parser` | `0.25.1` | MIT | Copyright (c) Meta Platforms, Inc. and affiliates. |
-| `hookified` | `1.15.1` | MIT | Copyright (c) Jared Wray <me@jaredwray.com> |
-| `hookified` | `2.2.0` | MIT | Copyright (c) Jared Wray <me@jaredwray.com> |
-| `html-encoding-sniffer` | `6.0.0` | MIT | Copyright © Domenic Denicola <d@domenic.me> |
-| `ignore` | `7.0.13` | MIT | Copyright (c) kael |
-| `ignore` | `5.3.2` | MIT | Copyright (c) kael |
-| `imurmurhash` | `0.1.4` | MIT | Copyright (c) Jens Taylor |
-| `indent-string` | `4.0.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com) |
-| `is-extglob` | `2.1.1` | MIT | Copyright (c) 2014-2016, Jon Schlinkert |
-| `is-glob` | `4.0.3` | MIT | Copyright (c) 2014-2017, Jon Schlinkert. |
-| `is-potential-custom-element-name` | `1.0.1` | MIT | Copyright (c) Mathias Bynens |
-| `isexe` | `2.0.0` | ISC | Copyright (c) Isaac Z. Schlueter and Contributors |
-| `jiti` | `2.7.0` | MIT | Copyright (c) Pooya Parsa <pooya@pi0.io> |
-| `jsdom` | `29.1.1` | MIT | Copyright (c) 2010 Elijah Insua |
-| `jsesc` | `3.1.0` | MIT | Copyright (c) Mathias Bynens |
-| `json-schema-traverse` | `0.4.1` | MIT | Copyright (c) 2017 Evgeny Poberezkin |
-| `json-stable-stringify-without-jsonify` | `1.0.1` | MIT | Copyright (c) James Halliday |
-| `json5` | `2.2.3` | MIT | Copyright (c) 2012-2018 Aseem Kishore, and [others]. |
-| `keyv` | `5.6.0` | MIT | Copyright (c) 2017-2021 Luke Childs; Copyright (c) 2021-2022 Jared Wray |
-| `levn` | `0.4.1` | MIT | Copyright (c) George Zahariev |
+| `expect-type` | `1.4.0` | Apache-2.0 | _(not stated in license file)_ |
+| `fast-deep-equal` | `3.1.3` | MIT | _(not stated in license file)_ |
+| `fast-json-stable-stringify` | `2.1.0` | MIT | _(not stated in license file)_ |
+| `fast-levenshtein` | `2.0.6` | MIT | _(not stated in license file)_ |
+| `fdir` | `6.5.0` | MIT | _(not stated in license file)_ |
+| `file-entry-cache` | `11.1.5` | MIT | _(not stated in license file)_ |
+| `find-up` | `5.0.0` | MIT | _(not stated in license file)_ |
+| `flat-cache` | `6.1.23` | MIT | _(not stated in license file)_ |
+| `flatted` | `3.4.4` | ISC | _(not stated in license file)_ |
+| `fsevents` | `2.3.3` | MIT | _(not stated in license file)_ |
+| `gensync` | `1.0.0-beta.2` | MIT | _(not stated in license file)_ |
+| `glob-parent` | `6.0.2` | ISC | _(not stated in license file)_ |
+| `globals` | `17.13.0` | MIT | _(not stated in license file)_ |
+| `graceful-fs` | `4.2.11` | ISC | _(not stated in license file)_ |
+| `hashery` | `1.5.1` | MIT | _(not stated in license file)_ |
+| `hermes-estree` | `0.25.1` | MIT | _(not stated in license file)_ |
+| `hermes-parser` | `0.25.1` | MIT | _(not stated in license file)_ |
+| `hookified` | `1.15.1` | MIT | _(not stated in license file)_ |
+| `hookified` | `2.2.0` | MIT | _(not stated in license file)_ |
+| `html-encoding-sniffer` | `6.0.0` | MIT | _(not stated in license file)_ |
+| `ignore` | `7.0.14` | MIT | _(not stated in license file)_ |
+| `ignore` | `5.3.2` | MIT | _(not stated in license file)_ |
+| `imurmurhash` | `0.1.4` | MIT | _(not stated in license file)_ |
+| `indent-string` | `4.0.0` | MIT | _(not stated in license file)_ |
+| `is-extglob` | `2.1.1` | MIT | _(not stated in license file)_ |
+| `is-glob` | `4.0.3` | MIT | _(not stated in license file)_ |
+| `is-potential-custom-element-name` | `1.0.1` | MIT | _(not stated in license file)_ |
+| `isexe` | `2.0.0` | ISC | _(not stated in license file)_ |
+| `jiti` | `2.7.0` | MIT | _(not stated in license file)_ |
+| `js-tokens` | `4.0.0` | MIT | _(not stated in license file)_ |
+| `jsdom` | `29.1.1` | MIT | _(not stated in license file)_ |
+| `jsesc` | `3.1.0` | MIT | _(not stated in license file)_ |
+| `json-schema-traverse` | `0.4.1` | MIT | _(not stated in license file)_ |
+| `json-stable-stringify-without-jsonify` | `1.0.1` | MIT | _(not stated in license file)_ |
+| `json5` | `2.2.3` | MIT | _(not stated in license file)_ |
+| `keyv` | `5.6.0` | MIT | _(not stated in license file)_ |
+| `levn` | `0.4.1` | MIT | _(not stated in license file)_ |
 | `lightningcss` | `1.32.0` | MPL-2.0 | _(not stated in license file)_ |
+| `lightningcss` | `1.33.0` | MPL-2.0 | _(not stated in license file)_ |
 | `lightningcss-android-arm64` | `1.32.0` | MPL-2.0 | _(not stated in license file)_ |
+| `lightningcss-android-arm64` | `1.33.0` | MPL-2.0 | _(not stated in license file)_ |
 | `lightningcss-darwin-arm64` | `1.32.0` | MPL-2.0 | _(not stated in license file)_ |
+| `lightningcss-darwin-arm64` | `1.33.0` | MPL-2.0 | _(not stated in license file)_ |
 | `lightningcss-darwin-x64` | `1.32.0` | MPL-2.0 | _(not stated in license file)_ |
+| `lightningcss-darwin-x64` | `1.33.0` | MPL-2.0 | _(not stated in license file)_ |
 | `lightningcss-freebsd-x64` | `1.32.0` | MPL-2.0 | _(not stated in license file)_ |
+| `lightningcss-freebsd-x64` | `1.33.0` | MPL-2.0 | _(not stated in license file)_ |
 | `lightningcss-linux-arm-gnueabihf` | `1.32.0` | MPL-2.0 | _(not stated in license file)_ |
+| `lightningcss-linux-arm-gnueabihf` | `1.33.0` | MPL-2.0 | _(not stated in license file)_ |
 | `lightningcss-linux-arm64-gnu` | `1.32.0` | MPL-2.0 | _(not stated in license file)_ |
+| `lightningcss-linux-arm64-gnu` | `1.33.0` | MPL-2.0 | _(not stated in license file)_ |
 | `lightningcss-linux-arm64-musl` | `1.32.0` | MPL-2.0 | _(not stated in license file)_ |
+| `lightningcss-linux-arm64-musl` | `1.33.0` | MPL-2.0 | _(not stated in license file)_ |
 | `lightningcss-linux-x64-gnu` | `1.32.0` | MPL-2.0 | _(not stated in license file)_ |
+| `lightningcss-linux-x64-gnu` | `1.33.0` | MPL-2.0 | _(not stated in license file)_ |
 | `lightningcss-linux-x64-musl` | `1.32.0` | MPL-2.0 | _(not stated in license file)_ |
+| `lightningcss-linux-x64-musl` | `1.33.0` | MPL-2.0 | _(not stated in license file)_ |
 | `lightningcss-win32-arm64-msvc` | `1.32.0` | MPL-2.0 | _(not stated in license file)_ |
+| `lightningcss-win32-arm64-msvc` | `1.33.0` | MPL-2.0 | _(not stated in license file)_ |
 | `lightningcss-win32-x64-msvc` | `1.32.0` | MPL-2.0 | _(not stated in license file)_ |
-| `locate-path` | `6.0.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |
-| `lru-cache` | `11.5.1` | BlueOak-1.0.0 | Copyright (c) Isaac Z. Schlueter <i@izs.me> |
-| `lru-cache` | `5.1.1` | ISC | Copyright (c) Isaac Z. Schlueter and Contributors |
-| `lz-string` | `1.5.0` | MIT | Copyright (c) 2013 pieroxy |
-| `magic-string` | `0.30.21` | MIT | Copyright 2018 Rich Harris |
-| `mdn-data` | `2.27.1` | CC0-1.0 | Copyright (c) Mozilla Developer Network |
-| `min-indent` | `1.0.1` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com), James Kyle <me@thejameskyle.com> (thejameskyle.com) |
-| `minimatch` | `10.2.6` | BlueOak-1.0.0 | Copyright (c) Isaac Z. Schlueter <i@izs.me> (http://blog.izs.me) |
-| `nanoid` | `3.3.20` | MIT | Copyright 2017 Andrey Sitnik <andrey@sitnik.ru> |
-| `natural-compare` | `1.4.0` | MIT | Copyright (c) Lauri Rooden (https://github.com/litejs/natural-compare-lite) |
-| `node-releases` | `2.0.60` | MIT | Copyright (c) 2017 Sergey Rubanov (https://github.com/chicoxyzzy) |
-| `obug` | `2.1.3` | MIT | Copyright © 2025-PRESENT Kevin Deng (https://github.com/sxzz); Copyright (c) 2014-2017 TJ Holowaychuk <tj@vision-media.ca>; Copyright (c) 2018-2021 Josh Junon |
-| `optionator` | `0.9.4` | MIT | Copyright (c) George Zahariev |
-| `p-limit` | `3.1.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |
-| `p-locate` | `5.0.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |
-| `parse5` | `8.0.1` | MIT | Copyright (c) 2013-2019 Ivan Nikulin (ifaaan@gmail.com, https://github.com/inikulin) |
-| `path-exists` | `4.0.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com) |
-| `path-key` | `3.1.1` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com) |
-| `pathe` | `2.0.3` | MIT | Copyright (c) Pooya Parsa <pooya@pi0.io> - Daniel Roe <daniel@roe.dev>; Copyright (c) 2023-present Fabio Spampinato |
-| `picocolors` | `1.1.1` | ISC | Copyright (c) 2021-2024 Oleksii Raspopov, Kostiantyn Denysov, Anton Verinov |
-| `picomatch` | `4.0.4` | MIT | Copyright (c) 2017-present, Jon Schlinkert. |
-| `postcss` | `8.5.31` | MIT | Copyright 2013 Andrey Sitnik <andrey@sitnik.es> |
-| `prelude-ls` | `1.2.1` | MIT | Copyright (c) George Zahariev |
-| `pretty-format` | `27.5.1` | MIT | Copyright (c) Facebook, Inc. and its affiliates. |
-| `punycode` | `2.3.1` | MIT | Copyright (c) Mathias Bynens |
-| `qified` | `0.10.1` | MIT | Copyright (c) Jared Wray <me@jaredwray.com> |
-| `react-is` | `17.0.2` | MIT | Copyright (c) Facebook, Inc. and its affiliates. |
-| `react-refresh` | `0.17.0` | MIT | Copyright (c) Meta Platforms, Inc. and affiliates. |
-| `redent` | `3.0.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com) |
-| `require-from-string` | `2.0.2` | MIT | Copyright (c) Vsevolod Strukchinsky <floatdrop@gmail.com> (github.com/floatdrop) |
-| `rollup` | `4.62.0` | MIT | Copyright (c) 2017 [these people](https://github.com/rollup/rollup/graphs/contributors) |
-| `saxes` | `6.0.0` | ISC | Copyright (c) Louis-Dominique Dubeau <ldd@lddubeau.com> |
-| `semver` | `7.8.5` | ISC | Copyright (c) Isaac Z. Schlueter and Contributors |
-| `semver` | `6.3.1` | ISC | Copyright (c) Isaac Z. Schlueter and Contributors |
-| `shebang-command` | `2.0.0` | MIT | Copyright (c) Kevin Mårtensson <kevinmartensson@gmail.com> (github.com/kevva) |
-| `shebang-regex` | `3.0.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com) |
-| `siginfo` | `2.0.0` | ISC | Copyright (c) 2017, Emil Bay <github@tixz.dk> |
-| `source-map-js` | `1.2.2` | BSD-3-Clause | Copyright (c) 2009-2011, Mozilla Foundation and contributors |
-| `stackback` | `0.0.2` | MIT | Copyright (c) Roman Shtylman <shtylman@gmail.com> |
-| `std-env` | `4.1.0` | MIT | Copyright (c) Pooya Parsa <pooya@pi0.io> |
-| `strip-indent` | `3.0.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com) |
-| `symbol-tree` | `3.2.4` | MIT | Copyright (c) 2015 Joris van der Wel |
-| `tailwindcss` | `4.3.3` | MIT | Copyright (c) Tailwind Labs, Inc. |
-| `tapable` | `2.3.3` | MIT | Copyright (c) Tobias Koppers @sokra |
-| `tinybench` | `2.9.0` | MIT | Copyright (c) 2022 Tinylibs |
-| `tinyexec` | `1.2.4` | MIT | Copyright (c) 2024 Tinylibs |
-| `tinyglobby` | `0.2.17` | MIT | Copyright (c) 2024 Madeline Gurriarán |
-| `tinyrainbow` | `3.2.0` | MIT | Copyright (c) 2022 Tinylibs |
-| `tldts` | `7.4.3` | MIT | Copyright (c) 2017 Thomas Parisot, 2018 Rémi Berson |
-| `tldts-core` | `7.4.3` | MIT | Copyright (c) 2017 Thomas Parisot, 2018 Rémi Berson |
-| `tough-cookie` | `6.0.1` | BSD-3-Clause | Copyright (c) 2015, Salesforce.com, Inc. |
-| `tr46` | `6.0.0` | MIT | Copyright (c) Sebastian Mayr |
-| `ts-api-utils` | `2.5.0` | MIT | Copyright (c) JoshuaKGoldberg |
-| `type-check` | `0.4.0` | MIT | Copyright (c) George Zahariev |
-| `typescript` | `5.9.3` | Apache-2.0 | Copyright (c) Microsoft Corp. |
-| `typescript-eslint` | `8.72.0` | MIT | Copyright (c) 2019 typescript-eslint and other contributors |
-| `undici` | `7.30.1` | MIT | Copyright (c) Matteo Collina and Undici contributors |
-| `undici-types` | `8.9.0` | MIT | Copyright (c) Matteo Collina and Undici contributors |
-| `update-browserslist-db` | `1.3.4` | MIT | Copyright 2022 Andrey Sitnik <andrey@sitnik.es> and other contributors |
-| `uri-js` | `4.4.1` | BSD-2-Clause | Copyright 2011 Gary Court. All rights reserved. |
-| `vite` | `6.4.5` | MIT | Copyright (c) 2019-present, VoidZero Inc. and Vite contributors |
-| `vitest` | `4.1.12` | MIT | Copyright (c) 2021-Present VoidZero Inc. and Vitest contributors |
-| `w3c-xmlserializer` | `5.0.0` | MIT | Copyright © Sebastian Mayr |
-| `webidl-conversions` | `8.0.1` | BSD-2-Clause | Copyright (c) 2014, Domenic Denicola |
-| `whatwg-mimetype` | `5.0.0` | MIT | Copyright © Domenic Denicola <d@domenic.me> |
-| `whatwg-url` | `16.0.1` | MIT | Copyright (c) Sebastian Mayr |
-| `which` | `2.0.2` | ISC | Copyright (c) Isaac Z. Schlueter and Contributors |
-| `why-is-node-running` | `2.3.0` | MIT | Copyright (c) 2016 Mathias Buus |
-| `word-wrap` | `1.2.5` | MIT | Copyright (c) 2014-2016, Jon Schlinkert |
-| `xml-name-validator` | `5.0.0` | Apache-2.0 | Copyright (c) Domenic Denicola <d@domenic.me> (https://domenic.me/) |
-| `xmlchars` | `2.2.0` | MIT | Copyright (c) Louis-Dominique Dubeau <ldd@lddubeau.com> |
-| `yallist` | `3.1.1` | ISC | Copyright (c) Isaac Z. Schlueter and Contributors |
-| `yocto-queue` | `0.1.0` | MIT | Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (https://sindresorhus.com) |
-| `zod` | `4.6.7` | MIT | Copyright (c) 2025 Colin McDonnell |
-| `zod-validation-error` | `4.0.2` | MIT | Copyright 2022 Causaly, Inc <front-end@causaly.com> |
+| `lightningcss-win32-x64-msvc` | `1.33.0` | MPL-2.0 | _(not stated in license file)_ |
+| `locate-path` | `6.0.0` | MIT | _(not stated in license file)_ |
+| `lru-cache` | `11.5.1` | BlueOak-1.0.0 | _(not stated in license file)_ |
+| `lru-cache` | `5.1.1` | ISC | _(not stated in license file)_ |
+| `lz-string` | `1.5.0` | MIT | _(not stated in license file)_ |
+| `magic-string` | `1.4.5` | MIT | _(not stated in license file)_ |
+| `magic-string` | `0.30.21` | MIT | _(not stated in license file)_ |
+| `mdn-data` | `2.27.1` | CC0-1.0 | _(not stated in license file)_ |
+| `min-indent` | `1.0.1` | MIT | _(not stated in license file)_ |
+| `minimatch` | `10.2.6` | BlueOak-1.0.0 | _(not stated in license file)_ |
+| `nanoid` | `3.3.20` | MIT | _(not stated in license file)_ |
+| `natural-compare` | `1.4.0` | MIT | _(not stated in license file)_ |
+| `node-releases` | `2.0.60` | MIT | _(not stated in license file)_ |
+| `obug` | `3.0.0` | MIT | _(not stated in license file)_ |
+| `optionator` | `0.9.4` | MIT | _(not stated in license file)_ |
+| `p-limit` | `3.1.0` | MIT | _(not stated in license file)_ |
+| `p-locate` | `5.0.0` | MIT | _(not stated in license file)_ |
+| `parse5` | `8.0.1` | MIT | _(not stated in license file)_ |
+| `path-exists` | `4.0.0` | MIT | _(not stated in license file)_ |
+| `path-key` | `3.1.1` | MIT | _(not stated in license file)_ |
+| `picocolors` | `1.1.1` | ISC | _(not stated in license file)_ |
+| `picomatch` | `4.0.7` | MIT | _(not stated in license file)_ |
+| `postcss` | `8.5.31` | MIT | _(not stated in license file)_ |
+| `prelude-ls` | `1.2.1` | MIT | _(not stated in license file)_ |
+| `pretty-format` | `27.5.1` | MIT | _(not stated in license file)_ |
+| `punycode` | `2.3.1` | MIT | _(not stated in license file)_ |
+| `qified` | `0.10.1` | MIT | _(not stated in license file)_ |
+| `react-is` | `17.0.2` | MIT | _(not stated in license file)_ |
+| `redent` | `3.0.0` | MIT | _(not stated in license file)_ |
+| `require-from-string` | `2.0.2` | MIT | _(not stated in license file)_ |
+| `rolldown` | `1.2.15` | MIT | _(not stated in license file)_ |
+| `saxes` | `6.0.0` | ISC | _(not stated in license file)_ |
+| `semver` | `7.8.5` | ISC | _(not stated in license file)_ |
+| `semver` | `6.3.1` | ISC | _(not stated in license file)_ |
+| `shebang-command` | `2.0.0` | MIT | _(not stated in license file)_ |
+| `shebang-regex` | `3.0.0` | MIT | _(not stated in license file)_ |
+| `source-map-js` | `1.2.2` | BSD-3-Clause | _(not stated in license file)_ |
+| `std-env` | `4.3.0` | MIT | _(not stated in license file)_ |
+| `strip-indent` | `3.0.0` | MIT | _(not stated in license file)_ |
+| `symbol-tree` | `3.2.4` | MIT | _(not stated in license file)_ |
+| `tailwindcss` | `4.3.3` | MIT | _(not stated in license file)_ |
+| `tapable` | `2.3.3` | MIT | _(not stated in license file)_ |
+| `tinybench` | `6.2.2` | MIT | _(not stated in license file)_ |
+| `tinyexec` | `1.3.1` | MIT | _(not stated in license file)_ |
+| `tinyglobby` | `0.2.17` | MIT | _(not stated in license file)_ |
+| `tldts` | `7.4.3` | MIT | _(not stated in license file)_ |
+| `tldts-core` | `7.4.3` | MIT | _(not stated in license file)_ |
+| `tough-cookie` | `6.0.1` | BSD-3-Clause | _(not stated in license file)_ |
+| `tr46` | `6.0.0` | MIT | _(not stated in license file)_ |
+| `ts-api-utils` | `2.5.0` | MIT | _(not stated in license file)_ |
+| `tslib` | `2.8.1` | 0BSD | _(not stated in license file)_ |
+| `type-check` | `0.4.0` | MIT | _(not stated in license file)_ |
+| `typescript` | `5.9.3` | Apache-2.0 | _(not stated in license file)_ |
+| `typescript-eslint` | `8.72.1` | MIT | _(not stated in license file)_ |
+| `undici` | `7.30.1` | MIT | _(not stated in license file)_ |
+| `undici-types` | `8.9.0` | MIT | _(not stated in license file)_ |
+| `update-browserslist-db` | `1.3.4` | MIT | _(not stated in license file)_ |
+| `uri-js` | `4.4.1` | BSD-2-Clause | _(not stated in license file)_ |
+| `vite` | `8.3.5` | MIT | _(not stated in license file)_ |
+| `vitest` | `5.0.5` | MIT | _(not stated in license file)_ |
+| `w3c-xmlserializer` | `5.0.0` | MIT | _(not stated in license file)_ |
+| `webidl-conversions` | `8.0.1` | BSD-2-Clause | _(not stated in license file)_ |
+| `whatwg-mimetype` | `5.0.0` | MIT | _(not stated in license file)_ |
+| `whatwg-url` | `16.0.1` | MIT | _(not stated in license file)_ |
+| `which` | `2.0.2` | ISC | _(not stated in license file)_ |
+| `why-is-node-running` | `3.2.1` | MIT | _(not stated in license file)_ |
+| `word-wrap` | `1.2.5` | MIT | _(not stated in license file)_ |
+| `xml-name-validator` | `5.0.0` | Apache-2.0 | _(not stated in license file)_ |
+| `xmlchars` | `2.2.0` | MIT | _(not stated in license file)_ |
+| `yallist` | `3.1.1` | ISC | _(not stated in license file)_ |
+| `yocto-queue` | `0.1.0` | MIT | _(not stated in license file)_ |
+| `zod` | `4.6.7` | MIT | _(not stated in license file)_ |
+| `zod-validation-error` | `4.0.2` | MIT | _(not stated in license file)_ |
 
 ## 6. Attribution notices from upstream NOTICE files
 
 Apache-2.0 (§4 d) requires that attribution notices in an upstream NOTICE file
 be preserved. The following are reproduced verbatim.
 
-### `../../../../go/pkg/mod/gopkg.in/yaml.v3@v3.0.1/NOTICE`
+### `../../../Users/dmipop/go/pkg/mod/gopkg.in/yaml.v3@v3.0.1/NOTICE`
 
 ```text
 Copyright 2011-2016 Canonical Ltd.
@@ -709,26 +672,6 @@ Apache License
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-```
-
-### ISC
-
-```text
-ISC License
-
-Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.
-
-Permission to use, copy, modify, and/or distribute this software for any
-purpose with or without fee is hereby granted, provided that the above
-copyright notice and this permission notice appear in all copies.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
-ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
-ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
-OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ```
 
 ### BSD-2-Clause

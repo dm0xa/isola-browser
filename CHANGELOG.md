@@ -6,6 +6,14 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Changed
+
+- Dependency refresh: React 19, Vite 8 with `@vitejs/plugin-react` 6 (Rolldown
+  bundler, Lightning CSS minification of the stylesheet), Vitest 5,
+  `lucide-react` 1.x, Electron 45.1, and the weekly npm/Actions groups. React 19
+  needed only a ref-type widening in the two viewer shells; rendering is
+  unchanged, and icons keep their geometry.
+
 ## [1.5.0] - 2026-10-31
 
 ### Changed
