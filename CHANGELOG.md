@@ -9,10 +9,17 @@ publishes the section matching the tag.
 ### Changed
 
 - Dependency refresh: React 19, Vite 8 with `@vitejs/plugin-react` 6 (Rolldown
-  bundler, Lightning CSS minification of the stylesheet), Vitest 5,
-  `lucide-react` 1.x, Electron 45.1, and the weekly npm/Actions groups. React 19
-  needed only a ref-type widening in the two viewer shells; rendering is
-  unchanged, and icons keep their geometry.
+  bundler, Lightning CSS minification of the stylesheet), React Router 7,
+  Vitest 5, jsdom 30, ESLint 10, `lucide-react` 1.x, Electron 45.1, and the
+  weekly npm/Actions groups. React 19 needed only a ref-type widening in the
+  two viewer shells and React Router 7 only the removal of the `v7_startTransition`
+  opt-in; rendering, routes and icon geometry are unchanged.
+
+### Security
+
+- React Router moves to 7.18.5, clearing two moderate advisories in the 6.x line
+  (open redirect through `<Link>`/`useNavigate`, and constructor injection in SSR
+  hydration error deserialization). No 6.x release contains the fixes.
 
 ## [1.5.0] - 2026-10-31
 

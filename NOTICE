@@ -74,11 +74,10 @@ Chromium's `LICENSES.chromium.html` for the full set.
 
 ## 4. Frontend — npm runtime dependencies
 
-39 packages bundled into the frontend build. License mix: MIT × 38, ISC × 1.
+40 packages bundled into the frontend build. License mix: MIT × 39, ISC × 1.
 
 | Package | Version | License | Copyright |
 |---|---|---|---|
-| `@remix-run/router` | `1.23.4` | MIT | _(not stated in license file)_ |
 | `@tanstack/query-core` | `5.105.0` | MIT | _(not stated in license file)_ |
 | `@tanstack/react-query` | `5.105.0` | MIT | _(not stated in license file)_ |
 | `@types/react` | `19.3.0` | MIT | _(not stated in license file)_ |
@@ -87,6 +86,7 @@ Chromium's `LICENSES.chromium.html` for the full set.
 | `axios` | `1.21.0` | MIT | _(not stated in license file)_ |
 | `call-bind-apply-helpers` | `1.0.2` | MIT | _(not stated in license file)_ |
 | `combined-stream` | `1.0.8` | MIT | _(not stated in license file)_ |
+| `cookie` | `1.1.1` | MIT | _(not stated in license file)_ |
 | `csstype` | `3.2.3` | MIT | _(not stated in license file)_ |
 | `debug` | `4.4.3` | MIT | _(not stated in license file)_ |
 | `delayed-stream` | `1.0.0` | MIT | _(not stated in license file)_ |
@@ -113,24 +113,23 @@ Chromium's `LICENSES.chromium.html` for the full set.
 | `proxy-from-env` | `2.1.0` | MIT | _(not stated in license file)_ |
 | `react` | `19.3.1` | MIT | _(not stated in license file)_ |
 | `react-dom` | `19.3.1` | MIT | _(not stated in license file)_ |
-| `react-router` | `6.30.6` | MIT | _(not stated in license file)_ |
-| `react-router-dom` | `6.30.6` | MIT | _(not stated in license file)_ |
+| `react-router` | `7.18.5` | MIT | _(not stated in license file)_ |
+| `react-router-dom` | `7.18.5` | MIT | _(not stated in license file)_ |
 | `scheduler` | `0.28.0` | MIT | _(not stated in license file)_ |
+| `set-cookie-parser` | `2.7.3` | MIT | _(not stated in license file)_ |
 | `zustand` | `5.0.16` | MIT | _(not stated in license file)_ |
 
 ## 5. Frontend — npm build/development dependencies
 
-290 packages used only to build, test and lint the frontend. They are
+287 packages used only to build, test and lint the frontend. They are
 not redistributed in the production bundle, but are listed for completeness.
-License mix: MIT × 218, MPL-2.0 × 24, Apache-2.0 × 18, ISC × 12, BSD-2-Clause × 8, BSD-3-Clause × 3, BlueOak-1.0.0 × 2, MIT-0 × 2, 0BSD × 1, CC-BY-4.0 × 1, CC0-1.0 × 1.
+License mix: MIT × 215, MPL-2.0 × 24, Apache-2.0 × 18, ISC × 12, BSD-2-Clause × 8, BSD-3-Clause × 3, BlueOak-1.0.0 × 2, MIT-0 × 2, 0BSD × 1, CC-BY-4.0 × 1, CC0-1.0 × 1.
 
 | Package | Version | License | Copyright |
 |---|---|---|---|
 | `@adobe/css-tools` | `4.5.0` | MIT | _(not stated in license file)_ |
-| `@asamuzakjp/css-color` | `5.1.11` | MIT | _(not stated in license file)_ |
-| `@asamuzakjp/dom-selector` | `7.1.1` | MIT | _(not stated in license file)_ |
-| `@asamuzakjp/generational-cache` | `1.0.1` | MIT | _(not stated in license file)_ |
-| `@asamuzakjp/nwsapi` | `2.3.9` | MIT | _(not stated in license file)_ |
+| `@asamuzakjp/css-color` | `7.1.9` | MIT | _(not stated in license file)_ |
+| `@asamuzakjp/dom-selector` | `10.0.5` | MIT | _(not stated in license file)_ |
 | `@babel/code-frame` | `7.29.7` | MIT | _(not stated in license file)_ |
 | `@babel/compat-data` | `7.29.7` | MIT | _(not stated in license file)_ |
 | `@babel/core` | `7.29.7` | MIT | _(not stated in license file)_ |
@@ -151,12 +150,12 @@ License mix: MIT × 218, MPL-2.0 × 24, Apache-2.0 × 18, ISC × 12, BSD-2-Claus
 | `@bramus/specificity` | `2.4.2` | MIT | _(not stated in license file)_ |
 | `@cacheable/memory` | `2.2.0` | MIT | _(not stated in license file)_ |
 | `@cacheable/utils` | `2.5.0` | MIT | _(not stated in license file)_ |
-| `@csstools/color-helpers` | `6.0.2` | MIT-0 | _(not stated in license file)_ |
-| `@csstools/css-calc` | `3.2.1` | MIT | _(not stated in license file)_ |
-| `@csstools/css-color-parser` | `4.1.8` | MIT | _(not stated in license file)_ |
-| `@csstools/css-parser-algorithms` | `4.0.0` | MIT | _(not stated in license file)_ |
-| `@csstools/css-syntax-patches-for-csstree` | `1.1.5` | MIT-0 | _(not stated in license file)_ |
-| `@csstools/css-tokenizer` | `4.0.0` | MIT | _(not stated in license file)_ |
+| `@csstools/color-helpers` | `6.1.2` | MIT-0 | _(not stated in license file)_ |
+| `@csstools/css-calc` | `3.4.3` | MIT | _(not stated in license file)_ |
+| `@csstools/css-color-parser` | `4.2.6` | MIT | _(not stated in license file)_ |
+| `@csstools/css-parser-algorithms` | `4.0.2` | MIT | _(not stated in license file)_ |
+| `@csstools/css-syntax-patches-for-csstree` | `1.1.15` | MIT-0 | _(not stated in license file)_ |
+| `@csstools/css-tokenizer` | `4.0.2` | MIT | _(not stated in license file)_ |
 | `@emnapi/core` | `1.11.1` | MIT | _(not stated in license file)_ |
 | `@emnapi/runtime` | `1.11.1` | MIT | _(not stated in license file)_ |
 | `@emnapi/wasi-threads` | `1.2.2` | MIT | _(not stated in license file)_ |
@@ -165,10 +164,10 @@ License mix: MIT × 218, MPL-2.0 × 24, Apache-2.0 × 18, ISC × 12, BSD-2-Claus
 | `@eslint/config-array` | `0.23.5` | Apache-2.0 | _(not stated in license file)_ |
 | `@eslint/config-helpers` | `0.7.0` | Apache-2.0 | _(not stated in license file)_ |
 | `@eslint/core` | `1.2.1` | Apache-2.0 | _(not stated in license file)_ |
-| `@eslint/js` | `9.39.4` | MIT | _(not stated in license file)_ |
+| `@eslint/js` | `10.0.1` | MIT | _(not stated in license file)_ |
 | `@eslint/object-schema` | `3.0.5` | Apache-2.0 | _(not stated in license file)_ |
 | `@eslint/plugin-kit` | `0.7.3` | Apache-2.0 | _(not stated in license file)_ |
-| `@exodus/bytes` | `1.15.1` | MIT | _(not stated in license file)_ |
+| `@exodus/bytes` | `1.16.0` | MIT | _(not stated in license file)_ |
 | `@humanfs/core` | `0.19.2` | Apache-2.0 | _(not stated in license file)_ |
 | `@humanfs/node` | `0.16.8` | Apache-2.0 | _(not stated in license file)_ |
 | `@humanfs/types` | `0.15.0` | Apache-2.0 | _(not stated in license file)_ |
@@ -248,7 +247,7 @@ License mix: MIT × 218, MPL-2.0 × 24, Apache-2.0 × 18, ISC × 12, BSD-2-Claus
 | `assertion-error` | `2.0.1` | MIT | _(not stated in license file)_ |
 | `balanced-match` | `4.0.4` | MIT | _(not stated in license file)_ |
 | `baseline-browser-mapping` | `2.11.31` | Apache-2.0 | _(not stated in license file)_ |
-| `bidi-js` | `1.0.3` | MIT | _(not stated in license file)_ |
+| `bidi-js` | `1.1.0` | MIT | _(not stated in license file)_ |
 | `brace-expansion` | `5.0.12` | MIT | _(not stated in license file)_ |
 | `browserslist` | `4.29.4` | MIT | _(not stated in license file)_ |
 | `cacheable` | `2.5.0` | MIT | _(not stated in license file)_ |
@@ -258,7 +257,7 @@ License mix: MIT × 218, MPL-2.0 × 24, Apache-2.0 × 18, ISC × 12, BSD-2-Claus
 | `cross-spawn` | `7.0.6` | MIT | _(not stated in license file)_ |
 | `css-tree` | `3.2.1` | MIT | _(not stated in license file)_ |
 | `css.escape` | `1.5.1` | MIT | _(not stated in license file)_ |
-| `data-urls` | `7.0.0` | MIT | _(not stated in license file)_ |
+| `data-urls` | `8.0.0` | MIT | _(not stated in license file)_ |
 | `decimal.js` | `10.6.0` | MIT | _(not stated in license file)_ |
 | `deep-is` | `0.1.4` | MIT | _(not stated in license file)_ |
 | `dequal` | `2.0.3` | MIT | _(not stated in license file)_ |
@@ -302,7 +301,7 @@ License mix: MIT × 218, MPL-2.0 × 24, Apache-2.0 × 18, ISC × 12, BSD-2-Claus
 | `hermes-parser` | `0.25.1` | MIT | _(not stated in license file)_ |
 | `hookified` | `1.15.1` | MIT | _(not stated in license file)_ |
 | `hookified` | `2.2.0` | MIT | _(not stated in license file)_ |
-| `html-encoding-sniffer` | `6.0.0` | MIT | _(not stated in license file)_ |
+| `html-encoding-sniffer` | `7.0.0` | MIT | _(not stated in license file)_ |
 | `ignore` | `7.0.14` | MIT | _(not stated in license file)_ |
 | `ignore` | `5.3.2` | MIT | _(not stated in license file)_ |
 | `imurmurhash` | `0.1.4` | MIT | _(not stated in license file)_ |
@@ -313,7 +312,7 @@ License mix: MIT × 218, MPL-2.0 × 24, Apache-2.0 × 18, ISC × 12, BSD-2-Claus
 | `isexe` | `2.0.0` | ISC | _(not stated in license file)_ |
 | `jiti` | `2.7.0` | MIT | _(not stated in license file)_ |
 | `js-tokens` | `4.0.0` | MIT | _(not stated in license file)_ |
-| `jsdom` | `29.1.1` | MIT | _(not stated in license file)_ |
+| `jsdom` | `30.1.3` | MIT | _(not stated in license file)_ |
 | `jsesc` | `3.1.0` | MIT | _(not stated in license file)_ |
 | `json-schema-traverse` | `0.4.1` | MIT | _(not stated in license file)_ |
 | `json-stable-stringify-without-jsonify` | `1.0.1` | MIT | _(not stated in license file)_ |
@@ -345,7 +344,7 @@ License mix: MIT × 218, MPL-2.0 × 24, Apache-2.0 × 18, ISC × 12, BSD-2-Claus
 | `lightningcss-win32-x64-msvc` | `1.32.0` | MPL-2.0 | _(not stated in license file)_ |
 | `lightningcss-win32-x64-msvc` | `1.33.0` | MPL-2.0 | _(not stated in license file)_ |
 | `locate-path` | `6.0.0` | MIT | _(not stated in license file)_ |
-| `lru-cache` | `11.5.1` | BlueOak-1.0.0 | _(not stated in license file)_ |
+| `lru-cache` | `11.5.3` | BlueOak-1.0.0 | _(not stated in license file)_ |
 | `lru-cache` | `5.1.1` | ISC | _(not stated in license file)_ |
 | `lz-string` | `1.5.0` | MIT | _(not stated in license file)_ |
 | `magic-string` | `1.4.5` | MIT | _(not stated in license file)_ |
@@ -382,31 +381,30 @@ License mix: MIT × 218, MPL-2.0 × 24, Apache-2.0 × 18, ISC × 12, BSD-2-Claus
 | `source-map-js` | `1.2.2` | BSD-3-Clause | _(not stated in license file)_ |
 | `std-env` | `4.3.0` | MIT | _(not stated in license file)_ |
 | `strip-indent` | `3.0.0` | MIT | _(not stated in license file)_ |
-| `symbol-tree` | `3.2.4` | MIT | _(not stated in license file)_ |
 | `tailwindcss` | `4.3.3` | MIT | _(not stated in license file)_ |
 | `tapable` | `2.3.3` | MIT | _(not stated in license file)_ |
 | `tinybench` | `6.2.2` | MIT | _(not stated in license file)_ |
 | `tinyexec` | `1.3.1` | MIT | _(not stated in license file)_ |
 | `tinyglobby` | `0.2.17` | MIT | _(not stated in license file)_ |
-| `tldts` | `7.4.3` | MIT | _(not stated in license file)_ |
-| `tldts-core` | `7.4.3` | MIT | _(not stated in license file)_ |
-| `tough-cookie` | `6.0.1` | BSD-3-Clause | _(not stated in license file)_ |
-| `tr46` | `6.0.0` | MIT | _(not stated in license file)_ |
+| `tldts` | `7.4.19` | MIT | _(not stated in license file)_ |
+| `tldts-core` | `7.4.20` | MIT | _(not stated in license file)_ |
+| `tough-cookie` | `6.0.2` | BSD-3-Clause | _(not stated in license file)_ |
+| `tr46` | `7.0.0` | MIT | _(not stated in license file)_ |
 | `ts-api-utils` | `2.5.0` | MIT | _(not stated in license file)_ |
 | `tslib` | `2.8.1` | 0BSD | _(not stated in license file)_ |
 | `type-check` | `0.4.0` | MIT | _(not stated in license file)_ |
 | `typescript` | `5.9.3` | Apache-2.0 | _(not stated in license file)_ |
 | `typescript-eslint` | `8.72.1` | MIT | _(not stated in license file)_ |
-| `undici` | `7.30.1` | MIT | _(not stated in license file)_ |
+| `undici` | `8.12.3` | MIT | _(not stated in license file)_ |
 | `undici-types` | `8.9.0` | MIT | _(not stated in license file)_ |
 | `update-browserslist-db` | `1.3.4` | MIT | _(not stated in license file)_ |
 | `uri-js` | `4.4.1` | BSD-2-Clause | _(not stated in license file)_ |
 | `vite` | `8.3.5` | MIT | _(not stated in license file)_ |
 | `vitest` | `5.0.5` | MIT | _(not stated in license file)_ |
-| `w3c-xmlserializer` | `5.0.0` | MIT | _(not stated in license file)_ |
+| `w3c-xmlserializer` | `6.0.0` | MIT | _(not stated in license file)_ |
 | `webidl-conversions` | `8.0.1` | BSD-2-Clause | _(not stated in license file)_ |
 | `whatwg-mimetype` | `5.0.0` | MIT | _(not stated in license file)_ |
-| `whatwg-url` | `16.0.1` | MIT | _(not stated in license file)_ |
+| `whatwg-url` | `17.3.0` | MIT | _(not stated in license file)_ |
 | `which` | `2.0.2` | ISC | _(not stated in license file)_ |
 | `why-is-node-running` | `3.2.1` | MIT | _(not stated in license file)_ |
 | `word-wrap` | `1.2.5` | MIT | _(not stated in license file)_ |
