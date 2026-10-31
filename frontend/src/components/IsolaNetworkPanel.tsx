@@ -922,7 +922,7 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
           <span className={`whitespace-nowrap ${flaggedCount ? 'rounded bg-amber-500/20 px-1.5 py-0.5 text-amber-700 dark:text-amber-300' : 'text-zinc-500 dark:text-gray-500'}`}>
             {tabFilter === '' ? entries.length : `${tabFiltered.length}/${entries.length}`} req · {flaggedCount} flagged
           </span>
-          <input type="text" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter…" className="w-40 rounded border border-zinc-300 bg-white px-2 py-0.5 text-zinc-800 outline-none focus:border-cyan-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200" />
+          <input type="text" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="filter…" className="w-40 rounded border border-zinc-300 bg-white px-2 py-0.5 text-zinc-800 outline-hidden focus:border-cyan-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200" />
           <label className="flex cursor-pointer items-center gap-1 select-none">
             <input type="checkbox" checked={onlyFlagged} onChange={(e) => setOnlyFlagged(e.target.checked)} className="accent-amber-400" />
             flagged
@@ -931,7 +931,7 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
             <select
               value={tabFilter}
               onChange={(e) => setTabFilter(e.target.value === '' ? '' : Number(e.target.value))}
-              className="rounded border border-zinc-300 bg-white px-1 py-0.5 text-zinc-800 outline-none focus:border-cyan-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+              className="rounded border border-zinc-300 bg-white px-1 py-0.5 text-zinc-800 outline-hidden focus:border-cyan-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
               title="Show only traffic from one browser tab"
             >
               <option value="">all tabs</option>
@@ -1389,7 +1389,7 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
               value={reconHost}
               onChange={(e) => setReconHost(e.target.value)}
               placeholder={defaultHost || 'example.com'}
-              className="w-56 rounded border border-zinc-300 bg-white px-2 py-0.5 text-zinc-800 outline-none focus:border-cyan-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+              className="w-56 rounded border border-zinc-300 bg-white px-2 py-0.5 text-zinc-800 outline-hidden focus:border-cyan-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
             />
             <button
               onClick={() => void runRecon()}

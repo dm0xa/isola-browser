@@ -227,7 +227,7 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
                 />
                 <div
                   role="menu"
-                  className="absolute right-0 top-full z-50 mt-1 w-52 overflow-hidden rounded-xl border border-zinc-200 dark:border-gray-700 bg-white/95 dark:bg-gray-900/95 py-1 shadow-2xl backdrop-blur text-[13px]"
+                  className="absolute right-0 top-full z-50 mt-1 w-52 overflow-hidden rounded-xl border border-zinc-200 dark:border-gray-700 bg-white/95 dark:bg-gray-900/95 py-1 shadow-2xl backdrop-blur-sm text-[13px]"
                 >
                   {isConnected && (
                     <ViewerMenuItem

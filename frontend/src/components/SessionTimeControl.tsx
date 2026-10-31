@@ -123,7 +123,7 @@ export default function SessionTimeControl({
             disabled={disabled}
             title="Extend session by 5 minutes"
             aria-label="Extend session by 5 minutes"
-            className={`flex h-full items-center gap-1 rounded-r-[5px] px-2 font-mono tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-zinc-400/70 dark:focus-visible:ring-gray-500 disabled:cursor-not-allowed disabled:opacity-40 ${actionTone}`}
+            className={`flex h-full items-center gap-1 rounded-r-[5px] px-2 font-mono tabular-nums transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-zinc-400/70 dark:focus-visible:ring-gray-500 disabled:cursor-not-allowed disabled:opacity-40 ${actionTone}`}
           >
             {added ? (
               <>

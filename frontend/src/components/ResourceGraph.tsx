@@ -1969,7 +1969,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
         data-graph-tooltip=""
         onMouseEnter={cancelHoverClear}
         onMouseLeave={() => scheduleHoverClear(node.id)}
-        className="pointer-events-auto absolute z-20 w-60 rounded-xl border border-zinc-200 bg-white/95 p-2.5 shadow-2xl shadow-black/20 backdrop-blur-sm dark:border-white/10 dark:bg-[#0c1220]/95 dark:shadow-black/60"
+        className="pointer-events-auto absolute z-20 w-60 rounded-xl border border-zinc-200 bg-white/95 p-2.5 shadow-2xl shadow-black/20 backdrop-blur-xs dark:border-white/10 dark:bg-[#0c1220]/95 dark:shadow-black/60"
         style={{ left, top }}
       >
         <div className="flex items-center gap-1.5">
@@ -2161,7 +2161,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     return (
       <div
         ref={minimapRef}
-        className="absolute bottom-2 right-2 z-10 cursor-crosshair touch-none overflow-hidden rounded-lg border border-zinc-300/80 bg-white/85 shadow-lg shadow-black/10 backdrop-blur-sm dark:border-white/10 dark:bg-slate-950/85"
+        className="absolute bottom-2 right-2 z-10 cursor-crosshair touch-none overflow-hidden rounded-lg border border-zinc-300/80 bg-white/85 shadow-lg shadow-black/10 backdrop-blur-xs dark:border-white/10 dark:bg-slate-950/85"
         style={{ width: mmW, height: mmH }}
         title="Minimap — drag to move the view"
         onClick={(e) => e.stopPropagation()}
@@ -2420,7 +2420,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
         ref={containerRef}
         tabIndex={0}
         onKeyDown={onCanvasKey}
-        className="relative flex-1 touch-none overflow-hidden select-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-cyan-500/50"
+        className="relative flex-1 touch-none overflow-hidden select-none focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-cyan-500/50"
         style={{ backgroundColor: pal.canvas, cursor: panning ? 'grabbing' : 'grab' }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

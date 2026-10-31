@@ -1,6 +1,9 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* Tailwind v4 defaults `dark:` to prefers-color-scheme. The app toggles a
+   `.dark` class on <html> (src/lib/ThemeContext.tsx), so re-point the variant
+   at that class. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 @font-face {
   font-family: 'Bitcount Prop Single';

@@ -288,7 +288,7 @@ export default function NetworkPage() {
 
 function Overlay({ children }: { children: ReactNode }) {
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center bg-white/75 backdrop-blur-sm dark:bg-gray-950/75">
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-white/75 backdrop-blur-xs dark:bg-gray-950/75">
       <div className="max-w-sm px-6 text-center">{children}</div>
     </div>
   );

@@ -42,6 +42,15 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(deps)"
+    # A Tailwind major is a migration, not a bump: the config format, the
+    # PostCSS/Vite wiring, renamed utilities and the browser floor all change,
+    # so it needs one deliberate PR with a visual diff instead of an
+    # automatically generated one. Minor/patch still flow.
+    ignore:
+      - dependency-name: "tailwindcss"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@tailwindcss/vite"
+        update-types: ["version-update:semver-major"]
     groups:
       npm-frontend:
         patterns: ["*"]

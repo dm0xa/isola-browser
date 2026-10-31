@@ -50,7 +50,7 @@ export function ViewerDebugOverlay(props: ViewerDebugOverlayProps) {
   const capBox = capEl ? `${capEl.clientWidth}x${capEl.clientHeight}` : '?';
   return (
         <div
-          className="absolute bottom-3 right-3 z-40 rounded-lg border border-cyan-500/20 bg-slate-950/70 px-3 py-2 text-[11px] font-mono text-cyan-100 shadow-lg backdrop-blur min-w-[14rem] max-w-[min(24rem,calc(100vw-1.5rem))] opacity-60 hover:opacity-100 transition-opacity duration-200"
+          className="absolute bottom-3 right-3 z-40 rounded-lg border border-cyan-500/20 bg-slate-950/70 px-3 py-2 text-[11px] font-mono text-cyan-100 shadow-lg backdrop-blur-sm min-w-[14rem] max-w-[min(24rem,calc(100vw-1.5rem))] opacity-60 hover:opacity-100 transition-opacity duration-200"
           title="Debug overlay — hover to focus"
         >
           <div className="flex items-center justify-between gap-2 mb-1">

@@ -216,7 +216,7 @@ export default function RunPage() {
           <button
             type="button"
             onClick={() => navigate('/', { replace: true })}
-            className="text-xs font-mono text-cyan-700 dark:text-[#00e5ff] hover:text-cyan-500 dark:hover:text-cyan-300 hover:underline underline-offset-4 decoration-cyan-700/40 dark:decoration-[#00e5ff]/40 transition-colors duration-150 focus-visible:underline focus-visible:outline-none"
+            className="text-xs font-mono text-cyan-700 dark:text-[#00e5ff] hover:text-cyan-500 dark:hover:text-cyan-300 hover:underline underline-offset-4 decoration-cyan-700/40 dark:decoration-[#00e5ff]/40 transition-colors duration-150 focus-visible:underline focus-visible:outline-hidden"
           >
             Back to main →
           </button>

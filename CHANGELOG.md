@@ -6,6 +6,14 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Changed
+
+- Frontend styling moved to Tailwind CSS 4, compiled by the `@tailwindcss/vite`
+  plugin instead of PostCSS; `postcss.config.js` and `tailwind.config.js` are
+  gone, class-based dark mode is declared in `src/index.css`, and the utilities
+  v4 renamed were migrated, so both themes render as before. v4 raises the
+  browser floor to Chrome 111, Safari 16.4 and Firefox 128.
+
 ## [1.4.1] - 2026-10-26
 
 ### Security

@@ -306,7 +306,7 @@ export default function LandingPage() {
             placeholder="Enter URL..."
             value={url}
             onChange={(e) => { setUrl(e.target.value); setError(''); if (searchParams.has('error')) setSearchParams({}); }}
-            className="flex-1 bg-transparent text-zinc-800 dark:text-[#aea2a2] text-sm placeholder-zinc-500 dark:placeholder-white/50 focus:outline-none py-1"
+            className="flex-1 bg-transparent text-zinc-800 dark:text-[#aea2a2] text-sm placeholder-zinc-500 dark:placeholder-white/50 focus:outline-hidden py-1"
             autoFocus={!(me && me.apps.length > 0)}
           />
           <div className="relative" ref={menuRef}>
@@ -429,7 +429,7 @@ export default function LandingPage() {
                 className="pointer-events-none absolute bottom-full right-0 mb-2 px-2.5 py-1.5 rounded-md text-[11px] leading-snug w-56 text-right
                            text-white/90 bg-gray-900/90 dark:bg-black/80
                            border border-zinc-700/60 dark:border-white/10
-                           shadow-xl backdrop-blur-sm
+                           shadow-xl backdrop-blur-xs
                            opacity-0 group-hover:opacity-100 transition-opacity duration-150
                            origin-bottom-right"
                 role="tooltip"
