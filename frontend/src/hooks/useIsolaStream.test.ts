@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { abrTick, copyChordStaysLocal, mapClientToCapture, createFrameCounters, noteStreamedPacket, frameMetricsPatch, type AbrState, type AbrTick, type IsolaNetQuality } from './useIsolaStream';
+import { abrTick, advanceArrivalWindow, copyChordStaysLocal, createArrivalWindow, mapClientToCapture, createFrameCounters, noteStreamedPacket, frameMetricsPatch, type AbrState, type AbrTick, type IsolaNetQuality } from './useIsolaStream';
 
 const BASE_KBPS = 13500;
 // abrLadderKbps(13500) — 100 / 70 / 45 / 30 % with a 500 kbps floor.
@@ -204,6 +204,63 @@ describe('mapClientToCapture', () => {
     // A null canvas / not-yet-decoded video used to be read as width 0 here.
     const rect = { left: 0, top: 0, width: 1000, height: 500 };
     expect(mapClientToCapture(10, 10, rect, 0, 0, 1000, 500)).toEqual({ x: 0, y: 0 });
+  });
+});
+
+describe('advanceArrivalWindow', () => {
+  it('waits for a second message before reporting a rate', () => {
+    const win = createArrivalWindow();
+    advanceArrivalWindow(win, 1000, 5000);
+    expect(win).toEqual({ atMs: 1000, bytes: 5000, kbps: 0, fresh: false });
+  });
+
+  it('rates exactly the bytes received inside the window the server reported', () => {
+    const win = createArrivalWindow();
+    advanceArrivalWindow(win, 1000, 5000);
+    // 80 kB in one second = 640 kbps, the same second sent_kbps describes.
+    advanceArrivalWindow(win, 2000, 5000 + 80_000);
+    expect(win.kbps).toBe(640);
+    expect(win.fresh).toBe(true);
+  });
+
+  it('keeps the last usable sample when a window has no duration', () => {
+    // Two metrics messages in one task, or a clock hiccup: a 0 ms window has no
+    // rate, and reporting 0 there is indistinguishable from total loss.
+    const win = createArrivalWindow();
+    advanceArrivalWindow(win, 1000, 5000);
+    advanceArrivalWindow(win, 2000, 85_000);
+    advanceArrivalWindow(win, 2000, 85_000);
+    expect(win.kbps).toBe(640);
+    expect(win.fresh).toBe(true);
+  });
+
+  it('reports a burst-and-quiet page as healthy, not as loss', () => {
+    // The reported bug: a pointer dragged across links repaints → one burst of
+    // frames, then no egress at all until the next interaction. A free-running
+    // client window that starts after the burst counts those bytes in the
+    // previous window and reads 0 while sent_kbps still describes the burst, so
+    // the ratio hit 0 and the toolbar signal went red for a second. Measuring
+    // the same window the server measured keeps the two in agreement.
+    const win = createArrivalWindow();
+    advanceArrivalWindow(win, T0 - 1000, 0); // prime: the marker needs a predecessor
+    const state = newState();
+    let ratioEma: number | null = null;
+    let quality: IsolaNetQuality = 'good';
+    for (let i = 0; i < 3; i++) {
+      advanceArrivalWindow(win, T0 + i * 1000, win.bytes + 80_000);
+      const res = abrTick(state, {
+        nowMs: T0 + i * 1000 + 500,
+        sentKbps: 640,
+        arrivalKbps: win.kbps,
+        targetKbps: LADDER[0],
+        rttMs: 6,
+        baseKbps: BASE_KBPS,
+        ratioEma,
+      });
+      ratioEma = res.ratioEma;
+      quality = res.netQuality;
+    }
+    expect(quality).toBe('good');
   });
 });
 

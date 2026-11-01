@@ -6,6 +6,13 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- The stream-quality indicator no longer flashes red while the pointer moves
+  over links. Arrival rate is now measured over the same second as the server's
+  egress, so a burst of repaint frames followed by an idle moment — every hover
+  over a link — is no longer read as loss.
+
 ## [1.5.1] - 2026-10-31
 
 ### Changed

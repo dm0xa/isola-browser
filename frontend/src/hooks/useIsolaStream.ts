@@ -105,6 +105,12 @@ const INPUT_RECONNECT_ATTEMPTS = 5;
 // fires for those) and every tab command would silently no-op.
 const INPUT_ZOMBIE_MS = 65000;
 
+// A server metrics message closes the arrival window once a second. Two missing
+// messages mean the sample no longer describes "now" (stream paused, ABR
+// restart, tab stalled), so the tick falls back to its own window instead of
+// feeding a stale rate into the loss estimate.
+const ARRIVAL_WINDOW_MAX_AGE_MS = 2500;
+
 // IsolaStreamMetrics, ABR, MSE/WebCodecs decode helpers → ./isola/*
 
 // ── Canvas insets for the network panel (bottom or side split) ──────────
@@ -215,6 +221,53 @@ export function mapClientToCapture(
     x: Math.max(0, Math.min(w - 1, Math.round(vx * w / srcW))),
     y: Math.max(0, Math.min(h - 1, Math.round(vy * h / srcH))),
   };
+}
+
+// Arrival metering aligned to the server's own metrics window.
+//
+// The ABR compares the client's arrival rate against `sent_kbps`, which the
+// streamer measured over one of *its* seconds. A free-running 1 Hz client timer
+// measures a different second, and on a change-driven stream that difference is
+// not noise: the encoder emits one burst of frames per interaction and then
+// nothing at all until the page changes again. A client window that starts just
+// after a burst counts the burst's bytes in the previous window and then reads
+// exactly zero, while `sent_kbps` — still describing the burst window — reports
+// a healthy rate. The ratio comes out 0, far below the `bad` threshold, so the
+// toolbar signal went red for a second every time the pointer travelled across
+// a link (every hover repaints and so starts another burst).
+//
+// Closing the window on the metrics message itself keeps the measured interval
+// and the server's yardstick in phase — same wall-clock second, same bytes. The
+// stream is one ordered TCP connection, so every frame the server counted for
+// that window has already been delivered when its metrics message is read.
+export interface ArrivalWindow {
+  /** When the last metrics message arrived (performance.now), 0 before the first. */
+  atMs: number;
+  /** Cumulative bytes received at that message. */
+  bytes: number;
+  /** Bitrate over the window the message closed. */
+  kbps: number;
+  /** True once `kbps` covers a real interval (needs two messages). */
+  fresh: boolean;
+}
+
+export function createArrivalWindow(): ArrivalWindow {
+  return { atMs: 0, bytes: 0, kbps: 0, fresh: false };
+}
+
+/** Close the arrival window at a server metrics message. Mutates in place. */
+export function advanceArrivalWindow(win: ArrivalWindow, nowMs: number, totalBytes: number): void {
+  if (win.atMs > 0) {
+    const dtSec = (nowMs - win.atMs) / 1000;
+    // A zero/negative interval (clock hiccup, two messages in one task) carries
+    // no rate, so it must not replace the last usable sample with 0.
+    if (dtSec > 0) {
+      win.kbps = Math.round(((totalBytes - win.bytes) * 8) / dtSec / 1000);
+      win.fresh = true;
+    }
+  }
+  win.atMs = nowMs;
+  win.bytes = totalBytes;
 }
 
 // Frame-rate stream counters. The frame path runs at the decode rate (up to the
@@ -455,6 +508,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
   // produces far less than the target and must not be read as congestion.
   const targetKbpsRef = useRef(0);
   const sentKbpsRef = useRef(0);
+  // Arrival metering closed on the server's metrics messages, so the sample and
+  // `sent_kbps` describe the same second (see advanceArrivalWindow).
+  const arrivalWindowRef = useRef(createArrivalWindow());
   // Smoothed arrival/egress ratio (see RATIO_EMA_ALPHA), null before the
   // first measurable tick. Published as netRatio.
   const ratioEmaRef = useRef<number | null>(null);
@@ -685,6 +741,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     segmentsThisSecondRef.current = 0;
     lastSegmentAtRef.current = 0;
     lastBitrateWindowRef.current = { at: 0, bytes: 0 };
+    arrivalWindowRef.current = createArrivalWindow();
     firstFrameRecordedRef.current = false;
     appendCountRef.current = 0;
     appendFailRef.current = 0;
@@ -1237,6 +1294,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     segmentsThisSecondRef.current = 0;
     lastSegmentAtRef.current = 0;
     lastBitrateWindowRef.current = { at: performance.now(), bytes: 0 };
+    arrivalWindowRef.current = createArrivalWindow();
 
     // Stream WS: capability negotiation rides the handshake — a
     // WebCodecs-capable client asks for raw Annex-B via mode=webcodecs
@@ -1586,11 +1644,20 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       // ── Network quality estimation + ABR controller (1 Hz, ref state
       // only so it never re-renders). While paused (just after a stream
       // reset) the stream is re-booting — don't read that as degradation.
+      //
+      // Arrival must be the sample closed on the server's own metrics window,
+      // not this tick's free-running window: the server reported `sent_kbps`
+      // for a second that ended at its last metrics message, and comparing that
+      // against a differently-phased second fabricates loss on any bursty
+      // (change-driven) stream. The free-running `bitrateKbps` stays as the
+      // display rate and is the fallback until the first metrics message lands.
       const abr = abrRef.current;
+      const arrivalWin = arrivalWindowRef.current;
+      const arrivalAligned = arrivalWin.fresh && now - arrivalWin.atMs <= ARRIVAL_WINDOW_MAX_AGE_MS;
       const abrResult = abrTick(abr, {
         nowMs: Date.now(),
         sentKbps: sentKbpsRef.current,
-        arrivalKbps: bitrateKbps,
+        arrivalKbps: arrivalAligned ? arrivalWin.kbps : bitrateKbps,
         targetKbps: targetKbpsRef.current,
         rttMs: rttEmaRef.current,
         baseKbps: baseKbpsRef.current,
@@ -1837,6 +1904,10 @@ export function useIsolaStream(defaultTargetUrl?: string) {
             }
             if (typeof msg.sent_kbps === 'number') {
               sentKbpsRef.current = msg.sent_kbps;
+              // Every frame the server counted for the second it just reported
+              // has already been read: one ordered TCP stream. Close the arrival
+              // window here so both numbers describe the same second.
+              advanceArrivalWindow(arrivalWindowRef.current, performance.now(), bytesReceivedRef.current);
             }
             break;
         }
