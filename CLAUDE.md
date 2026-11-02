@@ -139,7 +139,8 @@ tree.
   are the version source: release builds stamp `GITHUB_REF_NAME` (minus the
   leading `v`), Docker and `backend/scripts/build.sh` use `git describe`, and a
   bare `go build` reports the `dev`/`unknown` defaults. Do not bump
-  `pkg/version` or `frontend/package.json` per release.
+  `pkg/version` or `frontend/package.json` per release. How to choose the
+  number is in [`docs/versioning.md`](./docs/versioning.md).
 - **Update the docs with the code.** Behavior, config, API, security, and
   deployment changes should update the matching `docs/*.md`, keeping `README.md`
   consistent with them.

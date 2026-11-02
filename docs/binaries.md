@@ -72,4 +72,5 @@ UI displays those backend values.
 
 There is no per-release version bump in the source tree: `pkg/version` defaults
 to `dev` for a bare `go build`, and `frontend/package.json` keeps an inert
-`0.0.0` (it is not the product version and is not shipped in the bundle).
+`0.0.0` (it is not the product version and is not shipped in the bundle). How a
+release number is chosen is covered in [Versioning](versioning.md).

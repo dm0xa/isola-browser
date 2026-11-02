@@ -19,6 +19,7 @@ This directory is the external documentation — what an operator or an API cons
 | Know which outside services recon can contact | [Third parties](third-parties.md) |
 | Lock down API/MCP on a public host | [Security → API and MCP authentication](security.md#api-and-mcp-authentication) |
 | Run it in production | [Deployment](deployment.md) |
+| Choose a release version and cut it | [Versioning](versioning.md) |
 | Diagnose a problem | [Troubleshooting](troubleshooting.md) |
 
 ## At a Glance
