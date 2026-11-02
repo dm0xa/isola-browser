@@ -6,12 +6,25 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Changed
+
+- Clicking a host in the resource graph now spotlights its whole branch — the
+  host, its type groups and their files — and dims the rest, like clicking a
+  type group already did.
+- The resource graph groups requests by the page that loaded them, in visit
+  order, instead of inferring a trigger chain from capture order. Across
+  several navigations each page sits under the entry block, and an earlier page
+  no longer looks like it loaded the next one.
+
 ### Fixed
 
-- The stream-quality indicator no longer flashes red while the pointer moves
-  over links. Arrival rate is now measured over the same second as the server's
-  egress, so a burst of repaint frames followed by an idle moment — every hover
-  over a link — is no longer read as loss.
+- The stream-quality indicator no longer flashes red on link hover: arrival
+  rate is measured over the same second as the server's egress.
+- `blob:` and `data:` requests get their own URL as the host label in the
+  resource graph instead of one nameless card.
+- A request first seen at `responseReceived` takes its URL from the response, so
+  the Network tab no longer shows a blank row and the graph no longer draws a
+  nameless host.
 
 ## [1.5.1] - 2026-10-31
 

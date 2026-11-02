@@ -147,8 +147,14 @@ curl -s "http://localhost:8080/api/sessions/$ID/intel?host=example.com&mode=prob
 
 The same analysis is already attached to the network dump: every entry in
 `GET /network` may carry `headers`, `tls`, `redirects`, `posture`, `ttfb_ms`,
-`from_disk_cache`, `from_service_worker`, `third_party`, `tracker` and `beacon`.
-Those fields survive `type`, `host_contains` and `limit` filtering.
+`from_disk_cache`, `from_service_worker`, `origin_host`, `third_party`,
+`tracker` and `beacon`. Those fields survive `type`, `host_contains` and `limit`
+filtering.
+
+`origin_host` is the page the request belongs to — the tab's main-frame document
+host at capture time. An iframe document (consent wall, payment widget) inherits
+its parent page instead of replacing it, so grouping by `origin_host` yields the
+navigations the user actually made, in visit order.
 
 `tls.security_state` is CDP's own verdict on the connection (`secure`, `info`,
 `neutral`, `insecure`, `insecure-broken`, `unknown`). It matters because the
@@ -161,8 +167,11 @@ posture is only as trustworthy as the connection that delivered the headers.
 ## Resource graph image
 
 `GET /api/sessions/{id}/graph.png` renders the session's captured network as a
-PNG: the opened host, its resource-type groups, and the files behind them — the
-same summary the viewer's **Graph** tab draws. It is rendered by the streamer
+PNG: the entry block, the pages the capture visited in order, each page's hosts,
+their resource-type groups, and the files behind them — the same summary the
+viewer's **Graph** tab draws. Hosts are placed by the page that loaded them
+(`origin_host`), never by capture order, so a page visited earlier or the search
+engine that led to the current one never appears to have been loaded by it. It is rendered by the streamer
 from its own capture, not from a screenshot of the page, so it reflects the
 current window (`session.network_log_max_entries`, default 1000) even while the
 tab is loading or blank.

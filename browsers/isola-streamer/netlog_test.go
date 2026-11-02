@@ -131,6 +131,24 @@ func TestNetMonitorStoresProtocolAndConnectionID(t *testing.T) {
 	}
 }
 
+// A request first seen at responseReceived has no requestWillBeSent to name it.
+// Its URL must come from the response, or the row is blank in the panel and a
+// nameless host in the resource graph.
+func TestResponseOnlyEntryKeepsResponseURL(t *testing.T) {
+	defer resetNetCapture()()
+
+	params := json.RawMessage(`{"requestId":"r1","type":"Script","response":{"url":"https://cdn.example/app.js","status":200,"mimeType":"application/javascript"}}`)
+	netMonitorTap("target", "", "Network.responseReceived", params, 1)
+
+	entries := snapshotNetworkLog()
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if entries[0].URL != "https://cdn.example/app.js" {
+		t.Fatalf("url = %q, want the response URL", entries[0].URL)
+	}
+}
+
 // A request first seen at responseReceived (mid-navigation reconnect) must join
 // the rolling window immediately. Otherwise a response that never produces
 // loadingFinished/loadingFailed stays outside netOrder forever, is never

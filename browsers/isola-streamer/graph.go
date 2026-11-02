@@ -155,6 +155,11 @@ type graphNode struct {
 	Flagged     bool
 	TS          int64
 	Origin      bool
+	// Page marks a top-level page the capture visited (a main-frame document
+	// host). Page cards sit in the first column in Seq (visit) order; every
+	// other host hangs off the page that loaded it.
+	Page bool
+	Seq  int
 }
 
 type graphEdge struct {
@@ -199,20 +204,9 @@ func buildGraphModel(entries []netDumpEntry, pinnedOrigin string, types []resCla
 
 	// The origin is decided over the whole capture, never the filtered slice:
 	// narrowing to one type must not make a CDN host look like the opened page.
-	origin := ""
-	rootDocHost := ""
-	for i := range entries {
-		if rootDocHost == "" && classes[i] == classDocument {
-			rootDocHost = facts[i].Host
-		}
-		if origin == "" {
-			origin = facts[i].Host
-		}
-	}
-	if pinned := strings.TrimSpace(pinnedOrigin); pinned != "" {
-		origin = pinned
-	} else if rootDocHost != "" {
-		origin = rootDocHost
+	origin := strings.TrimSpace(pinnedOrigin)
+	if origin == "" {
+		origin = originOf(entries)
 	}
 
 	typeSet := map[resClass]bool{}
@@ -221,6 +215,11 @@ func buildGraphModel(entries []netDumpEntry, pinnedOrigin string, types []resCla
 	}
 	var included []int
 	for i := range entries {
+		// A response first seen mid-navigation can lack a URL. It cannot be
+		// placed — no host, no resource — and must not become a nameless card.
+		if facts[i].Host == "" {
+			continue
+		}
 		if len(typeSet) > 0 && !typeSet[classes[i]] {
 			continue
 		}
@@ -284,17 +283,46 @@ func buildGraphModel(entries []netDumpEntry, pinnedOrigin string, types []resCla
 		addEdge(hid, rid, true)
 	}
 
-	// The opened page always gets a host card, even when its own requests have
-	// already left the capture window.
-	if origin != "" {
-		if _, ok := nodes[hostID(origin)]; !ok {
-			nodes[hostID(origin)] = &graphNode{
-				ID: hostID(origin), Kind: "host", Label: origin, Host: origin,
-			}
-			order = append(order, hostID(origin))
+	// Pages, in the order the capture first saw them. An entry's OriginHost is
+	// the tab's main-frame document host at capture time; navigation replaces
+	// the page, so this is visit order. A streamer that predates OriginHost
+	// sends nothing, and the capture then has one page: the origin.
+	pages := []string{}
+	pageSeen := map[string]bool{}
+	pageSeq := map[string]int{}
+	for _, idx := range included {
+		page := strings.TrimSpace(entries[idx].OriginHost)
+		if page == "" || pageSeen[page] {
+			continue
 		}
-		nodes[hostID(origin)].Origin = true
+		pageSeen[page] = true
+		pageSeq[page] = len(pages)
+		pages = append(pages, page)
+	}
+	if origin != "" && !pageSeen[origin] {
+		pageSeen[origin] = true
+		pageSeq[origin] = len(pages)
+		pages = append(pages, origin)
+	}
 
+	// The opened page always gets a host card, even when its own requests have
+	// already left the capture window — and so does every other page.
+	for _, page := range pages {
+		hid := hostID(page)
+		n, ok := nodes[hid]
+		if !ok {
+			n = &graphNode{ID: hid, Kind: "host", Label: page, Host: page}
+			nodes[hid] = n
+			order = append(order, hid)
+		}
+		n.Page = true
+		n.Seq = pageSeq[page]
+		if page == origin {
+			n.Origin = true
+		}
+	}
+
+	if origin != "" {
 		resources := 0
 		failed, flagged := 0, 0
 		for _, id := range order {
@@ -315,39 +343,65 @@ func buildGraphModel(entries []netDumpEntry, pinnedOrigin string, types []resCla
 			Failed: failed > 0, Flagged: flagged > 0,
 		}
 		order = append(order, rootNodeID)
-		addEdge(rootNodeID, hostID(origin), false)
+		for _, page := range pages {
+			addEdge(rootNodeID, hostID(page), false)
+		}
 	}
 
-	// Trigger chain: a host is attributed to the script/stylesheet/document of
-	// another host that preceded it.
-	lastTrigger := map[string]string{}
-	for pos, idx := range included {
-		host := facts[idx].Host
-		// The opened page is the root of the chain, so a script from an ad host
-		// can never be its trigger. Inferring that edge closed a loop and the
-		// cycle-tolerant layering parked the ad host at depth 0, pushing the
-		// page to the far right of the graph.
-		if host == origin {
+	// Which page asked for each host, in capture order. Guessing a trigger
+	// chain from capture order instead stitched separate navigations into one
+	// fake chain: a page opened before the current one — or the search engine
+	// that led to it — appeared to be loaded by the current page, and the
+	// hosts formed cycles no honest layering could untangle. The streamer
+	// already knows the page, so use it.
+	pagesByHost := map[string][]string{}
+	for _, idx := range included {
+		page := strings.TrimSpace(entries[idx].OriginHost)
+		if page == "" {
 			continue
 		}
-		for j := pos - 1; j >= 0 && j >= pos-40; j-- {
-			prevHost := facts[included[j]].Host
-			if prevHost == host {
-				continue
+		host := facts[idx].Host
+		seen := false
+		for _, p := range pagesByHost[host] {
+			if p == page {
+				seen = true
+				break
 			}
-			switch classes[included[j]] {
-			case classScript, classStylesheet, classDocument:
-			default:
-				continue
+		}
+		if !seen {
+			pagesByHost[host] = append(pagesByHost[host], page)
+		}
+	}
+	for _, id := range order {
+		n := nodes[id]
+		// A page is placed by the spine above; its own requests belong to it.
+		if n.Kind != "host" || pageSeen[n.Host] {
+			continue
+		}
+		parent := ""
+		for _, p := range pagesByHost[n.Host] {
+			if origin != "" && p == origin {
+				parent = origin
+				break
 			}
-			addEdge(hostID(prevHost), hostID(host), false)
-			lastTrigger[host] = hostID(prevHost)
-			break
 		}
-		if host != origin && lastTrigger[host] == "" && origin != "" {
-			addEdge(hostID(origin), hostID(host), false)
-			lastTrigger[host] = hostID(origin)
+		if parent == "" {
+			for _, p := range pagesByHost[n.Host] {
+				if pageSeen[p] {
+					parent = p
+					break
+				}
+			}
 		}
+		if parent == "" {
+			parent = origin
+		}
+		if parent == "" || hostID(parent) == n.ID {
+			continue
+		}
+		// Solid: the page requesting this host is a captured fact, not an
+		// inference from capture order.
+		addEdge(hostID(parent), n.ID, true)
 	}
 
 	m := graphModel{Origin: origin}
@@ -608,111 +662,42 @@ type graphLayout struct {
 	TotalH  float64
 }
 
-// originNodeID is the host card of the opened page, or "" when no origin is
-// known.
-func originNodeID(origin string) string {
-	if origin == "" {
-		return ""
-	}
-	return "host:" + origin
-}
-
-// computeDepths is longest-path layering over the graph's cycles. Real trigger
-// chains loop in the wild (host A's script loads host B, whose script loads
-// host A back), so the graph is not a DAG. A DFS that merely skips back edges
-// mislays every cycle: when all of a node's parents are ancestors still on the
-// stack it settles on depth 0, which parked a third-party host in the entry
-// column, left of the page. Tarjan condenses each cycle into one component —
-// hosts that trigger each other belong in the same column — and the components
-// form a DAG whose longest path is the depth.
-func computeDepths(nodes []graphNode, edges []graphEdge, originID string) map[string]int {
-	outgoing := make(map[string][]string, len(nodes))
+// computeDepths is the graph's vocabulary, one band per kind: entry, pages,
+// hosts, types, files. It is deliberately not edge distance — an expanded
+// page's type groups and the other hosts it loaded are both children of the
+// page, and letting them share a column made the groups read as children of
+// whichever host sat next to them. Fixed bands also keep the graph steady while
+// the capture grows: a new third-party host never pushes the type rows sideways.
+func computeDepths(nodes []graphNode) map[string]int {
+	hasGroups := false
 	for _, n := range nodes {
-		outgoing[n.ID] = nil
-	}
-	for _, e := range edges {
-		outgoing[e.From] = append(outgoing[e.From], e.To)
-	}
-
-	index := make(map[string]int, len(nodes))
-	low := make(map[string]int, len(nodes))
-	onStack := make(map[string]bool, len(nodes))
-	component := make(map[string]int, len(nodes))
-	var stack []string
-	next, count := 0, 0
-
-	var strongConnect func(v string)
-	strongConnect = func(v string) {
-		index[v] = next
-		low[v] = next
-		next++
-		stack = append(stack, v)
-		onStack[v] = true
-		for _, w := range outgoing[v] {
-			if _, seen := index[w]; !seen {
-				strongConnect(w)
-				if low[w] < low[v] {
-					low[v] = low[w]
-				}
-			} else if onStack[w] && index[w] < low[v] {
-				low[v] = index[w]
-			}
-		}
-		if low[v] == index[v] {
-			for {
-				w := stack[len(stack)-1]
-				stack = stack[:len(stack)-1]
-				onStack[w] = false
-				component[w] = count
-				if w == v {
-					break
-				}
-			}
-			count++
+		if n.Kind == "group" {
+			hasGroups = true
+			break
 		}
 	}
-	for _, n := range nodes {
-		if _, seen := index[n.ID]; !seen {
-			strongConnect(n.ID)
-		}
-	}
-
-	// Tarjan finishes a component only after every component reachable from it,
-	// so ids run sink → source; relaxing in that order is the longest path in
-	// one pass and cannot ping-pong on a cycle.
-	byComponent := make([][]int, count)
-	for _, e := range edges {
-		from, okFrom := component[e.From]
-		to, okTo := component[e.To]
-		if !okFrom || !okTo || from == to {
-			continue
-		}
-		byComponent[from] = append(byComponent[from], to)
-	}
-	componentDepth := make([]int, count)
-	for c := count - 1; c >= 0; c-- {
-		for _, to := range byComponent[c] {
-			if componentDepth[c]+1 > componentDepth[to] {
-				componentDepth[to] = componentDepth[c] + 1
-			}
-		}
-	}
-
 	depths := make(map[string]int, len(nodes))
 	for _, n := range nodes {
-		depths[n.ID] = componentDepth[component[n.ID]]
-	}
-	// The entry chip and the opened page are columns 0 and 1 by definition: the
-	// page is the root of the chain, whatever else points at it.
-	if _, ok := depths[rootNodeID]; ok {
-		depths[rootNodeID] = 0
-	}
-	if originID != "" {
-		if _, ok := depths[originID]; ok {
-			if _, hasRoot := depths[rootNodeID]; hasRoot {
-				depths[originID] = 1
+		switch n.Kind {
+		case "root":
+			depths[n.ID] = 0
+		case "host":
+			// Pages are what the user asked for; every other host is a provider.
+			if n.Page {
+				depths[n.ID] = 1
 			} else {
-				depths[originID] = 0
+				depths[n.ID] = 2
+			}
+		case "group":
+			depths[n.ID] = 3
+		default:
+			// A resource row sits inside an open type group. With grouping off
+			// (a single-type facet) it is drawn directly under its host, so it
+			// takes the next band instead of leaving the type band empty.
+			if hasGroups {
+				depths[n.ID] = 4
+			} else {
+				depths[n.ID] = 3
 			}
 		}
 	}
@@ -761,7 +746,7 @@ func layoutModel(m graphModel, width, height float64, dir layoutDirection) graph
 	}
 	crossLimit := math.Max(300, crossOf(width*1.35, height*1.7))
 
-	depths := computeDepths(m.Nodes, m.Edges, originNodeID(m.Origin))
+	depths := computeDepths(m.Nodes)
 	byDepth := map[int][]graphNode{}
 	var depthKeys []int
 	for _, n := range m.Nodes {
@@ -790,6 +775,14 @@ func layoutModel(m graphModel, width, height float64, dir layoutDirection) graph
 		sort.SliceStable(list, func(i, j int) bool {
 			if kindRank[list[i].Kind] != kindRank[list[j].Kind] {
 				return kindRank[list[i].Kind] < kindRank[list[j].Kind]
+			}
+			// Pages keep the order the capture visited them; every other row
+			// stays alphabetical so a growing capture does not reshuffle.
+			if list[i].Page != list[j].Page {
+				return list[i].Page
+			}
+			if list[i].Page && list[i].Seq != list[j].Seq {
+				return list[i].Seq < list[j].Seq
 			}
 			if list[i].Host != list[j].Host {
 				return list[i].Host < list[j].Host

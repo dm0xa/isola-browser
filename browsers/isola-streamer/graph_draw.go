@@ -605,24 +605,37 @@ func renderGraphPNG(ctx context.Context, entries []netDumpEntry, opts graphOptio
 
 // originOf applies buildGraphModel's origin rule to an unfiltered capture: the
 // host of the first document, else the first host seen.
+// originOf is the page the graph centres on. Navigation replaces the page, so
+// the most recent document the capture saw is the page the user is looking at —
+// the same rule /trackers uses. A capture that predates page attribution falls
+// back to the first document host, then to the first request.
 func originOf(entries []netDumpEntry) string {
-	origin, rootDocHost := "", ""
+	origin, rootDocHost, firstHost := "", "", ""
 	for i := range entries {
 		facts := parseRequestURL(entries[i].URL)
 		if facts.Host == "" {
 			continue
 		}
-		if rootDocHost == "" && classifyResource(entries[i].Type, facts) == classDocument {
+		if firstHost == "" {
+			firstHost = facts.Host
+		}
+		if classifyResource(entries[i].Type, facts) != classDocument {
+			continue
+		}
+		if rootDocHost == "" {
 			rootDocHost = facts.Host
 		}
-		if origin == "" {
-			origin = facts.Host
+		if page := strings.TrimSpace(entries[i].OriginHost); page != "" {
+			origin = page
 		}
+	}
+	if origin != "" {
+		return origin
 	}
 	if rootDocHost != "" {
 		return rootDocHost
 	}
-	return origin
+	return firstHost
 }
 
 func renderEmptyGraph(opts graphOptions, theme graphTheme, now time.Time) image.Image {

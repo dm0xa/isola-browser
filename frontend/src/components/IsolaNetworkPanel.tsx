@@ -43,6 +43,11 @@ export interface NetEntry {
   tp?: boolean;
   tr?: string;
   bc?: boolean;
+  /**
+   * Host of the page this request belongs to — the tab's main-frame document
+   * when the request was captured. Iframe documents inherit their parent page.
+   */
+  oh?: string;
 }
 
 export interface NetRedirect {
@@ -115,7 +120,7 @@ function shannon(s: string): number {
 
 export function analyze(url: string): { host: string; path: string; flags: NetFlags } {
   let host = '';
-  let path = '';
+  let path: string;
   let scheme = 'https:';
   let port = '';
   try {
@@ -125,9 +130,13 @@ export function analyze(url: string): { host: string; path: string; flags: NetFl
     scheme = u.protocol;
     port = u.port;
   } catch {
-    host = url.slice(0, 40);
+    host = url.slice(0, 60);
     path = '';
   }
+  // `blob:`, `data:` and `file:` URLs parse but carry no hostname. They must
+  // not collapse into one nameless host card, so fall back to the URL itself —
+  // the same label the Go side gives them.
+  if (!host) host = url.slice(0, 60);
   const flags: NetFlags = {
     ip: /^(\d{1,3}\.){3}\d{1,3}$/.test(host),
     insecure: scheme === 'http:',
@@ -249,11 +258,13 @@ export function buildTabOptions(
   for (const id of observed) if (!domainById.has(id)) domainById.set(id, '');
 
   // Placeholder URLs (about:blank, new-tab pages) carry no domain: fall back to
-  // the host seen most often in that tab's captured requests.
+  // the host seen most often in that tab's captured requests. Only a real
+  // hostname counts — analyze() labels blob:/data: URLs with the URL itself so
+  // the graph can name them, and that is not a domain a tab can be called.
   const hostCounts = new Map<number, Map<string, number>>();
   for (const e of entries) {
     if (typeof e.tb !== 'number' || domainById.get(e.tb)) continue;
-    const host = analyze(e.url).host.replace(/^www\./, '');
+    const host = domainFromUrl(e.url);
     if (!host) continue;
     let counts = hostCounts.get(e.tb);
     if (!counts) {

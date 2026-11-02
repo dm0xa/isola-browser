@@ -229,6 +229,11 @@ type netEvent struct {
 		Status int    `json:"status"`
 	} `json:"redirectResponse"`
 	Response struct {
+		// URL rides responseReceived. A request first seen at response time
+		// (the monitor attached mid-navigation) has no requestWillBeSent to
+		// name it, and an unnamed entry is an unusable row: blank URL in the
+		// panel and a nameless host in the resource graph.
+		URL               string            `json:"url"`
 		Status            int               `json:"status"`
 		MimeType          string            `json:"mimeType"`
 		Protocol          string            `json:"protocol"`
@@ -322,6 +327,9 @@ func applyNetEvent(key, uiID, method string, p *netEvent, tab int, sessionID str
 			r = &netRequest{id: uiID, cdpID: p.RequestId, tab: tab, startedAt: captureTime(p.WallTime)}
 			netRequests[key] = r
 			rememberOrder(key)
+		}
+		if r.url == "" {
+			r.url = p.Response.URL
 		}
 		r.status = p.Response.Status
 		r.ip = p.Response.RemoteIPAddress
@@ -659,6 +667,12 @@ func netEntryWire(r *netRequest) map[string]any {
 	if r.sw {
 		e["sw"] = true
 	}
+	// The page this request belongs to: the tab's main-frame document host at
+	// capture time. It is what lets the resource graph group requests by page
+	// instead of guessing a trigger chain from capture order.
+	if r.originHost != "" {
+		e["oh"] = r.originHost
+	}
 	if thirdParty, tracker := classifyEntry(r); thirdParty || tracker != "" {
 		if thirdParty {
 			e["tp"] = true
@@ -764,6 +778,7 @@ type netDumpEntry struct {
 	TLS           *netTLS           `json:"tls,omitempty"`
 	Redirects     []netRedirect     `json:"redirects,omitempty"`
 	Posture       *postureReport    `json:"posture,omitempty"`
+	OriginHost    string            `json:"origin_host,omitempty"`
 	ThirdParty    bool              `json:"third_party,omitempty"`
 	Tracker       string            `json:"tracker,omitempty"`
 	Beacon        bool              `json:"beacon,omitempty"`
@@ -794,6 +809,7 @@ func netRequestToDump(r *netRequest) netDumpEntry {
 		TLS:           r.tls,
 		Redirects:     r.redirects,
 		Posture:       r.posture,
+		OriginHost:    r.originHost,
 		ThirdParty:    thirdParty,
 		Tracker:       tracker,
 		Beacon:        isBeaconType(r.typ),

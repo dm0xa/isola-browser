@@ -88,6 +88,48 @@ describe('focusEmphasis', () => {
     expect(emphasis.nodes.has('grp:host:example.com:script')).toBe(true);
     expect(emphasis.nodes.has('host:example.com')).toBe(true);
   });
+
+  it('lights the clicked host tree and its path, not a sibling tree', () => {
+    const edges = [
+      { id: 'root', from: 'root:request', to: 'host:example.com' },
+      { id: 'origin-script', from: 'host:example.com', to: 'grp:host:example.com:script' },
+      { id: 'script-app', from: 'grp:host:example.com:script', to: 'res:https://example.com/app.js' },
+      { id: 'origin-cdn', from: 'host:example.com', to: 'host:cdn.test' },
+      { id: 'cdn-script', from: 'host:cdn.test', to: 'grp:host:cdn.test:script' },
+      { id: 'script-lib', from: 'grp:host:cdn.test:script', to: 'res:https://cdn.test/lib.js' },
+    ];
+
+    const emphasis = focusEmphasis('host:cdn.test', edges);
+
+    // The tree below the click stays lit, at any depth.
+    expect(emphasis.nodes.has('grp:host:cdn.test:script')).toBe(true);
+    expect(emphasis.nodes.has('res:https://cdn.test/lib.js')).toBe(true);
+    expect(emphasis.edges.has('cdn-script')).toBe(true);
+    expect(emphasis.edges.has('script-lib')).toBe(true);
+    // Its ancestors keep the path back to the entry readable.
+    expect(emphasis.nodes.has('host:example.com')).toBe(true);
+    expect(emphasis.nodes.has('root:request')).toBe(true);
+    expect(emphasis.edges.has('origin-cdn')).toBe(true);
+    // The origin's other branches are a different tree and fade.
+    expect(emphasis.nodes.has('grp:host:example.com:script')).toBe(false);
+    expect(emphasis.nodes.has('res:https://example.com/app.js')).toBe(false);
+    expect(emphasis.edges.has('origin-script')).toBe(false);
+    expect(emphasis.edges.has('script-app')).toBe(false);
+  });
+
+  it('lets the entry node reach every host tree', () => {
+    const edges = [
+      { id: 'root', from: 'root:request', to: 'host:example.com' },
+      { id: 'origin-cdn', from: 'host:example.com', to: 'host:cdn.test' },
+      { id: 'cdn-script', from: 'host:cdn.test', to: 'grp:host:cdn.test:script' },
+      { id: 'script-lib', from: 'grp:host:cdn.test:script', to: 'res:https://cdn.test/lib.js' },
+    ];
+
+    const emphasis = focusEmphasis('root:request', edges);
+
+    expect(emphasis.nodes.has('host:cdn.test')).toBe(true);
+    expect(emphasis.nodes.has('res:https://cdn.test/lib.js')).toBe(true);
+  });
 });
 
 describe('layoutGraph direction', () => {
@@ -314,8 +356,9 @@ describe('layoutGraph wrapping', () => {
   });
 
   it('wraps a long sibling run into sub-columns and bounds the cross axis', () => {
-    const { columns, totalH } = layoutGraph(expanded, 800, 400);
-    expect(columns.filter((c) => c.depth === 3).length).toBeGreaterThan(1);
+    const { nodes, columns, totalH } = layoutGraph(expanded, 800, 400);
+    const fileDepth = nodes.find((n) => n.node.kind === 'resource')!.depth;
+    expect(columns.filter((c) => c.depth === fileDepth).length).toBeGreaterThan(1);
     expect(totalH).toBeLessThan(800);
   });
 
@@ -327,9 +370,10 @@ describe('layoutGraph wrapping', () => {
 
   it('does not overlap nodes inside a wrapped sub-column', () => {
     const { nodes, columns } = layoutGraph(expanded, 800, 400);
-    for (const col of columns.filter((c) => c.depth === 3)) {
+    const fileDepth = nodes.find((n) => n.node.kind === 'resource')!.depth;
+    for (const col of columns.filter((c) => c.depth === fileDepth)) {
       const inside = nodes
-        .filter((n) => n.depth === 3 && n.x >= col.x && n.x < col.x + col.w)
+        .filter((n) => n.depth === fileDepth && n.x >= col.x && n.x < col.x + col.w)
         .sort((a, b) => a.y - b.y);
       for (let i = 1; i < inside.length; i++) {
         expect(inside[i].y).toBeGreaterThanOrEqual(inside[i - 1].y + inside[i - 1].h);
@@ -546,6 +590,39 @@ describe('disclosure click stability', () => {
     expect(scriptGroup()?.getAttribute('opacity')).toBe('1');
     expect(imageGroup()?.getAttribute('opacity')).toBe('1');
   });
+
+  it('spotlights the clicked host tree and fades the other trees', async () => {
+    const entries: NetEntry[] = [
+      { id: 'doc', url: 'https://example.com/', m: 'GET', s: 200, t: 'Document' },
+      { id: 'app', url: 'https://example.com/app.js', m: 'GET', s: 200, t: 'Script' },
+      { id: 'ad', url: 'https://ads.test/pixel.png', m: 'GET', s: 200, t: 'Image' },
+      { id: 'lib', url: 'https://cdn.test/lib.js', m: 'GET', s: 200, t: 'Script' },
+    ];
+    const view = render(createElement(ResourceGraph, { entries, originHost: 'example.com' }));
+    const node = (prefix: string) => view.container.querySelector(`[aria-label^="${prefix}"]`);
+
+    await waitFor(() => {
+      if (!node('Script on example.com')) throw new Error('origin host not expanded');
+    });
+
+    fireEvent.click(node('cdn.test:')!);
+    await waitFor(() => {
+      if (!node('Script on cdn.test')) throw new Error('cdn host did not expand');
+    });
+
+    // The clicked tree: the host, its type group and (once opened) files.
+    expect(node('cdn.test:')?.getAttribute('opacity')).toBe('1');
+    expect(node('Script on cdn.test')?.getAttribute('opacity')).toBe('1');
+    // Ancestors stay lit so the tree keeps its path back to the entry.
+    expect(node('example.com:')?.getAttribute('opacity')).toBe('1');
+    expect([...view.container.querySelectorAll('g[data-node]')]
+      .find((g) => g.textContent?.includes('[request]'))
+      ?.getAttribute('opacity')).toBe('1');
+    // Everything else is another tree: the sibling host and the origin's
+    // other branches both fade.
+    expect(node('ads.test:')?.getAttribute('opacity')).toBe('0.14');
+    expect(node('Script on example.com')?.getAttribute('opacity')).toBe('0.14');
+  });
 });
 
 // The tooltip's copy buttons used to lose their click to the canvas' pointer
@@ -702,5 +779,114 @@ describe('exportCaption', () => {
 
     expect(caption).toContain('Script + Font');
     expect(caption).toContain('failed only');
+  });
+});
+
+describe('buildGraph pages', () => {
+  // The capture behind the reported confusion: github.com → search → unibet.com
+  // → back → unibet.se. Capture order alone cannot tell that github.com was
+  // visited *before* the opened page, so the old trigger scan stitched them
+  // into one chain and hung the search engine under the page it led to. The
+  // streamer stamps each request with the page it belongs to; that is the
+  // signal the graph must use.
+  const withPage = (url: string, t: string, oh?: string): NetEntry => ({ ...entry(url, t), oh });
+  const entries: NetEntry[] = [
+    withPage('https://github.com/', 'Document', 'github.com'),
+    withPage('https://github.githubassets.com/app.js', 'Script', 'github.com'),
+    withPage('https://duckduckgo.com/?q=unibet', 'Document', 'duckduckgo.com'),
+    withPage('https://www.unibet.com/', 'Document', 'www.unibet.com'),
+    withPage('https://cdn.tracker.example/t.js', 'Script', 'www.unibet.com'),
+    withPage('https://www.unibet.se/', 'Document', 'www.unibet.se'),
+    withPage('https://cdn.tracker.example/t.js', 'Script', 'www.unibet.se'),
+  ];
+
+  it('hangs every page off the entry instead of off another page', () => {
+    const g = buildGraph(entries, 'www.unibet.se');
+    const fromRoot = g.edges.filter((e) => e.from === 'root:request').map((e) => e.to).sort();
+
+    expect(fromRoot).toEqual([
+      'host:duckduckgo.com',
+      'host:github.com',
+      'host:www.unibet.com',
+      'host:www.unibet.se',
+    ]);
+  });
+
+  it('attributes a host to the page that loaded it', () => {
+    const g = buildGraph(entries, 'www.unibet.se');
+    const hostEdges = g.edges
+      .filter((e) => e.from.startsWith('host:') && e.to.startsWith('host:'))
+      .map((e) => `${e.from}->${e.to}`)
+      .sort();
+
+    // githubassets belongs to the github page; the shared tracker stays on the
+    // opened page so its tree is complete.
+    expect(hostEdges).toEqual([
+      'host:github.com->host:github.githubassets.com',
+      'host:www.unibet.se->host:cdn.tracker.example',
+    ]);
+    expect(g.edges.some((e) => e.from === 'host:github.githubassets.com' && e.to === 'host:duckduckgo.com'))
+      .toBe(false);
+  });
+
+  it('keeps pages in visit order and hosts in the next column', () => {
+    const { nodes } = layoutGraph(buildGraph(entries, 'www.unibet.se'), 1200, 700);
+    const pages = nodes.filter((n) => n.node.page).sort((a, b) => a.y - b.y);
+
+    expect(pages.map((n) => n.node.host)).toEqual([
+      'github.com', 'duckduckgo.com', 'www.unibet.com', 'www.unibet.se',
+    ]);
+    for (const page of pages) expect(page.depth).toBe(1);
+    const tracker = nodes.find((n) => n.id === 'host:cdn.tracker.example')!;
+    expect(tracker.depth).toBe(2);
+  });
+
+  it('does not treat an iframe document as a page', () => {
+    const g = buildGraph([
+      withPage('https://example.com/', 'Document', 'example.com'),
+      withPage('https://widget.example/frame.html', 'Document', 'example.com'),
+      withPage('https://widget.example/lib.js', 'Script', 'example.com'),
+    ], 'example.com');
+
+    expect(g.nodes.filter((n) => n.page).map((n) => n.host)).toEqual(['example.com']);
+    expect(g.edges.some((e) => e.from === 'root:request' && e.to === 'host:widget.example')).toBe(false);
+  });
+
+  it('falls back to one origin page when the capture has no page attribution', () => {
+    const g = buildGraph([
+      entry('https://example.com/', 'Document'),
+      entry('https://cdn.example.net/a.js', 'Script'),
+    ], 'example.com');
+
+    expect(g.nodes.filter((n) => n.page).map((n) => n.host)).toEqual(['example.com']);
+    expect(g.edges
+      .filter((e) => e.from.startsWith('host:') && e.to.startsWith('host:'))
+      .map((e) => `${e.from}->${e.to}`))
+      .toEqual(['host:example.com->host:cdn.example.net']);
+  });
+});
+
+describe('buildGraph hostless URLs', () => {
+  it('labels blob: and data: requests instead of merging them into one blank card', () => {
+    const g = buildGraph([
+      { ...entry('https://example.com/', 'Document'), oh: 'example.com' },
+      { ...entry('blob:https://example.com/5f2a', 'XHR'), oh: 'example.com' },
+      { ...entry('data:application/json,%7B%7D', 'XHR'), oh: 'example.com' },
+    ], 'example.com');
+
+    const hosts = g.nodes.filter((n) => n.kind === 'host').map((n) => n.host);
+    expect(hosts).toContain('blob:https://example.com/5f2a');
+    expect(hosts).toContain('data:application/json,%7B%7D');
+    expect(hosts).not.toContain('');
+  });
+
+  it('drops a response with no URL instead of drawing a nameless card', () => {
+    const g = buildGraph([
+      { ...entry('https://example.com/', 'Document'), oh: 'example.com' },
+      { ...entry('', 'Script'), oh: 'example.com' },
+    ], 'example.com');
+
+    expect(g.nodes.filter((n) => n.kind === 'host').map((n) => n.host)).toEqual(['example.com']);
+    expect(g.nodes.filter((n) => n.kind === 'resource')).toHaveLength(1);
   });
 });

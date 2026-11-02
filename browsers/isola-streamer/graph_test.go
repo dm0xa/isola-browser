@@ -6,7 +6,9 @@ import (
 	"image/png"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -352,6 +354,18 @@ func TestRenderGraphStopsOnCancelledContext(t *testing.T) {
 	}
 }
 
+func TestOriginOfPrefersTheLatestPage(t *testing.T) {
+	entries := []netDumpEntry{
+		{URL: "https://first.example/", Type: "Document", OriginHost: "first.example"},
+		{URL: "https://first.example/app.js", Type: "Script", OriginHost: "first.example"},
+		{URL: "https://second.example/", Type: "Document", OriginHost: "second.example"},
+		{URL: "https://second.example/poll", Type: "XHR", OriginHost: "second.example"},
+	}
+	if got := originOf(entries); got != "second.example" {
+		t.Fatalf("originOf = %q, want second.example (the page the user is on)", got)
+	}
+}
+
 func TestOriginOfPrefersDocumentHost(t *testing.T) {
 	entries := []netDumpEntry{
 		{URL: "https://cdn.example.net/lib.js", Type: "Script"},
@@ -399,9 +413,11 @@ func TestLayoutKeepsOriginFirst(t *testing.T) {
 	}
 }
 
-// Hosts whose trigger chain loops (a's script → b, b's script → a) used to
-// settle on depth 0 and appear in the entry column, left of the opened page.
-func TestLayoutCondensesTriggerCycles(t *testing.T) {
+// A capture without page attribution (an older streamer) used to invent a
+// trigger chain from capture order, which looped when hosts triggered each
+// other. The graph now has no host→host edges besides page attribution, so
+// interleaved capture order cannot create a cycle or park a host in column 0.
+func TestLayoutDoesNotInventHostChains(t *testing.T) {
 	entries := []netDumpEntry{
 		{URL: "https://example.com/", Type: "Document"},
 		{URL: "https://example.com/app.js", Type: "Script"},
@@ -411,6 +427,16 @@ func TestLayoutCondensesTriggerCycles(t *testing.T) {
 		{URL: "https://a.tracker.example/t2.js", Type: "Script"},
 	}
 	m := buildGraphModel(entries, "example.com", nil)
+	for _, e := range m.Edges {
+		if e.From == rootNodeID {
+			continue
+		}
+		if strings.HasPrefix(e.From, "host:") && strings.HasPrefix(e.To, "host:") {
+			if e.From != "host:example.com" {
+				t.Fatalf("invented host chain %s -> %s", e.From, e.To)
+			}
+		}
+	}
 	lay := layoutModel(m, 1280, 720, dirHorizontal)
 	origin, ok := layoutNodeByID(lay.Nodes, "host:example.com")
 	if !ok {
@@ -429,6 +455,80 @@ func TestLayoutCondensesTriggerCycles(t *testing.T) {
 		if n.X <= origin.X {
 			t.Fatalf("%s at x=%.0f is not right of the origin at x=%.0f", n.Node.ID, n.X, origin.X)
 		}
+	}
+}
+
+// pageEntries is the capture behind the reported confusion: github.com → search
+// → unibet.com → back → unibet.se. Capture order alone cannot tell that
+// github.com came before the opened page, so the old trigger scan hung it (and
+// the search engine) under the page they led to.
+func pageEntries() []netDumpEntry {
+	return []netDumpEntry{
+		{URL: "https://github.com/", Type: "Document", OriginHost: "github.com"},
+		{URL: "https://github.githubassets.com/app.js", Type: "Script", OriginHost: "github.com"},
+		{URL: "https://duckduckgo.com/?q=unibet", Type: "Document", OriginHost: "duckduckgo.com"},
+		{URL: "https://www.unibet.com/", Type: "Document", OriginHost: "www.unibet.com"},
+		{URL: "https://cdn.tracker.example/t.js", Type: "Script", OriginHost: "www.unibet.com"},
+		{URL: "https://www.unibet.se/", Type: "Document", OriginHost: "www.unibet.se"},
+		{URL: "https://cdn.tracker.example/t.js", Type: "Script", OriginHost: "www.unibet.se"},
+	}
+}
+
+func TestGraphModelGroupsHostsByPage(t *testing.T) {
+	m := buildGraphModel(pageEntries(), "www.unibet.se", nil)
+	edges := map[string]bool{}
+	for _, e := range m.Edges {
+		edges[e.From+"->"+e.To] = true
+	}
+	for _, want := range []string{
+		"root:request->host:github.com",
+		"root:request->host:duckduckgo.com",
+		"root:request->host:www.unibet.com",
+		"root:request->host:www.unibet.se",
+		"host:github.com->host:github.githubassets.com",
+		"host:www.unibet.se->host:cdn.tracker.example",
+	} {
+		if !edges[want] {
+			t.Fatalf("missing edge %s", want)
+		}
+	}
+	if edges["host:github.githubassets.com->host:duckduckgo.com"] {
+		t.Fatal("search page attributed to the github assets host")
+	}
+	if edges["host:www.unibet.se->host:github.com"] {
+		t.Fatal("earlier page hung off the opened page")
+	}
+}
+
+func TestLayoutPlacesPagesInVisitOrder(t *testing.T) {
+	lay := layoutModel(buildGraphModel(pageEntries(), "www.unibet.se", nil), 1280, 720, dirHorizontal)
+	var pages []layoutNode
+	for _, n := range lay.Nodes {
+		if n.Node.Page {
+			pages = append(pages, n)
+		}
+	}
+	if len(pages) != 4 {
+		t.Fatalf("page cards = %d, want 4", len(pages))
+	}
+	sort.Slice(pages, func(i, j int) bool { return pages[i].Y < pages[j].Y })
+	var order []string
+	for _, p := range pages {
+		if p.Depth != 1 {
+			t.Fatalf("%s depth = %d, want 1", p.Node.ID, p.Depth)
+		}
+		order = append(order, p.Node.Host)
+	}
+	want := []string{"github.com", "duckduckgo.com", "www.unibet.com", "www.unibet.se"}
+	if strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Fatalf("page order = %v, want %v", order, want)
+	}
+	tracker, ok := layoutNodeByID(lay.Nodes, "host:cdn.tracker.example")
+	if !ok {
+		t.Fatal("tracker host missing from the layout")
+	}
+	if tracker.Depth != 2 {
+		t.Fatalf("tracker depth = %d, want 2", tracker.Depth)
 	}
 }
 

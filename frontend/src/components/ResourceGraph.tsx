@@ -48,6 +48,14 @@ export interface GraphNode {
   sha1?: string;
   /** The streamer clipped this URL to its wire budget; copy is incomplete. */
   ut?: boolean;
+  /**
+   * A top-level page the capture visited (a main-frame document host). Page
+   * cards sit in the first column and keep visit order; every other host hangs
+   * off the page that loaded it.
+   */
+  page?: boolean;
+  /** Visit order of a page within the capture (0-based). */
+  seq?: number;
 }
 
 export interface GraphEdge {
@@ -186,15 +194,17 @@ export function buildGraph(
 
   if (entries.length === 0) return { nodes: [], edges: [], rootId: null, originId: null };
 
-  // One parse per entry. The trigger scan below looks back up to 40 entries per
-  // row, so calling analyze()/classifyResource() inside it was ~40k URL parses
-  // per build — and the memo runs twice and on every network event.
+  // One parse per entry: the host, the resource class, the warning flags and
+  // the page the request belongs to. The streamer stamps `oh` (the tab's
+  // main-frame document host) when it captures the request; an iframe document
+  // inherits its parent page, so only real navigations create pages.
   const facts = entries.map((e) => {
     const { host, flags } = analyze(e.url);
     return {
       host,
       cls: classifyResource(e.t || '', e.url),
       flagged: Object.values(flags).some(Boolean),
+      page: (e.oh || '').trim(),
     };
   });
 
@@ -204,6 +214,10 @@ export function buildGraph(
   let rootDocHost: string | null = null;
   for (let i = 0; i < entries.length; i++) {
     const { host, cls } = facts[i];
+    // A response the monitor first saw mid-navigation can lack a URL. Such an
+    // entry cannot be placed — no host, no resource — and must not become a
+    // nameless card or a phantom origin.
+    if (!host) continue;
     if (!rootDocHost && (cls === 'document' || (entries[i].t || '').toLowerCase().includes('document'))) {
       rootDocHost = host;
     }
@@ -213,9 +227,9 @@ export function buildGraph(
   // A non-empty type filter drops everything else, so the graph shows exactly
   // the kinds the user kept (a filter, not a spotlight). Indices are kept so a
   // precomputed fact can be indexed directly.
-  const included = typeFilter && typeFilter.size > 0
-    ? entries.map((_, i) => i).filter((i) => typeFilter.has(facts[i].cls))
-    : entries.map((_, i) => i);
+  const included = entries
+    .map((_, i) => i)
+    .filter((i) => facts[i].host && (!typeFilter || typeFilter.size === 0 || typeFilter.has(facts[i].cls)));
 
   for (const idx of included) {
     const e = entries[idx];
@@ -277,16 +291,42 @@ export function buildGraph(
   // a polling host then becomes the origin and the node swaps while idle.
   const finalRootHost = (pinnedHost || '').trim() || rootDocHost || rootHost;
 
-  // Synthetic entry node: a single `[request]` block that every chain hangs
-  // off, so the graph reads "this is where it all started" at a glance.
+  // Pages, in the order the capture first saw them. A page is a document host
+  // the streamer attributed requests to (`oh`); navigation replaces the page,
+  // so this is the order the user visited them. A streamer that predates `oh`
+  // sends nothing, and the capture then has exactly one page: the origin.
+  const pages: string[] = [];
+  const pageSeen = new Set<string>();
+  for (const idx of included) {
+    const page = facts[idx].page;
+    if (!page || pageSeen.has(page)) continue;
+    pageSeen.add(page);
+    pages.push(page);
+  }
+  if (finalRootHost && !pageSeen.has(finalRootHost)) {
+    pageSeen.add(finalRootHost);
+    pages.push(finalRootHost);
+  }
+  for (const [seq, page] of pages.entries()) {
+    const hid = hostId(page);
+    const existing = nodes.get(hid);
+    if (existing) {
+      existing.page = true;
+      existing.seq = seq;
+    } else {
+      nodes.set(hid, {
+        id: hid, kind: 'host', label: page, host: page,
+        count: 0, resourceCount: 0, failedCount: 0, flaggedCount: 0,
+        flagged: false, failed: false, page: true, seq,
+      });
+    }
+  }
+
+  // Synthetic entry node: a single `[request]` block every page hangs off, so
+  // the graph reads "this is the capture; these are the pages it visited" at a
+  // glance.
   const rootId = finalRootHost ? ROOT_NODE_ID : null;
   const originId = finalRootHost ? hostId(finalRootHost) : null;
-  if (finalRootHost && !nodes.has(hostId(finalRootHost))) {
-    nodes.set(hostId(finalRootHost), {
-      id: hostId(finalRootHost), kind: 'host', label: finalRootHost, host: finalRootHost,
-      count: 0, resourceCount: 0, failedCount: 0, flaggedCount: 0, flagged: false, failed: false,
-    });
-  }
 
   if (finalRootHost) {
     const resources = [...nodes.values()].filter((n) => n.kind === 'resource');
@@ -297,39 +337,44 @@ export function buildGraph(
       count: included.length, resourceCount: resources.length, failedCount, flaggedCount,
       flagged: flaggedCount > 0, failed: failedCount > 0,
     });
-    const rootEdgeId = `${ROOT_NODE_ID}->${hostId(finalRootHost)}`;
-    edges.set(rootEdgeId, { id: rootEdgeId, from: ROOT_NODE_ID, to: hostId(finalRootHost), direct: false });
+    for (const page of pages) {
+      const edgeId = `${ROOT_NODE_ID}->${hostId(page)}`;
+      edges.set(edgeId, { id: edgeId, from: ROOT_NODE_ID, to: hostId(page), direct: false });
+    }
   }
 
-  const lastTriggerByHost = new Map<string, string>();
-  for (let i = 0; i < included.length; i++) {
-    const host = facts[included[i]].host;
+  // Which page asked for each host, in capture order. Guessing a trigger chain
+  // from capture order instead stitched separate navigations into one fake
+  // chain: a page opened *before* the current one — or the search engine that
+  // led to it — appeared to be loaded by the current page, and hosts formed
+  // cycles that no honest layering could untangle. The streamer already knows
+  // the page, so use it.
+  const pagesByHost = new Map<string, string[]>();
+  for (const idx of included) {
+    const page = facts[idx].page;
+    if (!page) continue;
+    const host = facts[idx].host;
+    const list = pagesByHost.get(host);
+    if (!list) pagesByHost.set(host, [page]);
+    else if (!list.includes(page)) list.push(page);
+  }
 
-    // The opened page is the root of the chain, so a script from an ad host can
-    // never be its trigger. Inferring that edge closed a loop (origin → ad host
-    // → … → origin) and the cycle-tolerant layering below then parked the ad
-    // host at depth 0 and pushed the page to the far right of the graph.
-    if (host === finalRootHost) continue;
-
-    for (let j = i - 1; j >= 0 && j >= i - 40; j--) {
-      const prev = facts[included[j]];
-      if (prev.host === host) continue;
-      if (prev.cls !== 'script' && prev.cls !== 'stylesheet' && prev.cls !== 'document') continue;
-      const edgeId = `${hostId(prev.host)}->${hostId(host)}`;
-      if (!edges.has(edgeId)) {
-        edges.set(edgeId, { id: edgeId, from: hostId(prev.host), to: hostId(host), direct: false });
-      }
-      lastTriggerByHost.set(host, hostId(prev.host));
-      break;
-    }
-
-    if (host !== finalRootHost && !lastTriggerByHost.has(host) && finalRootHost) {
-      const edgeId = `${hostId(finalRootHost)}->${hostId(host)}`;
-      if (!edges.has(edgeId)) {
-        edges.set(edgeId, { id: edgeId, from: hostId(finalRootHost), to: hostId(host), direct: false });
-      }
-      lastTriggerByHost.set(host, hostId(finalRootHost));
-    }
+  for (const n of nodes.values()) {
+    // A page is placed by the spine above; its own requests belong to it.
+    if (n.kind !== 'host' || pageSeen.has(n.host)) continue;
+    const parents = pagesByHost.get(n.host) || [];
+    // The page the user is watching keeps its tree complete even when an
+    // earlier page touched the same host.
+    const parent = (finalRootHost && parents.includes(finalRootHost) ? finalRootHost : parents.find((p) => pageSeen.has(p)))
+      || finalRootHost
+      || '';
+    if (!parent) continue;
+    const from = hostId(parent);
+    if (from === n.id) continue;
+    // Solid: the page requesting this host is a captured fact, not an
+    // inference from capture order.
+    const edgeId = `${from}->${n.id}`;
+    if (!edges.has(edgeId)) edges.set(edgeId, { id: edgeId, from, to: n.id, direct: true });
   }
 
   return {
@@ -393,8 +438,8 @@ export function applyExpansion(full: GraphData, expansion: GraphExpansion): Grap
   const nodes = new Map<string, GraphNode>();
   const edges = new Map<string, GraphEdge>();
 
-  // Root and host cards are always present. Host→host trigger edges survive
-  // because they describe the chain, not the leaves.
+  // Root and host cards are always present. Page→host attribution edges
+  // survive because they place the host, not the leaves.
   for (const n of full.nodes) {
     if (n.kind === 'root' || n.kind === 'host') nodes.set(n.id, n);
   }
@@ -514,10 +559,11 @@ function expandAllState(data: GraphData): GraphExpansion {
   return { hosts, groups, all };
 }
 
-// Nodes and edges that stay lit while `focusId` is hovered or pinned.
-// Immediate neighbours in both directions, plus every ancestor back to the
-// entry. Stopping at one hop left the path from `[request]` faded whenever
-// the pointer sat on a resource further down the chain.
+// Nodes and edges that stay lit while `focusId` is hovered or pinned: the
+// focused node's own tree plus the path that led to it. The down walk follows
+// type groups and resources to any depth but stops at another host, because a
+// host → host edge (page → host) starts a different tree. The entry node is the
+// root of every tree, so it deliberately descends through pages.
 export function focusEmphasis(
   focusId: string | null,
   edges: Array<{ id: string; from: string; to: string }>,
@@ -528,27 +574,45 @@ export function focusEmphasis(
 
   nodes.add(focusId);
   const incoming = new Map<string, Array<{ id: string; from: string }>>();
+  const outgoing = new Map<string, Array<{ id: string; to: string }>>();
   for (const e of edges) {
-    if (e.from === focusId || e.to === focusId) {
-      edgeIds.add(e.id);
-      nodes.add(e.from);
-      nodes.add(e.to);
-    }
-    const list = incoming.get(e.to);
-    if (list) list.push({ id: e.id, from: e.from });
+    const inList = incoming.get(e.to);
+    if (inList) inList.push({ id: e.id, from: e.from });
     else incoming.set(e.to, [{ id: e.id, from: e.from }]);
+    const outList = outgoing.get(e.from);
+    if (outList) outList.push({ id: e.id, to: e.to });
+    else outgoing.set(e.from, [{ id: e.id, to: e.to }]);
   }
 
-  const stack = [focusId];
-  const seen = new Set<string>([focusId]);
-  while (stack.length) {
-    const id = stack.pop()!;
+  // Ancestors back to the entry, so the focused node is never lit in isolation.
+  const up = [focusId];
+  const seenUp = new Set<string>([focusId]);
+  while (up.length) {
+    const id = up.pop()!;
     for (const e of incoming.get(id) || []) {
       edgeIds.add(e.id);
       nodes.add(e.from);
-      if (!seen.has(e.from)) {
-        seen.add(e.from);
-        stack.push(e.from);
+      if (!seenUp.has(e.from)) {
+        seenUp.add(e.from);
+        up.push(e.from);
+      }
+    }
+  }
+
+  const fromRoot = focusId === ROOT_NODE_ID;
+  const down = [focusId];
+  const seenDown = new Set<string>([focusId]);
+  while (down.length) {
+    const id = down.pop()!;
+    for (const e of outgoing.get(id) || []) {
+      // Host ids are only ever `host:<name>`; a resource/group/more id cannot
+      // collide, so another host here means a different tree.
+      if (!fromRoot && e.to.startsWith('host:')) continue;
+      edgeIds.add(e.id);
+      nodes.add(e.to);
+      if (!seenDown.has(e.to)) {
+        seenDown.add(e.to);
+        down.push(e.to);
       }
     }
   }
@@ -639,78 +703,37 @@ function nodeSize(n: GraphNode): { w: number; h: number } {
 /** Column order within a depth: root, hosts, type groups, resources, “more”. */
 const KIND_RANK: Record<GraphNodeKind, number> = { root: 0, host: 1, group: 2, resource: 3, more: 4 };
 
+/**
+ * Depth is the graph's vocabulary, one band per kind: entry, pages, hosts,
+ * types, files. It is deliberately not edge distance — an expanded page's type
+ * groups and the other hosts it loaded are both children of the page, and
+ * letting them share a column made the groups read as children of whichever
+ * host sat next to them. Fixed bands also keep the graph steady while the
+ * capture grows: a new third-party host never pushes the type rows sideways.
+ */
 function computeDepths(data: GraphData): Map<string, number> {
-  const outgoing = new Map<string, string[]>();
-  for (const n of data.nodes) outgoing.set(n.id, []);
-  for (const e of data.edges) outgoing.get(e.from)?.push(e.to);
-
-  // Longest-path layering. Real trigger chains loop in the wild (host A's
-  // script loads host B, whose script loads host A back), so the graph is not a
-  // DAG. A DFS that merely skips back edges mislays every cycle: when all of a
-  // node's parents are ancestors still on the stack it settles on depth 0,
-  // which parked a third-party host in the entry column, left of the page.
-  // Tarjan condenses each cycle into one component — hosts that trigger each
-  // other belong in the same column — and the components form a DAG.
-  const index = new Map<string, number>();
-  const low = new Map<string, number>();
-  const onStack = new Set<string>();
-  const stack: string[] = [];
-  const component = new Map<string, number>();
-  let next = 0;
-  let components = 0;
-
-  const strongConnect = (v: string) => {
-    index.set(v, next);
-    low.set(v, next);
-    next++;
-    stack.push(v);
-    onStack.add(v);
-    for (const w of outgoing.get(v) || []) {
-      if (!index.has(w)) {
-        strongConnect(w);
-        low.set(v, Math.min(low.get(v)!, low.get(w)!));
-      } else if (onStack.has(w)) {
-        low.set(v, Math.min(low.get(v)!, index.get(w)!));
-      }
-    }
-    if (low.get(v) === index.get(v)) {
-      let w: string;
-      do {
-        w = stack.pop()!;
-        onStack.delete(w);
-        component.set(w, components);
-      } while (w !== v);
-      components++;
-    }
-  };
-  for (const n of data.nodes) {
-    if (!index.has(n.id)) strongConnect(n.id);
-  }
-
-  // Tarjan finishes a component only after every component reachable from it,
-  // so ids run sink → source; relaxing in that order is the longest path in
-  // one pass and cannot ping-pong on a cycle.
-  const byComponent: number[][] = Array.from({ length: components }, () => []);
-  for (const e of data.edges) {
-    const from = component.get(e.from);
-    const to = component.get(e.to);
-    if (from === undefined || to === undefined || from === to) continue;
-    byComponent[from].push(to);
-  }
-  const componentDepth = new Array<number>(components).fill(0);
-  for (let c = components - 1; c >= 0; c--) {
-    for (const to of byComponent[c]) {
-      componentDepth[to] = Math.max(componentDepth[to], componentDepth[c] + 1);
-    }
-  }
-
+  const hasGroups = data.nodes.some((n) => n.kind === 'group');
   const depths = new Map<string, number>();
-  for (const n of data.nodes) depths.set(n.id, componentDepth[component.get(n.id)!]);
-  // The entry chip and the opened page are columns 0 and 1 by definition: the
-  // page is the root of the chain, whatever else points at it.
-  if (depths.has(ROOT_NODE_ID)) depths.set(ROOT_NODE_ID, 0);
-  if (data.originId && depths.has(data.originId)) {
-    depths.set(data.originId, depths.has(ROOT_NODE_ID) ? 1 : 0);
+  for (const n of data.nodes) {
+    let depth: number;
+    switch (n.kind) {
+      case 'root':
+        depth = 0;
+        break;
+      case 'host':
+        // Pages are what the user asked for; every other host is a provider.
+        depth = n.page ? 1 : 2;
+        break;
+      case 'group':
+        depth = 3;
+        break;
+      default:
+        // A resource row sits inside an open type group. With grouping off (a
+        // single-type facet) it is drawn directly under its host, so it takes
+        // the next band instead of leaving the type band empty.
+        depth = hasGroups ? 4 : 3;
+    }
+    depths.set(n.id, depth);
   }
   return depths;
 }
@@ -758,6 +781,10 @@ export function layoutGraph(
     const list = byDepth.get(d) || [];
     list.sort((a, b) => {
       if (KIND_RANK[a.kind] !== KIND_RANK[b.kind]) return KIND_RANK[a.kind] - KIND_RANK[b.kind];
+      // Pages keep the order the capture visited them; every other row stays
+      // alphabetical so a growing capture does not reshuffle under the pointer.
+      if (!!a.page !== !!b.page) return a.page ? -1 : 1;
+      if (a.page && b.page && (a.seq ?? 0) !== (b.seq ?? 0)) return (a.seq ?? 0) - (b.seq ?? 0);
       if (a.host !== b.host) return a.host.localeCompare(b.host);
       return b.count - a.count;
     });
@@ -1153,10 +1180,13 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   }, []);
 
   const toggleHost = useCallback((id: string) => {
+    const open = expansion.hosts.has(id);
     setExpansion((prev) => ({ ...prev, hosts: toggled(prev.hosts, id) }));
-    setSelectedId(null);
+    // Opening a host lights its own tree while the rest fades, exactly like a
+    // type group; closing it removes the fade.
+    setSelectedId(open ? null : id);
     userAdjustedRef.current = true;
-  }, []);
+  }, [expansion.hosts]);
 
   const toggleGroup = useCallback((id: string) => {
     const open = expansion.groups.has(id);
@@ -2017,7 +2047,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
           {isRootNode ? 'Entry point' : isHost ? node.host : node.label}
         </div>
         {isRootNode ? (
-          <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-slate-500">Everything below was triggered by this request.</div>
+          <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-slate-500">Every page and request in this capture.</div>
         ) : isGroup || isMore ? (
           <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-slate-500">
             {isGroup ? `${node.count} resources on ${node.host}` : `on ${node.host}`}

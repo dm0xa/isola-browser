@@ -74,7 +74,7 @@ Network data comes from the same capture as the in-viewer Network panel, but `ge
 
 - `snapshot` — accessibility tree with stable `ref` ids for automation. Geometry fields may be zero when the AX backend does not expose layout; roles and names are still useful for choosing targets.
 - `screenshot` — full visual frame of the active tab (CDP capture). Prefer this when you need to see captchas, layout, or pages that expose little in the AX tree. Payloads are large; use JPEG with a lower `quality` when bandwidth matters.
-- `resource_graph` — the captured *requests* rather than the pixels: one PNG of the initiator → host → resource chain, drawn from the same window `get_network` reads. Reach for it when you want to show what a page loaded — a phishing kit's exfiltration host, a page that never rendered, a wall of third-party scripts — or to attach evidence to a report. `expand=origin` (default) is the readable summary; `expand=all` opens every group to its files and can be very wide; `failed_only` keeps just the broken requests. The image is rendered by the streamer, so it works even when the tab shows nothing. A render is bounded to 45 seconds and an 8 MiB payload, so a very large capture should use `scale=1` or `expand=collapsed`.
+- `resource_graph` — the captured *requests* rather than the pixels: one PNG of the entry → pages → host → resource tree, drawn from the same window `get_network` reads. Pages keep the order they were visited, and each host sits under the page that loaded it (`origin_host`), so traffic from an earlier navigation is never drawn as if the current page had caused it. Reach for it when you want to show what a page loaded — a phishing kit's exfiltration host, a page that never rendered, a wall of third-party scripts — or to attach evidence to a report. `expand=origin` (default) is the readable summary; `expand=all` opens every group to its files and can be very wide; `failed_only` keeps just the broken requests. The image is rendered by the streamer, so it works even when the tab shows nothing. A render is bounded to 45 seconds and an 8 MiB payload, so a very large capture should use `scale=1` or `expand=collapsed`.
 
 ### Client configuration
 
@@ -133,7 +133,7 @@ close_session   {"session_id":"9f1c2b3d-..."}
 Two things worth knowing:
 
 - **`ref` values are renumbered on every `snapshot`.** After `navigate`, or a click that replaces the page, call `snapshot` again before the next `click` / `type`; an `e2` from an older snapshot points at nothing useful.
-- **A filter narrows the rows, not the fields.** `get_network` always returns each entry whole — `id`, `mime`, `ip`, `protocol`, `connection_id`, `bytes`, `sha1`, `failed`, `error`, `tab`, `headers`, `tls`, `redirects`, `posture` — whether or not `type`, `host_contains` or `limit` is set. Use `connection_id` (the agent-to-agent shape a phishing page often hides) and the source `ip` freely on a filtered read.
+- **A filter narrows the rows, not the fields.** `get_network` always returns each entry whole — `id`, `mime`, `ip`, `protocol`, `connection_id`, `bytes`, `sha1`, `failed`, `error`, `tab`, `origin_host`, `headers`, `tls`, `redirects`, `posture` — whether or not `type`, `host_contains` or `limit` is set. Use `connection_id` (the agent-to-agent shape a phishing page often hides) and the source `ip` freely on a filtered read.
 
 ### Calling it without an SDK
 

@@ -2430,7 +2430,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
           const frames = data.numberOfFrames;
           const ch = data.numberOfChannels;
           const sr = data.sampleRate;
-          let buf: AudioBuffer | null = null;
+          let buf: AudioBuffer;
           try {
             buf = ctx.createBuffer(ch, frames, sr);
             const fmt = data.format || 'f32-planar';
