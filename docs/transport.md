@@ -78,6 +78,28 @@ Control and video share that mailbox: `stream_reset` cannot overtake the last fr
 
 They are separate so a large video write cannot stall a click. Auth and the `host=1` flag are in [API → WebSocket](api.md#websocket).
 
+### Relay lifecycle and limits
+
+The Go relay is the only hop between a viewer and a container, and it owns the
+teardown of both sockets. The rules below are enforced in
+`backend/pkg/wsproxy/duplex.go`:
+
+| Guard | Value | Why |
+| :--- | :--- | :--- |
+| Write deadline, both directions | 30 s per message | A viewer or container that stops reading must not pin a relay goroutine (and with it the other socket) forever. The streamer already applies 10 s per write. |
+| Container read deadline | 90 s between messages | A container that stops producing frames is torn down rather than holding the viewer open. |
+| Client read limit | 12 MiB per message | Input and control are small JSON; an unbounded client message is a DoS. |
+| Container read limit | 32 MiB per message | The streamer sends one message per packet, so the largest legitimate message is a single keyframe (well under 1 MiB at 1080p). 32 MiB is an order of magnitude of headroom — a tighter limit would break video, a looser one would bound nothing. |
+| Container control (TEXT) limit | 1 MiB per message | Control/status JSON does not scale with the picture, so it is bounded separately and tightly even though video cannot be. |
+| Client read deadline | none | An idle viewer legitimately sends nothing for minutes. Liveness is the 30 s ping, whose control write has its own 10 s deadline. |
+
+Closing is symmetric: whichever of the three goroutines exits first (viewer
+gone, container gone, keepalive write failed) closes **both** sockets and the
+`done` channel exactly once, so `wg.Wait` cannot return with a socket still
+open and a dead viewer cannot leave a container subscription alive. Teardown is
+safe mid-frame — closing a socket under an open writer makes the in-flight
+flush return an error rather than panic.
+
 ### Analysis side channel (server → client)
 
 The input socket also carries the observation stream, so a viewer renders

@@ -2,6 +2,7 @@ package wsproxy
 
 import (
 	"io"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -92,6 +93,7 @@ func relayTextWithHook(dst *websocket.Conn, r io.Reader, hook ClipboardHook, ses
 	if !ok || len(data) == 0 {
 		return true // dropped by policy — connection stays up
 	}
+	_ = dst.SetWriteDeadline(time.Now().Add(duplexWriteDeadline))
 	w, err := dst.NextWriter(websocket.TextMessage)
 	if err != nil {
 		return false

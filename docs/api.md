@@ -258,3 +258,12 @@ ws://localhost:8080/ws/<SESSION_ID>?channel=input&host=1&session_token=<TOKEN>
 ```
 
 Video and audio arrive on the `channel=isola` socket as H.264/Opus frames; input on the `channel=input` socket is Isola JSON relayed to the container and applied to the page. Binary packet layout and `stream_init` are in [Transport](transport.md). For building a custom viewer or controller, see [Session WebSocket](automation.md#session-websocket-custom-clients).
+
+The relay applies per-message and per-write bounds so neither side can pin it:
+12 MiB read limit on client messages, 32 MiB on container messages, 1 MiB on
+container TEXT (control) frames, a 30 s write deadline on every relayed message,
+and a 90 s container read deadline. A client that exceeds a limit, or whose
+socket stops accepting writes for 30 s, is disconnected; the relay closes both
+sockets together and never leaves the container subscription behind. Idle
+viewers are fine — there is no client read deadline, and the 30 s ping is what
+proves liveness. See [Transport → Relay lifecycle and limits](transport.md#relay-lifecycle-and-limits).

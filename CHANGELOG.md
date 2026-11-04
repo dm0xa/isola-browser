@@ -62,6 +62,23 @@ publishes the section matching the tag.
 
 ### Fixed
 
+- The relay now tears down both sockets when either side dies. A viewer that
+  disconnected left the container→client goroutine parked in `NextReader` until
+  the 90 s container read deadline, holding the container websocket and its
+  encoder subscription; closing is now symmetric and happens exactly once, so
+  `wg.Wait` cannot return with a socket still open.
+- A viewer or container that stops reading can no longer pin a relay goroutine
+  forever: every relayed message is written under a 30 s deadline (the streamer
+  already had 10 s per write). Before, a suspended tab or a wedged streamer
+  blocked `io.Copy` indefinitely.
+- Container→client traffic is bounded: 32 MiB per message (one keyframe's worth
+  plus an order of magnitude of headroom, so video is unaffected) and 1 MiB for
+  TEXT control frames, which do not scale with the picture. Client messages stay
+  at 12 MiB.
+- Per-message activity tracking is debounced to one refresh per second and no
+  longer takes the proxy-wide mutex on every frame: 178-186 ns/op → 10-13 ns/op
+  in the parallel benchmark, which matters because the same lock was shared by
+  every session's relay goroutines.
 - A viewer whose socket hit the 10 s write deadline now loses its session: the
   socket is closed, so the subscription is released and the encoder stops.
   Before, the write goroutine exited but left the connection half-dead — the
