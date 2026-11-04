@@ -54,20 +54,12 @@ publishes the section matching the tag.
   until it reconnects. Every forced restart replaces the encoder run for
   everyone watching it, so one stuck decoder could previously reset the host's
   stream forever.
-- libx264 now runs `-preset veryfast` with `subme=2:me=hex` instead of
-  `superfast` with `subme=1:me:dia`. The old tuning came from a corpus that
-  never left the near-lossless regime, so it optimised motion-search cost while
-  the bitrate budget sat unused; on text-heavy pages it was leaving quality on
-  the table. Measured on the offline bench (`encoder_quality_bench_test.go`,
-  gated on `ISOLA_QUALITY_BENCH=1`) against a dense-text corpus, 3 runs per row:
-  720p SSIM 0.951 → 0.965 for 0.227 → 0.303 core-seconds per second of video,
-  1080p 0.978 → 0.985 for 0.478 → 0.593. Finer presets buy a few thousandths
-  more SSIM for two to four times the CPU, so this is the knee rather than the
-  maximum.
-- `set_bitrate` is paced per viewer at one accepted step per second. Each
-  accepted step replaces an encoder run, and the ABR controller only steps
-  every 8 s, so nothing legitimate notices; the 40-messages-in-142 ms case used
-  to spawn 40 ffmpeg processes. Refusals are silent, like keyframe refusals.
+- libx264 keeps the released `superfast` tuning and now encodes with a single
+  reference frame (`ref=1` instead of `ref=2`): 4 % less encoder CPU at 1080p and
+  one fewer reference buffer on both ends, for a measured -0.0004 SSIM. The
+  finer presets (`veryfast`+`hex2`, `fast`+`hex3`) are a real quality win on
+  moving content — +0.013 SSIM at 720p — but cost 24-138 % more encoder CPU, so
+  they are not shipped; the measured ladder is recorded next to the argv.
 
 ### Fixed
 

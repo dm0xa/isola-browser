@@ -289,8 +289,8 @@ type libx264Tuning struct {
 
 var libx264Quality = libx264Tuning{
 	tune:   "zerolatency",
-	preset: "veryfast",
-	params: "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=2:me=hex:force-cfr=1",
+	preset: "superfast",
+	params: "bframes=0:ref=1:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=1:me=dia:force-cfr=1",
 }
 
 // startEncoder launches ffmpeg as a subprocess, consuming raw BGRA frames on
@@ -377,8 +377,9 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 			"-bufsize", fmt.Sprintf("%dk", bufsizeKbps),
 		)
 	} else {
-		// veryfast + subme=2:me=hex: the measured knee of the preset/quality
-		// curve, not a guess. The corpus is a deterministic 100-frame 25fps
+		// superfast + subme=1:me=dia: the cheapest setting that keeps High
+		// profile, and deliberately not the quality maximum. The corpus is a
+		// deterministic 100-frame 25fps
 		// clip of dense small (5x7) antialiased text over a textured photo
 		// strip plus an animated 480x320 panel, scrolled; each row is encoded
 		// through this exact argv, decoded, and scored against the source with
@@ -387,37 +388,44 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 		// mean SSIM:
 		//
 		//   720p  @6Mbps target
-		//     superfast dia  aq2 (previous) 0.227 /  6574 / 0.9509
+		//     superfast dia  aq2            0.228 /  6573 / 0.9512
 		//     veryfast  dia  aq2            0.244 /  6544 / 0.9552
+		//     superfast dia  ref1 (shipped) 0.224 /  6577 / 0.9506
+		//     superfast dia  ref1 aq0       0.230 /  6547 / 0.9553
 		//     superfast hex3 aq2            0.294 /  6505 / 0.9635
-		//     veryfast  hex2 aq2 (shipped)  0.303 /  6466 / 0.9646
+		//     veryfast  hex2 aq2            0.303 /  6466 / 0.9646
 		//     veryfast  hex3 aq2            0.322 /  6429 / 0.9643
 		//     fast      hex3 aq2            0.440 /  6360 / 0.9684
 		//     medium    hex3 aq2            0.463 /  6380 / 0.9686
 		//   1080p @13.5Mbps target
-		//     superfast dia  aq2 (previous) 0.478 / 13067 / 0.9775
+		//     superfast dia  aq2            0.468 / 13106 / 0.9777
 		//     veryfast  dia  aq2            0.495 / 12868 / 0.9785
-		//     veryfast  hex2 aq2 (shipped)  0.593 / 13318 / 0.9846
-		//     superfast hex3 aq2            0.662 / 13418 / 0.9838
+		//     veryfast  hex2 aq2            0.593 / 13318 / 0.9846
+		//     superfast dia  ref1 (shipped) 0.448 / 13121 / 0.9773
+		//     superfast dia  ref1 aq0       0.466 / 13759 / 0.9831
+		//     superfast hex3 aq2            0.685 / 13411 / 0.9839
 		//     veryfast  hex3 ref1           0.680 / 13336 / 0.9847
 		//     veryfast  hex3 aq2            0.744 / 13307 / 0.9847
 		//     faster    hex3 aq2            1.113 / 13103 / 0.9860
 		//     medium    hex3 aq2            1.182 / 13016 / 0.9862
 		//     fast      hex3 aq2            1.136 / 13012 / 0.9862
 		//
-		// The old subme=1:me=dia tuning came from a corpus that never left the
-		// near-lossless regime (0.9MB for 250 frames, PSNR ~59), so it ranked
-		// the motion search while the bitrate budget sat unused. Under real bit
-		// pressure the finer search wins: hex alone is +0.013 SSIM at 720p.
-		// Where to stop is a CPU question, and the answer is return per core:
-		// at 1080p, hex2 buys +0.0071 SSIM over the old setting for +0.115
-		// core-s/s (0.062 SSIM per core), while fast gives +0.0087 for +0.658
-		// (0.013 per core) — five times the CPU for a fifth of the picture
-		// again. At 720p the same order holds (0.18 vs 0.10 per core). hex2
-		// therefore takes ~93% of the quality gain for ~25% of its CPU cost,
-		// and the encoder stays near 0.3 core at 720p and 0.6 at 1080p, inside
-		// the ~1.5 core-s/s a 3-CPU session container can give it while
-		// capture, Electron and muxing take ~0.5 core.
+		// The finer presets are a real quality win under motion — hex alone is
+		// +0.013 SSIM at 720p — but every step costs CPU on a host whose limit
+		// is cores, not bits: veryfast+hex2 measured +33% at 720p and +24% at
+		// 1080p end to end, and +13-19% on a live session, for a quality
+		// difference that is invisible on a static page (0.0002 SSIM) and only
+		// shows while the content moves. The product constraint is a lighter
+		// session, so the shipped value stays on the cheapest tier; the rows
+		// above are the menu if that trade is ever revisited.
+		//
+		// ref=1 is the one cheap saving: -4% CPU at 1080p and -2% at 720p for
+		// -0.0004 SSIM, and one fewer reference frame to allocate on both ends.
+		// aq-mode=0 measured *better* on this text corpus (720p 0.9553 vs
+		// 0.9512, 1080p 0.9831 vs 0.9777 at the same CPU) because aq-mode=2
+		// spends bits on dark flat regions that text-heavy pages do not have;
+		// it is left at 2 because that gain is unproven on photographic pages,
+		// which is a picture decision, not a CPU one.
 		//
 		// Thread count is not a lever: total CPU is flat across pools (see
 		// maxEncoderThreads), and because zerolatency slices each frame, a

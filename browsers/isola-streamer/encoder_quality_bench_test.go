@@ -443,12 +443,14 @@ func TestEncoderQualityMatrix(t *testing.T) {
 	// bframes=0 / rc-lookahead=0 / force-cfr=1 are invariant: they are
 	// latency, not quality. Every variant keeps them.
 	const (
-		paramsBase    = "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=1:me=dia:force-cfr=1"
-		paramsHex3    = "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=3:me=hex:force-cfr=1"
-		paramsHex3AQ3 = "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=3:subme=3:me=hex:force-cfr=1"
-		paramsHex2    = "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=2:me=hex:force-cfr=1"
-		paramsUmh3    = "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=3:me=umh:force-cfr=1"
-		paramsHex3R1  = "bframes=0:ref=1:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=3:me=hex:force-cfr=1"
+		paramsBase     = "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=1:me=dia:force-cfr=1"
+		paramsHex3     = "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=3:me=hex:force-cfr=1"
+		paramsHex3AQ3  = "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=3:subme=3:me=hex:force-cfr=1"
+		paramsHex2     = "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=2:me=hex:force-cfr=1"
+		paramsUmh3     = "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=3:me=umh:force-cfr=1"
+		paramsHex3R1   = "bframes=0:ref=1:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=3:me=hex:force-cfr=1"
+		paramsDiaR1    = "bframes=0:ref=1:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=1:me=dia:force-cfr=1"
+		paramsDiaR1Aq0 = "bframes=0:ref=1:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=0:subme=1:me=dia:force-cfr=1"
 	)
 
 	// The shipped tuning is always row 1, so the matrix ranks candidates
@@ -470,6 +472,8 @@ func TestEncoderQualityMatrix(t *testing.T) {
 		{"veryfast hex2 aq2", libx264Tuning{"zerolatency", "veryfast", paramsHex2}},
 		{"veryfast umh3 aq2", libx264Tuning{"zerolatency", "veryfast", paramsUmh3}},
 		{"veryfast hex3 ref1", libx264Tuning{"zerolatency", "veryfast", paramsHex3R1}},
+		{"superfast dia ref1", libx264Tuning{"zerolatency", "superfast", paramsDiaR1}},
+		{"superfast dia ref1 aq0", libx264Tuning{"zerolatency", "superfast", paramsDiaR1Aq0}},
 	}
 	var variants []struct {
 		name   string

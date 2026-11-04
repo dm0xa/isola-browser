@@ -8,12 +8,13 @@
 # switches to the scrolling corpus (not frame-scorable — see driver.mjs).
 set -u
 ARM=$1; BIN=$2; PORT=$3; W=$4; H=$5; KBPS=$6; FRAMES=$7; ATK=${8:-0}; ATKMS=${9:-0}
+FPS=${AB_FPS:-25}
 HERE=$(cd "$(dirname "$0")" && pwd)
 DIR=${AB_OUT:-/tmp/isola-ab/out}/$ARM
 rm -rf "$DIR"; mkdir -p "$DIR"
 SOCK=$DIR/frame.sock
 
-PORT=$PORT ISOLA_FRAME_SOCK=$SOCK ISOLA_WIDTH=$W ISOLA_HEIGHT=$H ISOLA_FPS=25 \
+PORT=$PORT ISOLA_FRAME_SOCK=$SOCK ISOLA_WIDTH=$W ISOLA_HEIGHT=$H ISOLA_FPS=$FPS \
   ISOLA_BITRATE_KBPS=$KBPS ISOLA_STATIC_KEEPALIVE_MS=2000 \
   /usr/bin/time -l -o "$DIR/time.txt" "$BIN" >"$DIR/streamer.log" 2>&1 &
 TIME_PID=$!
@@ -26,7 +27,7 @@ STREAMER_PID=$(pgrep -P "$TIME_PID" | head -1)
 if [ -z "${STREAMER_PID:-}" ]; then echo "{\"arm\":\"$ARM\",\"error\":\"streamer did not start\"}"; exit 1; fi
 
 node "$HERE/driver.mjs" --sock "$SOCK" --port "$PORT" --w "$W" --h "$H" \
-  --frames "$FRAMES" --fps 25 --out "$DIR/out.h264" --refs "$DIR/refs" \
+  --frames "$FRAMES" --fps "$FPS" --out "$DIR/out.h264" --refs "$DIR/refs" \
   --attackers "$ATK" --attack-ms "$ATKMS" --scroll "${SCROLL:-0}" \
   >"$DIR/metrics.json" 2>"$DIR/driver.err"
 
