@@ -290,7 +290,7 @@ type libx264Tuning struct {
 var libx264Quality = libx264Tuning{
 	tune:   "zerolatency",
 	preset: "superfast",
-	params: "bframes=0:ref=1:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=1:me=dia:force-cfr=1",
+	params: "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=1:me:dia:force-cfr=1",
 }
 
 // startEncoder launches ffmpeg as a subprocess, consuming raw BGRA frames on
@@ -390,7 +390,7 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 		//   720p  @6Mbps target
 		//     superfast dia  aq2            0.228 /  6573 / 0.9512
 		//     veryfast  dia  aq2            0.244 /  6544 / 0.9552
-		//     superfast dia  ref1 (shipped) 0.224 /  6577 / 0.9506
+		//     superfast dia  ref1           0.224 /  6577 / 0.9506
 		//     superfast dia  ref1 aq0       0.230 /  6547 / 0.9553
 		//     superfast hex3 aq2            0.294 /  6505 / 0.9635
 		//     veryfast  hex2 aq2            0.303 /  6466 / 0.9646
@@ -401,7 +401,7 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 		//     superfast dia  aq2            0.468 / 13106 / 0.9777
 		//     veryfast  dia  aq2            0.495 / 12868 / 0.9785
 		//     veryfast  hex2 aq2            0.593 / 13318 / 0.9846
-		//     superfast dia  ref1 (shipped) 0.448 / 13121 / 0.9773
+		//     superfast dia  ref1           0.448 / 13121 / 0.9773
 		//     superfast dia  ref1 aq0       0.466 / 13759 / 0.9831
 		//     superfast hex3 aq2            0.685 / 13411 / 0.9839
 		//     veryfast  hex3 ref1           0.680 / 13336 / 0.9847
@@ -419,13 +419,13 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 		// session, so the shipped value stays on the cheapest tier; the rows
 		// above are the menu if that trade is ever revisited.
 		//
-		// ref=1 is the one cheap saving: -4% CPU at 1080p and -2% at 720p for
-		// -0.0004 SSIM, and one fewer reference frame to allocate on both ends.
-		// aq-mode=0 measured *better* on this text corpus (720p 0.9553 vs
-		// 0.9512, 1080p 0.9831 vs 0.9777 at the same CPU) because aq-mode=2
-		// spends bits on dark flat regions that text-heavy pages do not have;
-		// it is left at 2 because that gain is unproven on photographic pages,
-		// which is a picture decision, not a CPU one.
+		// Nothing in this table ships: picture quality is a fixed product
+		// requirement, and every row above trades it against CPU one way or
+		// the other. The argv stays exactly as it was before the sweep so a
+		// session encodes what it always did. The rows are here so the next
+		// person deciding that trade starts from measurements instead of a
+		// guess — including the aq-mode=0 row, which is better on text at the
+		// same CPU and is a picture decision, not a CPU one.
 		//
 		// Thread count is not a lever: total CPU is flat across pools (see
 		// maxEncoderThreads), and because zerolatency slices each frame, a

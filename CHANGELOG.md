@@ -54,12 +54,11 @@ publishes the section matching the tag.
   until it reconnects. Every forced restart replaces the encoder run for
   everyone watching it, so one stuck decoder could previously reset the host's
   stream forever.
-- libx264 keeps the released `superfast` tuning and now encodes with a single
-  reference frame (`ref=1` instead of `ref=2`): 4 % less encoder CPU at 1080p and
-  one fewer reference buffer on both ends, for a measured -0.0004 SSIM. The
-  finer presets (`veryfast`+`hex2`, `fast`+`hex3`) are a real quality win on
-  moving content — +0.013 SSIM at 720p — but cost 24-138 % more encoder CPU, so
-  they are not shipped; the measured ladder is recorded next to the argv.
+- The encoder is unchanged: the quality sweep that followed this work
+  (fifteen preset/search/aq combinations, recorded next to the libx264 argv)
+  found no setting that improves quality without spending more CPU, so the
+  released `superfast` + `subme=1:me:dia` tuning ships as it was. What changed
+  around it is stability and cost, not the picture.
 
 ### Fixed
 
