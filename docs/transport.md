@@ -20,7 +20,7 @@ Isola keeps the parts that matter for a **hosted Chromium**: damage-rect capture
 What that buys in practice:
 
 - **Same origin as the UI and the API** — Video is `/ws/{sessionId}` on port 8080. No extra media port, no TURN credential, no VNC password.
-- **One encoder per quality, not per viewer** — A share-link watcher attaches to the run that already exists.
+- **One encoder per quality, not per viewer** — A share-link watcher attaches to the run that already exists, and a session runs at most two runs, so N viewers on N ABR rungs cost two encoders rather than N.
 - **Decode in the browser that already has WebCodecs** — Annex-B access units go to `VideoDecoder` → canvas. MSE/fMP4 is only the fallback.
 - **Clicks land in the frame that painted them** — including cross-origin embeds (a video embed inside another page), because input is CDP on the iframe target — not a synthetic X click on a compositor.
 
@@ -42,6 +42,8 @@ viewer  ── WebCodecs (Annex-B) or MSE (fMP4)
 ```
 
 One container serves one session. `isola-streamer` keeps **one ffmpeg process per (bitrate, scale, decode mode)** and fans that bitstream out to every viewer on that run. A share-link watcher therefore does not start a second encoder.
+
+At most **two** encoder runs are live per session (`maxConcurrentRuns` in `stream_hub.go`). The ABR ladder gives one viewer four configurations, so three viewers stepping it differently used to mean three libx264 processes in a three-CPU container — three times the encode cost plus capture, compose and mux, which starves the frame pump and turns an adaptive step into a stall. Two runs is what a host and one share watcher need on different rungs; a third configuration shares a live run instead of starting a third encoder. Runs are never shared across decode modes or capture geometries: a viewer whose container format or geometry matches no live run gets its own encoder regardless of the cap, because the alternative is a picture it cannot decode.
 
 Inside the container the capture never leaves the box: Electron writes damage rectangles on `/run/isola/frame.sock` (`ISOL` magic). The streamer composites them and feeds ffmpeg. That socket is not reachable from the host or the viewer. Streamer `:5900` is published to loopback only; the relay is the only client.
 
@@ -167,14 +169,14 @@ Each binary packet carries a per-run `seq` (`uint32` LE at header offset 2) that
 | Message | Effect |
 | :--- | :--- |
 | `{"type":"ping","ts":…}` | Echoed as `{"type":"pong","ts":…}` for RTT. `ts` is passed through verbatim. |
-| `{"type":"set_bitrate","kbps":N}` | Move **this** viewer onto an encoder run at `N` kbps (clamped to `base_bitrate`). Other viewers keep the run they are on; the previous run stops when its last viewer leaves it. |
+| `{"type":"set_bitrate","kbps":N}` | Move **this** viewer onto an encoder run at `N` kbps (clamped to `base_bitrate`). Other viewers keep the run they are on; the previous run stops when its last viewer leaves it. When two runs are already live the viewer may land on a different rung than it asked for — the most expensive live run at or below `N`, else the cheapest one — and learns the real rung from the `stream_init` and metrics that follow (`bitrate_kbps`, encoded `width`/`height`), never from its own request. |
 | `{"type":"request_keyframe"}` | Replace the current run so a late joiner or a dropped decoder gets an IDR. Budgeted per connection: while the viewer still has no picture it may retry the restart three times, spaced by the hub-wide 5 s cooldown; once it has a picture it gets one forced restart per 30 s, four per connection. A refused request is ignored silently. Every viewer of that run is reset with it. |
 
 The relay forwards `ping` and `request_keyframe` even on view-only sockets. Pointer and key events belong on `channel=input` with `host=1`. A view-only connection may forward one `request_keyframe` per 30 s — the relay drops the rest and logs them — because each request restarts the shared encoder for the session owner too. `ping` is not limited.
 
 ## Adaptive Quality
 
-The viewer measures RTT (`ping`/`pong`), inbound bytes, and decode health, then sends `set_bitrate`. The streamer does not pick the rung itself — it starts a run at the requested kbps (and may reduce encode scale with the bitrate). Capture coordinates stay at `capture_width` / `capture_height` even when the encoded surface is smaller, so clicks do not drift when ABR steps down. Resolution-aware defaults apply when the session is created without an override. See [Configuration](configuration.md) for `session.resolution` and bitrate-related env.
+The viewer measures RTT (`ping`/`pong`), inbound bytes, and decode health, then sends `set_bitrate`. The streamer does not pick the rung itself — it starts a run at the requested kbps (and may reduce encode scale with the bitrate), subject to the two-run cap above. A viewer that lands on another rung is not left guessing: the `stream_reset` + `stream_init` pair and every metrics tick carry the run it actually joined, so the controller's `targetKbps` is the real encoder target rather than the request. A viewer alone in its session always gets exactly the rung it asked for, because the run it steps off is its own and is stopped as part of the step. Capture coordinates stay at `capture_width` / `capture_height` even when the encoded surface is smaller, so clicks do not drift when ABR steps down. Resolution-aware defaults apply when the session is created without an override. See [Configuration](configuration.md) for `session.resolution` and bitrate-related env.
 
 ## Input That Matches the Picture
 

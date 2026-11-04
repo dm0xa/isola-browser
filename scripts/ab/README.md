@@ -30,6 +30,24 @@ Each run prints one JSON line:
 Artifacts (captured stream, source reference, logs) land in `$AB_OUT/<arm>`,
 default `/tmp/isola-ab/out`.
 
+## Multi-viewer rungs
+
+`multi-rung.sh` drives the same corpus with N viewers, each asking for its own
+ABR rung via `set_bitrate`. It exists to measure the encoder fan-out: every
+distinct rung a viewer asks for used to be its own ffmpeg, and a session now
+runs at most two (`maxConcurrentRuns` in `stream_hub.go`).
+
+```bash
+# three viewers on three rungs, session base 4000 kbps
+./scripts/ab/multi-rung.sh cap /tmp/ab-new 17020 1280 720 4000 200 4000,2800,1800
+# SCROLL=1 makes every row dirty every frame: the CPU worst case, not a quality corpus
+```
+
+The JSON line carries the same `cpu_per_stream_s` and `ffmpeg_starts` as the
+single-viewer arm, plus per viewer `want_kbps`, `landed_kbps`, `landed_wh`, the
+ordered `inits` it received (so a viewer that was moved by the run cap is
+visible), `resets` and `packets`.
+
 ## Caveats
 
 The corpus is static text plus one small animating block. That is deliberate:

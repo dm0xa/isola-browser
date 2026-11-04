@@ -484,3 +484,327 @@ func TestMetricsCarriesDropped(t *testing.T) {
 		t.Fatalf("metrics dropped = %v, want 7", got)
 	}
 }
+
+// ── run cap: one ffmpeg per distinct rung is not free ─────────────────────
+
+// capTestKey is the run key a viewer of this test session asks for at the
+// given rung. baseKbps is the session ceiling (the bitrate the streamer boots
+// with), which is what the client's ABR ladder is computed from.
+func capTestKey(kbps int, scale float64) runKey {
+	return runKey{
+		kbps:      kbps,
+		scale:     scale,
+		width:     e2eTestWidth,
+		height:    e2eTestHeight,
+		fps:       15,
+		baseKbps:  4000,
+		keepalive: 2000,
+	}
+}
+
+// drainControl returns the control messages queued on a subscription, in order,
+// without blocking. Video packets are skipped: these tests feed no frames.
+func drainControl(sub *streamSub) []map[string]any {
+	var out []map[string]any
+	for {
+		select {
+		case ev := <-sub.ch:
+			if ev.text != nil {
+				out = append(out, ev.text)
+			}
+		default:
+			return out
+		}
+	}
+}
+
+// TestRunCapReuseSelection pins the choice made when the cap is reached, with
+// no encoder involved: never a run the viewer cannot decode, never a stopping
+// one, the most expensive rung at or below the request when there is one, and
+// the cheapest live run when the request is below all of them.
+func TestRunCapReuseSelection(t *testing.T) {
+	mk := func(kbps int, scale float64) *streamRun {
+		return &streamRun{key: capTestKey(kbps, scale), subs: map[*streamSub]struct{}{}}
+	}
+	r4000, r2800, r1200 := mk(4000, 1.0), mk(2800, 1.0), mk(1200, 0.5)
+	h := &streamHub{runs: map[runKey]*streamRun{
+		capTestKey(4000, 1.0): r4000,
+		capTestKey(2800, 1.0): r2800,
+		capTestKey(1200, 0.5): r1200,
+	}}
+
+	// 1800 is between rungs: the most expensive run that does not exceed the
+	// request wins, so sharing never spends more bytes than the client's own
+	// evidence allowed.
+	if got := h.reusableRunLocked(capTestKey(1800, 0.8)); got != r1200 {
+		t.Fatalf("1800 kbps shared the wrong run: %v", got.key)
+	}
+	// 3000 is between 2800 and 4000: 2800, for the same reason.
+	if got := h.reusableRunLocked(capTestKey(3000, 1.0)); got != r2800 {
+		t.Fatalf("3000 kbps shared the wrong run: %v", got.key)
+	}
+	// Above every live run the most expensive one is still at or below the
+	// request, so it wins — sharing a cheaper run is always allowed.
+	if got := h.reusableRunLocked(capTestKey(5000, 1.0)); got != r4000 {
+		t.Fatalf("5000 kbps shared the wrong run: %v", got.key)
+	}
+	// Below every live run there is nothing at or below, so the cheapest run
+	// is the closest thing to the request.
+	if got := h.reusableRunLocked(capTestKey(1100, 0.5)); got != r1200 {
+		t.Fatalf("1100 kbps shared the wrong run: %v", got.key)
+	}
+
+	// A different container format is undecodable, whatever the bitrate.
+	raw := capTestKey(3000, 1.0)
+	raw.rawH264 = true
+	if got := h.reusableRunLocked(raw); got != nil {
+		t.Fatalf("a WebCodecs viewer was offered the fMP4 run %v", got.key)
+	}
+	// A different producer geometry is undecodable too: the encoder's raw
+	// input stride is fixed in its argv.
+	geom := capTestKey(3000, 1.0)
+	geom.width, geom.height = 1024, 768
+	if got := h.reusableRunLocked(geom); got != nil {
+		t.Fatalf("a resized viewer was offered a run at another geometry: %v", got.key)
+	}
+
+	// A run that is being torn down is never a candidate.
+	r4000.stopping, r2800.stopping = true, true
+	if got := h.reusableRunLocked(capTestKey(3000, 1.0)); got != r1200 {
+		t.Fatalf("a stopping run was offered: %v", got.key)
+	}
+	r4000.stopping, r2800.stopping = false, false
+
+	// Exactly the requested rung is handled by the map lookup, not here, but
+	// the helper must agree: 2800 for a 2800 request.
+	if got := h.reusableRunLocked(capTestKey(2800, 1.0)); got != r2800 {
+		t.Fatalf("2800 kbps shared the wrong run: %v", got.key)
+	}
+}
+
+// TestRunCapSharesThirdRung is the cap itself, end to end with real encoders:
+// two viewers on two rungs get an encoder each, and a third rung joins one of
+// them instead of starting a third ffmpeg. The joining viewer must be told
+// where it landed — stream_init carries the shared run's real bitrate and
+// encoded geometry, never the rung it asked for.
+func TestRunCapSharesThirdRung(t *testing.T) {
+	const port = "15940"
+	listener := startTestStreamer(t, port, 4000)
+	defer listener.Close()
+
+	hub := hubFor(globalBroadcaster)
+	subA, subB, subC := newStreamSub(), newStreamSub(), newStreamSub()
+	defer hub.release(subA)
+	defer hub.release(subB)
+	defer hub.release(subC)
+
+	runA := hub.attach(subA, capTestKey(4000, 1.0), "")
+	runB := hub.attach(subB, capTestKey(2800, 1.0), "bitrate_change")
+	if runA == nil || runB == nil || runA == runB {
+		t.Fatalf("two rungs must get two runs: %v / %v", runA, runB)
+	}
+	if runs, viewers := hub.stats(); runs != 2 || viewers != 2 {
+		t.Fatalf("fan-out = %d run(s) / %d viewer(s), want 2/2", runs, viewers)
+	}
+
+	// The third configuration would be a third encoder. It shares the most
+	// expensive run that does not exceed it — 1800 is below both, so the
+	// cheapest live run (2800).
+	runC := hub.attach(subC, capTestKey(1800, 0.8), "bitrate_change")
+	if runC == nil {
+		t.Fatal("the third viewer got no run at all")
+	}
+	if runC != runB {
+		t.Fatalf("third rung landed on %v, want the 2800 run %v", runC.key, runB.key)
+	}
+	if runs, viewers := hub.stats(); runs != 2 || viewers != 3 {
+		t.Fatalf("fan-out = %d run(s) / %d viewer(s), want 2/3", runs, viewers)
+	}
+	// No encoder was started for the requested rung.
+	if got := currentRun(hub, capTestKey(1800, 0.8)); got != nil {
+		t.Fatalf("a run was started at the capped rung: %v", got.key)
+	}
+
+	// What the client is told: a reset into a stream whose bitrate and encoded
+	// size are the shared run's. The requested rung's geometry (0.8 scale) must
+	// not appear anywhere — landing elsewhere is allowed, landing elsewhere
+	// silently is not.
+	msgs := drainControl(subC)
+	if len(msgs) != 2 {
+		t.Fatalf("capped attach queued %d control messages, want stream_reset+stream_init: %v", len(msgs), msgs)
+	}
+	if msgs[0]["type"] != msgTypeStreamReset || msgs[0]["reason"] != "bitrate_change" {
+		t.Fatalf("first control message = %v, want stream_reset/bitrate_change", msgs[0])
+	}
+	init := msgs[1]
+	if init["type"] != msgTypeStreamInit {
+		t.Fatalf("second control message = %v, want stream_init", init)
+	}
+	if init["bitrate_kbps"] != runB.key.kbps {
+		t.Fatalf("stream_init bitrate_kbps = %v, want the shared run's %d", init["bitrate_kbps"], runB.key.kbps)
+	}
+	if init["width"] != runB.encW || init["height"] != runB.encH {
+		t.Fatalf("stream_init encoded size = %vx%v, want the shared run's %dx%d",
+			init["width"], init["height"], runB.encW, runB.encH)
+	}
+	if init["capture_width"] != e2eTestWidth || init["capture_height"] != e2eTestHeight {
+		t.Fatalf("stream_init capture size = %vx%v, want %dx%d",
+			init["capture_width"], init["capture_height"], e2eTestWidth, e2eTestHeight)
+	}
+	wantW, wantH := encodeDimensions(e2eTestWidth, e2eTestHeight, 0.8)
+	if runB.encW == wantW && runB.encH == wantH {
+		t.Fatalf("test setup is not discriminating: the shared run already has the requested geometry %dx%d", wantW, wantH)
+	}
+}
+
+// TestRunCapNeverCrossesDecodeMode pins the exception: the cap bounds encoder
+// count, it does not hand a viewer a stream it cannot decode. A WebCodecs
+// viewer arriving while the cap is spent on fMP4 runs gets its own encoder,
+// because the alternative is a picture that never decodes.
+func TestRunCapNeverCrossesDecodeMode(t *testing.T) {
+	const port = "15941"
+	listener := startTestStreamer(t, port, 4000)
+	defer listener.Close()
+
+	hub := hubFor(globalBroadcaster)
+	mseA, mseB, raw := newStreamSub(), newStreamSub(), newStreamSub()
+	defer hub.release(mseA)
+	defer hub.release(mseB)
+	defer hub.release(raw)
+
+	if hub.attach(mseA, capTestKey(4000, 1.0), "") == nil ||
+		hub.attach(mseB, capTestKey(2800, 1.0), "bitrate_change") == nil {
+		t.Fatal("fMP4 runs failed to start")
+	}
+	rawKey := capTestKey(1800, 0.8)
+	rawKey.rawH264 = true
+	got := hub.attach(raw, rawKey, "bitrate_change")
+	if got == nil {
+		t.Fatal("the WebCodecs viewer got no run")
+	}
+	if !got.key.rawH264 {
+		t.Fatalf("a WebCodecs viewer was attached to an fMP4 run: %v", got.key)
+	}
+	if got.key != rawKey {
+		t.Fatalf("WebCodecs viewer landed on %v, want its own rung %v", got.key, rawKey)
+	}
+	if runs, viewers := hub.stats(); runs != 3 || viewers != 3 {
+		t.Fatalf("fan-out = %d run(s) / %d viewer(s), want 3/3 (cap yields to decode mode)", runs, viewers)
+	}
+}
+
+// TestSingleViewerKeepsRequestedRung pins that the cap never touches the case
+// it is not meant for: a viewer alone in the session walks the whole ladder and
+// gets exactly the rung it asks for every time, because the run it steps off is
+// its own and is stopped as part of the step.
+func TestSingleViewerKeepsRequestedRung(t *testing.T) {
+	const port = "15942"
+	listener := startTestStreamer(t, port, 4000)
+	defer listener.Close()
+
+	hub := hubFor(globalBroadcaster)
+	sub := newStreamSub()
+	defer hub.release(sub)
+
+	rungs := []struct {
+		kbps  int
+		scale float64
+	}{{4000, 1.0}, {2800, 1.0}, {1800, 0.8}, {1200, 0.5}, {2800, 1.0}}
+	for i, r := range rungs {
+		key := capTestKey(r.kbps, r.scale)
+		run := hub.attach(sub, key, "bitrate_change")
+		if run == nil {
+			t.Fatalf("step %d to %d kbps failed", i, r.kbps)
+		}
+		if run.key != key {
+			t.Fatalf("step %d landed on %v, want %v", i, run.key, key)
+		}
+		if runs, viewers := hub.stats(); runs != 1 || viewers != 1 {
+			t.Fatalf("step %d: fan-out = %d run(s) / %d viewer(s), want 1/1", i, runs, viewers)
+		}
+		init := run.initMessage()
+		if init["bitrate_kbps"] != r.kbps {
+			t.Fatalf("step %d: stream_init bitrate_kbps = %v, want %d", i, init["bitrate_kbps"], r.kbps)
+		}
+		wantW, wantH := encodeDimensions(e2eTestWidth, e2eTestHeight, r.scale)
+		if init["width"] != wantW || init["height"] != wantH {
+			t.Fatalf("step %d: stream_init encoded size = %vx%v, want %dx%d",
+				i, init["width"], init["height"], wantW, wantH)
+		}
+	}
+}
+
+// TestRungChangeDuringKeyframeRestart pins the interleaving a second viewer can
+// hit: one viewer replaces the run for an IDR while another steps to a rung.
+// Both paths mutate the hub under the same lock, so whatever the order, every
+// viewer must end up attached to a run that is live and in the hub's map — not
+// to the encoder being torn down, and not to nothing.
+func TestRungChangeDuringKeyframeRestart(t *testing.T) {
+	const port = "15943"
+	listener := startTestStreamer(t, port, 4000)
+	defer listener.Close()
+
+	hub := hubFor(globalBroadcaster)
+	for iter := 0; iter < 3; iter++ {
+		subA, subB := newStreamSub(), newStreamSub()
+		run := hub.attach(subA, capTestKey(4000, 1.0), "")
+		if run == nil {
+			t.Fatal("first viewer got no run")
+		}
+		if got := hub.attach(subB, capTestKey(4000, 1.0), ""); got != run {
+			t.Fatal("second viewer on the same rung must share the run")
+		}
+		// Give the run an IDR (so a keyframe request is not held back by the
+		// startup grace) and clear the hub-wide cooldown.
+		hub.mu.Lock()
+		run.keyframeAt.Store(time.Now().UnixNano())
+		run.startedAt = time.Now().Add(-2 * keyframeRestartGrace)
+		hub.lastForcedKeyframe = time.Time{}
+		subA.awaitingKey, subB.awaitingKey = false, false
+		hub.mu.Unlock()
+
+		done := make(chan struct{}, 2)
+		go func() {
+			hub.requestKeyframe(subA)
+			done <- struct{}{}
+		}()
+		go func() {
+			hub.attach(subB, capTestKey(2800, 1.0), "bitrate_change")
+			done <- struct{}{}
+		}()
+		<-done
+		<-done
+
+		hub.mu.Lock()
+		live := make(map[*streamRun]bool, len(hub.runs))
+		for _, r := range hub.runs {
+			if r.stopping {
+				hub.mu.Unlock()
+				t.Fatalf("iteration %d left a stopping run in the map", iter)
+			}
+			live[r] = true
+		}
+		for i, s := range []*streamSub{subA, subB} {
+			if s.run == nil {
+				hub.mu.Unlock()
+				t.Fatalf("iteration %d: viewer %d is attached to no run", iter, i)
+			}
+			if !live[s.run] {
+				hub.mu.Unlock()
+				t.Fatalf("iteration %d: viewer %d is attached to a run that is not live", iter, i)
+			}
+			if _, ok := s.run.subs[s]; !ok {
+				hub.mu.Unlock()
+				t.Fatalf("iteration %d: viewer %d is missing from its run's subscriber set", iter, i)
+			}
+		}
+		runs := len(hub.runs)
+		hub.mu.Unlock()
+		if runs > maxConcurrentRuns {
+			t.Fatalf("iteration %d: %d runs live, cap is %d", iter, runs, maxConcurrentRuns)
+		}
+
+		hub.release(subA)
+		hub.release(subB)
+	}
+}
