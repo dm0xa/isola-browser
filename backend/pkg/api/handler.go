@@ -459,7 +459,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		// container over.
 		streamMode := "isola"
 		if !warmed {
-			if err := h.orch.WaitForStream(bgCtx, info.Host, info.Port, streamMode, req.BrowserType, 30*time.Second); err != nil {
+			if err := h.orch.WaitForStream(bgCtx, info.Host, info.Port, streamMode, req.BrowserType, streamReadyTimeout(req.TorEnabled, req.TorCountry)); err != nil {
 				log.Printf("create session: stream not ready: %v", err)
 				failSess := *session
 				failSess.ContainerID = info.ContainerID
@@ -640,6 +640,23 @@ func (h *Handler) claimWarmContainer(
 		}
 	}
 	return info, true
+}
+
+// streamReadyTimeout budgets the wait for isola-streamer after `docker run`
+// returns. A Tor session is gated earlier: entrypoint.sh refuses to launch the
+// streamer until tor has a circuit, waiting up to 30s (60s when an exit country
+// is pinned, since fewer candidate exits make the build slower). A flat 30s
+// here therefore races that gate and fails closed on any slow circuit, so the
+// gate's own budget is added to the streamer's start budget.
+func streamReadyTimeout(torEnabled bool, torCountry string) time.Duration {
+	const streamerStart = 30 * time.Second
+	if !torEnabled {
+		return streamerStart
+	}
+	if torCountry != "" {
+		return 90 * time.Second
+	}
+	return 60 * time.Second
 }
 
 // warmResizeTarget reports whether a claimed warm container, built at baked,

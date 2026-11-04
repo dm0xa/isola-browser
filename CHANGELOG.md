@@ -16,6 +16,9 @@ publishes the section matching the tag.
 - `install.sh` fetches release assets from the versioned download path, so
   `ISOLA_VERSION=X.Y.Z` installs that release instead of 404ing on a file the
   newest release no longer publishes.
+- Tor sessions no longer fail provisioning on a slow circuit: the wait for the
+  streamer now includes the container's Tor bootstrap gate (30s, or 60s with a
+  pinned exit country) instead of racing it with a flat 30s.
 
 ## [1.5.2] - 2026-11-02
 

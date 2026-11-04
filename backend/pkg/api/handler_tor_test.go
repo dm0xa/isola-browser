@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -113,5 +114,35 @@ func TestGetConfigExposesTorExitCountry(t *testing.T) {
 	}
 	if _, ok := fetch(t, ""); ok {
 		t.Fatal("tor_exit_country must be omitted when no default is configured")
+	}
+}
+
+// TestStreamReadyTimeoutCoversTorBootstrap: the container's Tor gate runs
+// before isola-streamer is launched, so the readiness budget must cover the
+// gate (30s, or 60s when an exit country is pinned) on top of the streamer's
+// own start budget. A flat 30s fails closed on any circuit build that takes
+// most of the gate.
+func TestStreamReadyTimeoutCoversTorBootstrap(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		tor     bool
+		country string
+		want    time.Duration
+	}{
+		{name: "no tor keeps the streamer budget", want: 30 * time.Second},
+		{name: "tor adds the 30s bootstrap gate", tor: true, want: 60 * time.Second},
+		{name: "pinned country adds the 60s gate", tor: true, country: "se", want: 90 * time.Second},
+		{name: "country without tor is ignored", country: "se", want: 30 * time.Second},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := streamReadyTimeout(tt.tor, tt.country); got != tt.want {
+				t.Fatalf("streamReadyTimeout(%v, %q) = %v, want %v", tt.tor, tt.country, got, tt.want)
+			}
+		})
 	}
 }
