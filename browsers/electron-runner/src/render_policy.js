@@ -121,6 +121,87 @@ function parseDelayList(raw, fallback = DEFAULT_LOAD_CAPTURE_DELAYS_MS) {
   return parsed.length > 0 ? parsed : fallback.slice();
 }
 
+// captureCommandEffect decides what a {"cmd":"capture","on":bool} command from
+// the streamer must do.
+//
+// The streamer re-sends the current state (force) on every ctrl-socket
+// reconnect, so a command whose value equals the runner's own flag is a
+// deliberate "this is still the truth" signal, not a no-op. It has to re-assert
+// the compositor rate: a tab left at the background rate while capture is on
+// (stale rate after a late resize, a lost resume, a re-attached tab) otherwise
+// stays at ~1 fps for the rest of the session, with the streamer still
+// reporting "active" and the page looking frozen.
+function captureCommandEffect({ on, wasActive, hasActiveTab }) {
+  const active = on === true;
+  return {
+    resume: active && wasActive !== true,
+    pause: !active && wasActive === true,
+    reassertRate: active && hasActiveTab === true,
+  };
+}
+
+// applyCaptureCommand executes that decision against injected session hooks.
+// The decision alone is not the fix: it only holds if the runner applies the
+// re-assert, so the wiring lives here too and is unit-tested with fakes.
+//
+// setActive must run before any other hook: startForwarding and setTabFrameRate
+// both read the flag (the latter logs it).
+function applyCaptureCommand({
+  on,
+  wasActive,
+  tab,
+  setActive,
+  resetFrameState,
+  startForwarding,
+  stopForwarding,
+  setTabFrameRate,
+  invalidate,
+  captureAndSend,
+  clearPartialTimer,
+  clearLoadCaptures,
+}) {
+  const effect = captureCommandEffect({ on, wasActive, hasActiveTab: Boolean(tab) });
+  if (effect.resume) {
+    setActive(true);
+    resetFrameState();
+    if (tab) {
+      startForwarding(tab);
+      // Raise the rate before the seeding capture: a tab left at the
+      // background rate could hand back a stale surface as the first frame.
+      setTabFrameRate(tab, true);
+      invalidate(tab);
+    }
+    captureAndSend('viewer-attach');
+    return true;
+  }
+  if (effect.pause) {
+    setActive(false);
+    if (tab) {
+      stopForwarding(tab);
+      // Nobody is watching: composing this surface at the capture rate is waste.
+      setTabFrameRate(tab, false);
+      clearPartialTimer(tab);
+      clearLoadCaptures();
+    }
+    return true;
+  }
+  // Same state as before: the command is a re-assertion, not a toggle. It must
+  // still repair a compositor rate left behind at the background rate, or the
+  // session stays at ~1 fps with "capture active" in every log line.
+  if (effect.reassertRate) setTabFrameRate(tab, true);
+  return false;
+}
+
+// reassertActiveRate is the watchdog tick: while a viewer is attached the
+// active tab's rate is re-applied every few seconds, so a rate lost by any
+// path that does not go through a capture transition repairs itself instead of
+// freezing the session at ~1 fps.
+function reassertActiveRate({ captureActive, tab, setTabFrameRate }) {
+  if (captureActive !== true || !tab) return false;
+  setTabFrameRate(tab, true);
+  return true;
+}
+
 module.exports = {
   DEFAULT_BACKGROUND_FPS,
   DEFAULT_RECOVER_MAX,
@@ -128,6 +209,9 @@ module.exports = {
   DEFAULT_SAME_URL_WINDOW_MS,
   DEFAULT_LOAD_CAPTURE_DELAYS_MS,
   frameRateFor,
+  captureCommandEffect,
+  applyCaptureCommand,
+  reassertActiveRate,
   shouldAutoRecover,
   loadCaptureDelays,
   parseDelayList,

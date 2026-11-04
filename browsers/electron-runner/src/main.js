@@ -30,6 +30,8 @@ const { applyChromeFlags } = require('./chrome_flags');
 const { isEmptyCaptureExpected, shouldStopCaptureFallback, pruneEmptyCaptureTimes } = require('./capture_fallback');
 const {
   frameRateFor,
+  applyCaptureCommand,
+  reassertActiveRate,
   shouldAutoRecover,
   loadCaptureDelays,
   parseDelayList,
@@ -734,6 +736,20 @@ function announceRecoverySuppressed(reason, url) {
   }
 }
 
+// RATE_REASSERT_MS is how often the active tab's compositor rate is re-asserted
+// while a viewer is attached. Nothing else repairs a rate that was left at the
+// background value without a capture-state transition — a late resize, a lost
+// resume, a re-attached tab — and that failure is silent: the streamer reports
+// "active" while the page composes at ~1 fps and every interaction looks frozen.
+const RATE_REASSERT_MS = 5000;
+
+function startRateWatchdog() {
+  const timer = setInterval(() => {
+    reassertActiveRate({ captureActive, tab: activeTab(), setTabFrameRate });
+  }, RATE_REASSERT_MS);
+  if (timer.unref) timer.unref();
+}
+
 function startStallWatchdog() {
   let probing = false;
   setInterval(() => {
@@ -876,6 +892,7 @@ function stopForwarding(tab) {
   }
 }
 
+// startForwarding keeps the compositor awake for a watched tab.
 function startForwarding(tab) {
   stopForwarding(tab);
   if (!captureActive) return;
@@ -906,6 +923,13 @@ function setTabFrameRate(tab, active) {
     tab.win.webContents.setFrameRate(next);
   } catch (err) {
     console.warn(`[electron] setFrameRate(${next}) failed: ${err.message}`);
+    return;
+  }
+  // Only log real changes: this runs from the capture watchdog too, and a
+  // stuck-at-background rate is exactly the state that is invisible elsewhere.
+  if (tab.appliedFrameRate !== next) {
+    tab.appliedFrameRate = next;
+    console.log(`[electron] tab #${tab.id} compositor ${next}fps (active=${active === true}, capture=${captureActive})`);
   }
 }
 
@@ -915,27 +939,28 @@ function setTabFrameRate(tab, active) {
 // streamer's surface with one full frame: the damage stream has a gap of
 // unknown length behind it, so partial updates could not be applied to it.
 function setCaptureActive(on) {
-  if (on === captureActive) return;
-  captureActive = on;
-  const tab = activeTab();
-  if (on) {
-    resetFrameState();
-    if (tab) startForwarding(tab);
-    // Raise the rate before the seeding capture: a tab left at the background
-    // rate could hand back a stale surface as the first frame.
-    if (tab) setTabFrameRate(tab, true);
-    if (tab && tab.win && !tab.win.isDestroyed()) tab.win.webContents.invalidate();
-    void captureAndSend('viewer-attach');
-  } else if (tab) {
-    stopForwarding(tab);
-    // Nobody is watching: composing this surface at the capture rate is waste.
-    setTabFrameRate(tab, false);
-    if (tab.partialTimer) {
-      clearTimeout(tab.partialTimer);
-      tab.partialTimer = null;
-    }
-    clearLoadCaptures();
-  }
+  const changed = applyCaptureCommand({
+    on,
+    wasActive: captureActive,
+    tab: activeTab(),
+    setActive: (value) => { captureActive = value; },
+    resetFrameState,
+    startForwarding,
+    stopForwarding,
+    setTabFrameRate,
+    invalidate: (tab) => {
+      if (tab.win && !tab.win.isDestroyed()) tab.win.webContents.invalidate();
+    },
+    captureAndSend: (reason) => { void captureAndSend(reason); },
+    clearPartialTimer: (tab) => {
+      if (tab.partialTimer) {
+        clearTimeout(tab.partialTimer);
+        tab.partialTimer = null;
+      }
+    },
+    clearLoadCaptures,
+  });
+  if (!changed) return;
   console.log(`[electron] capture ${on ? 'resumed' : 'paused'}`);
   if (!on) stopCaptureFallback('capture paused');
 }
@@ -1305,6 +1330,7 @@ app.whenReady().then(async () => {
   createTab(START_URL, true);
   setupCtrlSocket();
   startStallWatchdog();
+  startRateWatchdog();
   startCaptureStatsReport();
   console.log('[electron] ready');
 });

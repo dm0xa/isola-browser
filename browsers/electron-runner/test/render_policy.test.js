@@ -5,6 +5,9 @@ const assert = require('node:assert/strict');
 
 const {
   frameRateFor,
+  captureCommandEffect,
+  applyCaptureCommand,
+  reassertActiveRate,
   shouldAutoRecover,
   loadCaptureDelays,
   parseDelayList,
@@ -185,4 +188,143 @@ test('parseDelayList reads the switch and keeps the default for junk', () => {
   assert.deepEqual(parseDelayList(''), DEFAULT_LOAD_CAPTURE_DELAYS_MS);
   assert.deepEqual(parseDelayList(undefined), DEFAULT_LOAD_CAPTURE_DELAYS_MS);
   assert.deepEqual(parseDelayList('a,b'), DEFAULT_LOAD_CAPTURE_DELAYS_MS);
+});
+
+// ── captureCommandEffect ─────────────────────────────────────────────────────
+
+test('a repeated capture-on command still re-asserts the compositor rate', () => {
+  // The streamer re-sends the current state (force) on every ctrl reconnect; a
+  // tab left at the background rate must be repaired by that message, not
+  // ignored because the runner's own flag already said true.
+  assert.deepEqual(
+    captureCommandEffect({ on: true, wasActive: true, hasActiveTab: true }),
+    { resume: false, pause: false, reassertRate: true },
+  );
+});
+
+test('the first capture-on command resumes and re-asserts', () => {
+  assert.deepEqual(
+    captureCommandEffect({ on: true, wasActive: false, hasActiveTab: true }),
+    { resume: true, pause: false, reassertRate: true },
+  );
+});
+
+test('capture-off pauses only on a real transition and never re-asserts', () => {
+  assert.deepEqual(
+    captureCommandEffect({ on: false, wasActive: true, hasActiveTab: true }),
+    { resume: false, pause: true, reassertRate: false },
+  );
+  assert.deepEqual(
+    captureCommandEffect({ on: false, wasActive: false, hasActiveTab: true }),
+    { resume: false, pause: false, reassertRate: false },
+  );
+});
+
+test('capture-on without an active tab has nothing to re-assert', () => {
+  assert.deepEqual(
+    captureCommandEffect({ on: true, wasActive: true, hasActiveTab: false }),
+    { resume: false, pause: false, reassertRate: false },
+  );
+});
+
+// ── applyCaptureCommand ──────────────────────────────────────────────────────
+// The decision above is only a fix if the runner applies it, so the wiring is
+// exercised with fakes: a rate left at the background value must be repaired by
+// a repeated capture-on, and every other transition must keep its exact hooks.
+
+function fakeSession(tab = { id: 1, partialTimer: null }) {
+  const calls = [];
+  const record = (name) => (...args) => calls.push([name, ...args]);
+  return {
+    calls,
+    names: () => calls.map((c) => c[0]),
+    tab,
+    hooks: {
+      setActive: record('setActive'),
+      resetFrameState: record('resetFrameState'),
+      startForwarding: record('startForwarding'),
+      stopForwarding: record('stopForwarding'),
+      setTabFrameRate: record('setTabFrameRate'),
+      invalidate: record('invalidate'),
+      captureAndSend: record('captureAndSend'),
+      clearPartialTimer: record('clearPartialTimer'),
+      clearLoadCaptures: record('clearLoadCaptures'),
+    },
+  };
+}
+
+function runCapture(on, wasActive, tab = { id: 1, partialTimer: null }) {
+  const f = fakeSession(tab);
+  const changed = applyCaptureCommand({ on, wasActive, tab, ...f.hooks });
+  return { changed, calls: f.calls, names: f.names() };
+}
+
+test('a repeated capture-on repairs the rate and changes no state', () => {
+  const { changed, calls, names } = runCapture(true, true);
+  assert.equal(changed, false, 'a re-assert is not a capture-state transition');
+  assert.deepEqual(names, ['setTabFrameRate']);
+  assert.deepEqual(calls[0], ['setTabFrameRate', { id: 1, partialTimer: null }, true]);
+});
+
+test('the first capture-on raises the rate before seeding a frame', () => {
+  const { changed, calls, names } = runCapture(true, false);
+  assert.equal(changed, true);
+  assert.deepEqual(names, [
+    'setActive', 'resetFrameState', 'startForwarding', 'setTabFrameRate',
+    'invalidate', 'captureAndSend',
+  ]);
+  assert.deepEqual(calls[0], ['setActive', true]);
+  assert.equal(calls[3][0], 'setTabFrameRate');
+  assert.equal(calls[3][2], true, 'rate must be raised, not dropped');
+  assert.deepEqual(calls[5], ['captureAndSend', 'viewer-attach']);
+});
+
+test('capture-off drops the rate and stops the keepalive', () => {
+  const { changed, calls, names } = runCapture(false, true);
+  assert.equal(changed, true);
+  assert.deepEqual(names, [
+    'setActive', 'stopForwarding', 'setTabFrameRate', 'clearPartialTimer', 'clearLoadCaptures',
+  ]);
+  assert.deepEqual(calls[2][0], 'setTabFrameRate');
+  assert.equal(calls[2][2], false);
+});
+
+test('a redundant capture-off touches nothing', () => {
+  const { changed, calls } = runCapture(false, false);
+  assert.equal(changed, false);
+  assert.deepEqual(calls, []);
+});
+
+test('capture commands before the first tab exist do not throw', () => {
+  const resume = runCapture(true, false, null);
+  assert.equal(resume.changed, true);
+  assert.deepEqual(resume.names, ['setActive', 'resetFrameState', 'captureAndSend']);
+
+  const pause = runCapture(false, true, null);
+  assert.equal(pause.changed, true);
+  assert.deepEqual(pause.names, ['setActive']);
+
+  const reassert = runCapture(true, true, null);
+  assert.equal(reassert.changed, false);
+  assert.deepEqual(reassert.calls, []);
+});
+
+// ── reassertActiveRate ───────────────────────────────────────────────────────
+
+test('the rate watchdog re-applies the capture rate while a viewer is attached', () => {
+  const calls = [];
+  const tab = { id: 2 };
+  assert.equal(
+    reassertActiveRate({ captureActive: true, tab, setTabFrameRate: (...a) => calls.push(a) }),
+    true,
+  );
+  assert.deepEqual(calls, [[tab, true]]);
+});
+
+test('the rate watchdog stays quiet when capture is paused or there is no tab', () => {
+  const calls = [];
+  const setTabFrameRate = (...a) => calls.push(a);
+  assert.equal(reassertActiveRate({ captureActive: false, tab: { id: 2 }, setTabFrameRate }), false);
+  assert.equal(reassertActiveRate({ captureActive: true, tab: null, setTabFrameRate }), false);
+  assert.deepEqual(calls, []);
 });

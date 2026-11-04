@@ -6,6 +6,14 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- Sessions no longer get stuck at ~1 fps with a viewer attached: the sandbox
+  runner re-applies the watched tab's frame rate when the streamer re-sends
+  "capture on" (that message used to be ignored) and every 5 seconds while
+  someone is watching. Scrolling and typing are smooth again instead of looking
+  frozen behind a stream that still claimed to be active.
+
 ## [1.5.2] - 2026-11-02
 
 ### Changed
