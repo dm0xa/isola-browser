@@ -290,7 +290,7 @@ type libx264Tuning struct {
 var libx264Quality = libx264Tuning{
 	tune:   "zerolatency",
 	preset: "superfast",
-	params: "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=1:me:dia:force-cfr=1",
+	params: "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=1:me=dia:force-cfr=1",
 }
 
 // startEncoder launches ffmpeg as a subprocess, consuming raw BGRA frames on
