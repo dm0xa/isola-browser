@@ -672,7 +672,12 @@ class Streamer {
   }
 
   async resize(w, h) {
-    const r = await fetch(`http://127.0.0.1:${this.port}/resize?width=${w}&height=${h}`, { signal: AbortSignal.timeout(5000) });
+    // POST: /resize mutates session geometry, so the streamer accepts it the
+    // same way it accepts /navigate.
+    const r = await fetch(`http://127.0.0.1:${this.port}/resize?width=${w}&height=${h}`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(5000),
+    });
     return { status: r.status, body: (await r.text()).slice(0, 160) };
   }
 

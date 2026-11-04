@@ -222,6 +222,32 @@ this page is built from (7.5 KB). Columns:
 every attach, every perturbation event, the allowed-finding counts and the
 streamer's log tail.
 
+## Re-run after the fixes
+
+The two encoder-side findings above were fixed on `dm0xa/transport` (`me=dia`
+repaired and pinned by `TestX264Params*`; the feed-rate hole closed by hoisting
+the interval guard into the single path both the damage event and the ticker
+call). The soak was re-run unchanged on the fixed build:
+
+```
+node scripts/ab/soak.mjs --bin /tmp/isola-soak2 --minutes 10
+VERDICT: PASS (10/10 rules)
+```
+
+|rule|number|
+|:---|:---|
+|RSS|second-half slope 739 KB/min, 79.7 → 82.4 MB (+2.6 MB, limit +12 MB)|
+|fds / threads|14 → 15 / 11 → 13 over 22 attach-detach cycles|
+|encoders after churn|0 children, 0 runs, 0 subscribers|
+|packet rate|motion minute 21.5 → 22.5 /s; static window 0.5 /s (keepalive)|
+|attach latency|p50 56 ms, p95 72 ms, max 87 ms, first packet always a keyframe|
+|restarts|9 ABR + 4 keyframe, worst recovery 88 ms, never more than 1 run|
+|stream integrity|0 seq gaps, 0 dropped, no server close|
+|resize|1024x576 (95.9 ms to IDR), back to 1280x720 (87.8 ms)|
+
+The harness now POSTs `/resize`, matching the method the streamer requires; a
+`GET` returns 405 by design.
+
 ## What was not touched
 
 No Go or TypeScript source changes: this wave is measurement only. The two

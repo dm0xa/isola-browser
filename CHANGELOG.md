@@ -62,6 +62,13 @@ publishes the section matching the tag.
 
 ### Fixed
 
+- The encode pump holds the 25 fps ceiling on both of its feed paths. The
+  damage path checked the encode interval and the ticker path did not, so a
+  producer that delivered in bursts was fed twice inside one interval and the
+  wall-clock rate followed the producer: a 51 fps producer measured 48 packets/s
+  in a soak run. The guard now sits in the one function both paths call, with a
+  tenth of the interval of slack for a producer paced exactly at the ceiling and
+  an explicit exception for the MSE fragment-flush follow-up.
 - The relay now tears down both sockets when either side dies. A viewer that
   disconnected left the container→client goroutine parked in `NextReader` until
   the 90 s container read deadline, holding the container websocket and its
