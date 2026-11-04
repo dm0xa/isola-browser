@@ -928,6 +928,23 @@ func (r *streamRun) pumpFrames(wg *sync.WaitGroup) {
 	// duplicate frame right after a change, pushing the fragment out.
 	lastFedChange := false
 	enqueue := func() {
+		// CFR ceiling: never feed two frames closer together than the encode
+		// interval, whichever path called us. The ticker keeps the cadence on
+		// its own, but the damage path can feed a few milliseconds before a
+		// tick and the tick then feeds again, so the wall-clock rate follows
+		// the producer instead of the encode rate (a 51 fps producer measured
+		// 48 packets/s against a 25 fps ceiling). The mux-flush follow-up is
+		// the one allowed to run closer, because the fMP4 muxer only closes a
+		// fragment when the next frame arrives.
+		if fedOnce {
+			minGap := interval
+			if lastFedChange && muxFlushFollowUpMs < minGap {
+				minGap = muxFlushFollowUpMs * time.Millisecond
+			}
+			if time.Since(lastFeedAt) < minGap {
+				return
+			}
+		}
 		// Change-driven suppression: skip this tick entirely while the surface
 		// has not changed since the last feed and the keepalive window has not
 		// elapsed. Never while a viewer is waiting for an IDR — see
