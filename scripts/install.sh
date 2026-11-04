@@ -6,8 +6,10 @@ set -euo pipefail
 # Usage: curl -fsSL https://raw.githubusercontent.com/dm0xa/isola-browser/main/scripts/install.sh | bash
 # ────────────────────────────────────────────────────────────
 
-readonly DOWNLOAD_BASE="${ISOLA_DOWNLOAD_BASE:-https://github.com/dm0xa/isola-browser/releases/latest/download}"
 readonly RELEASES_URL="${ISOLA_RELEASES_URL:-https://github.com/dm0xa/isola-browser/releases}"
+# Full override for the asset directory (mirrors, air-gapped hosts). Unset by
+# default so download_base() below composes a tag-addressed URL.
+readonly DOWNLOADS_OVERRIDE="${ISOLA_DOWNLOAD_BASE:-}"
 readonly BINARY_NAME="isola"
 
 # Install directory, resolved by resolve_install_dir() before use. The default
@@ -55,11 +57,13 @@ error()   { printf "${RED}✗${NC} %s\n" "$*"; }
 have_tty() { ( exec 9</dev/tty ) 2>/dev/null; }
 
 # ── which version to install ───────────────────────────────────────────
-# DOWNLOAD_BASE is the /releases/latest/download alias, so the version in the
-# asset filename must match whatever release is latest *right now*. A hard-coded
-# pin does not merely install an older version — it asks for an asset the newer
-# release does not contain, and the download 404s. ISOLA_VERSION skips the
-# lookup and pins an exact version.
+# ISOLA_VERSION pins an exact version. Without it the latest release tag is
+# resolved from the /releases/latest redirect.
+#
+# Assets are always fetched from the tag-addressed directory
+# (/releases/download/vX.Y.Z), never from the /releases/latest/download alias:
+# that alias only carries the newest release's files, so pinning an older
+# version through it 404s on a filename the newer release no longer publishes.
 resolve_version() {
     if [[ -n "${ISOLA_VERSION:-}" ]]; then
         printf '%s' "${ISOLA_VERSION#v}"
@@ -82,6 +86,15 @@ if ! VERSION="$(resolve_version)"; then
     exit 1
 fi
 readonly VERSION
+
+# download_base prints the directory holding this version's release assets.
+download_base() {
+    if [[ -n "${DOWNLOADS_OVERRIDE}" ]]; then
+        printf '%s' "${DOWNLOADS_OVERRIDE}"
+        return 0
+    fi
+    printf '%s/download/v%s' "${RELEASES_URL}" "${VERSION}"
+}
 
 # ── detect OS / arch ────────────────────────────────────────────────
 detect_platform() {
@@ -654,8 +667,10 @@ main() {
 
     # 4. build download URL
     local archive="${BINARY_NAME}-${os}-${arch}-v${VERSION}.tar.gz"
-    local download_url="${DOWNLOAD_BASE}/${archive}"
-    local checksum_url="${DOWNLOAD_BASE}/checksums.txt"
+    local base
+    base="$(download_base)"
+    local download_url="${base}/${archive}"
+    local checksum_url="${base}/checksums.txt"
 
     info "Downloading isola ${VERSION} for ${os}/${arch}..."
     info "URL: ${download_url}"

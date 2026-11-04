@@ -13,6 +13,9 @@ publishes the section matching the tag.
   "capture on" (that message used to be ignored) and every 5 seconds while
   someone is watching. Scrolling and typing are smooth again instead of looking
   frozen behind a stream that still claimed to be active.
+- `install.sh` fetches release assets from the versioned download path, so
+  `ISOLA_VERSION=X.Y.Z` installs that release instead of 404ing on a file the
+  newest release no longer publishes.
 
 ## [1.5.2] - 2026-11-02
 
