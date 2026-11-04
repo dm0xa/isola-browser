@@ -87,7 +87,7 @@ func benchGate(t *testing.T) int {
 // hub asks startEncoder for at 720p: 25fps, 6 Mbps, scale 1.
 const (
 	benchWidth, benchHeight = 1280, 720
-	benchFPS                = 25
+	restartBenchFPS         = 25
 	benchKbps               = 6000
 )
 
@@ -105,7 +105,7 @@ func benchFeeder(stdin io.Writer, frames [][]byte, fed *atomic.Int64) func() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		interval := time.Second / benchFPS
+		interval := time.Second / restartBenchFPS
 		start := time.Now()
 		for i := 0; ; i++ {
 			if i > 0 {
@@ -137,7 +137,7 @@ func TestEncoderRestartStall(t *testing.T) {
 
 	for run := range runs {
 		t0 := time.Now()
-		cmd, stdin, stdout, _, _, _, _, err := startEncoder(benchWidth, benchHeight, benchFPS, benchKbps, 1, false)
+		cmd, stdin, stdout, _, _, _, _, err := startEncoder(benchWidth, benchHeight, restartBenchFPS, benchKbps, 1, false)
 		if err != nil {
 			t.Fatalf("run %d: startEncoder: %v", run, err)
 		}
@@ -206,7 +206,7 @@ func TestEncoderRestartBreakdown(t *testing.T) {
 	var firstByte, firstIDR, initToIDR []time.Duration
 	for run := range runs {
 		t0 := time.Now()
-		cmd, stdin, stdout, _, _, _, _, err := startEncoder(benchWidth, benchHeight, benchFPS, benchKbps, 1, true)
+		cmd, stdin, stdout, _, _, _, _, err := startEncoder(benchWidth, benchHeight, restartBenchFPS, benchKbps, 1, true)
 		if err != nil {
 			t.Fatalf("run %d: startEncoder: %v", run, err)
 		}
