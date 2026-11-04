@@ -2,6 +2,13 @@ package main
 
 import "io"
 
+// maxAUStreamBytes bounds how much encoded data may accumulate without a
+// picture boundary. A 1080p IDR is well under a megabyte at the rates this
+// streamer runs; past this much unterminated data the stream is corrupt or
+// hostile and the buffered bytes are dropped rather than growing without
+// bound.
+const maxAUStreamBytes = 8 << 20
+
 // auSplitter reassembles an Annex-B H.264 byte stream (as produced by
 // ffmpeg -f h264) into complete access units. An access unit boundary sits
 // immediately before the second VCL NAL (type 1-5) of a run: non-VCL NALs
@@ -49,15 +56,75 @@ func (s *auSplitter) readFrom(src io.Reader) ([]auPacket, error) {
 
 // split emits every complete AU currently buffered and consumes it.
 func (s *auSplitter) split() []auPacket {
+	s.resync()
 	var out []auPacket
 	for {
 		boundary, idr, ok := s.findBoundary()
 		if !ok {
+			s.trimOversized()
 			return out
 		}
 		buf := s.q.pending()
 		out = append(out, auPacket{data: buf[:boundary:boundary], keyframe: idr})
 		s.q.consume(boundary)
+	}
+}
+
+// trimOversized drops buffered bytes when no access-unit boundary was found in
+// them and they exceed maxAUStreamBytes. The retained suffix starts at the last
+// NAL start code in the window (or nothing at all), so a NAL is never spliced
+// onto a fragment of itself: whatever is kept begins on a NAL boundary, and the
+// splitter still never emits a partial AU. A stream this far along without a
+// second picture is not decodable video, so dropping it is the only bounded
+// choice.
+func (s *auSplitter) trimOversized() {
+	buf := s.q.pending()
+	if len(buf) <= maxAUStreamBytes {
+		return
+	}
+	// i > 0: a start code already at offset 0 would keep the whole window,
+	// which is the one case that has to be dropped outright.
+	for i := len(buf) - 3; i > 0; i-- {
+		if buf[i] == 0 && buf[i+1] == 0 && buf[i+2] == 1 {
+			s.q.consume(i)
+			return
+		}
+	}
+	s.q.consume(len(buf))
+}
+
+// resync drops any prefix that cannot be part of an access unit. A well-formed
+// stream begins on a start code and subsequent split points are start codes, so
+// this is a three-byte check in the normal case; after a corrupt read or a
+// dropped oversized window it stops the garbage from riding into the first
+// emitted AU. The last three bytes are kept because a start code can straddle
+// two reads.
+func (s *auSplitter) resync() {
+	buf := s.q.pending()
+	if len(buf) < 3 {
+		return
+	}
+	if buf[0] == 0 && buf[1] == 0 && buf[2] == 1 {
+		return
+	}
+	if len(buf) >= 4 && buf[0] == 0 && buf[1] == 0 && buf[2] == 0 && buf[3] == 1 {
+		return
+	}
+	for i := 1; i+3 <= len(buf); i++ {
+		if buf[i] == 0 && buf[i+1] == 0 && buf[i+2] == 1 {
+			// Keep the 4-byte form whole when its leading zero is present, so
+			// the bytes handed on are exactly what the encoder produced.
+			if buf[i-1] == 0 {
+				i--
+			}
+			s.q.consume(i)
+			return
+		}
+	}
+	// Three bytes, not two: a 4-byte start code can straddle two reads.
+	const keep = 3
+	if len(buf) > keep {
+		s.q.consume(len(buf) - keep)
 	}
 }
 
