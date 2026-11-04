@@ -1,61 +1,103 @@
 package main
 
+import "io"
+
 // auSplitter reassembles an Annex-B H.264 byte stream (as produced by
 // ffmpeg -f h264) into complete access units. An access unit boundary sits
 // immediately before the second VCL NAL (type 1-5) of a run: non-VCL NALs
 // (SPS/PPS/SEI) that arrive between two pictures belong to the *following*
 // picture, so the emitted AU always carries its parameter sets with it —
 // exactly what a WebCodecs VideoDecoder consuming Annex-B expects.
+//
+// The splitter owns a pipeBuffer instead of copying each AU out of an
+// append-and-compact slice: the old shape copied every AU once for the
+// splitter and again for its wire header, and re-scanned the whole buffered
+// prefix per AU (findBoundary always started at offset 0). Emitted AUs now
+// alias the buffer and the scan resumes at the byte after the previous AU, so
+// splitting is linear in the bytes read.
+//
+// Emitted AUs are valid until the next feed call. The pump packs each one into
+// a viewer packet (the single remaining copy) immediately, and reserves the
+// header itself, so nothing outlives the bytes it points at.
 type auSplitter struct {
-	buf []byte
+	q pipeBuffer
 }
 
 type auPacket struct {
-	data     []byte // complete AU, start codes included
+	data     []byte // complete AU, start codes included; aliases the splitter
 	keyframe bool   // AU contains an IDR NAL (type 5)
 }
 
 // feed appends encoded bytes and returns every access unit that completed.
 func (s *auSplitter) feed(data []byte) []auPacket {
-	s.buf = append(s.buf, data...)
+	if len(data) == 0 {
+		return nil
+	}
+	s.q.append(data)
+	return s.split()
+}
+
+// readFrom reads the next chunk of ffmpeg stdout into the splitter's buffer and
+// returns the access units it completed.
+func (s *auSplitter) readFrom(src io.Reader) ([]auPacket, error) {
+	n, err := s.q.readFrom(src)
+	if n == 0 {
+		return nil, err
+	}
+	return s.split(), err
+}
+
+// split emits every complete AU currently buffered and consumes it.
+func (s *auSplitter) split() []auPacket {
 	var out []auPacket
 	for {
-		boundary, ok := s.findBoundary()
+		boundary, idr, ok := s.findBoundary()
 		if !ok {
 			return out
 		}
-		au := make([]byte, boundary)
-		copy(au, s.buf[:boundary])
-		out = append(out, auPacket{data: au, keyframe: auContainsIDR(au)})
-		// Compact in place — the tail is the next (incomplete) AU.
-		s.buf = append(s.buf[:0], s.buf[boundary:]...)
+		buf := s.q.pending()
+		out = append(out, auPacket{data: buf[:boundary:boundary], keyframe: idr})
+		s.q.consume(boundary)
 	}
 }
 
-// findBoundary returns the offset at which the next access unit starts.
+// findBoundary returns the offset at which the next access unit starts,
+// relative to the pending window, and whether the AU before it carries an IDR.
 // With x264 zerolatency (sliced threads) a picture arrives as several slice
 // NALs, so "first VCL NAL" is not enough: a new AU begins at a VCL NAL whose
 // first_mb_in_slice == 0. first_mb_in_slice is the first ue(v) field of the
 // slice header — it is 0 exactly when the first payload bit after the NAL
 // header is 1, i.e. (buf[nal+1] & 0x80) != 0.
-func (s *auSplitter) findBoundary() (int, bool) {
+//
+// The IDR flag is folded into this single pass: every NAL seen before the
+// boundary belongs to the AU, so a type-5 NAL there makes it a keyframe.
+func (s *auSplitter) findBoundary() (int, bool, bool) {
+	buf := s.q.pending()
 	firstVCL := -1
+	idr := false
 	off := 0
 	for {
-		startCode, nal, ok := nextNAL(s.buf, off)
-		if !ok {
-			return 0, false
+		startCode, nal, ok := nextNAL(buf, off)
+		if !ok || nal >= len(buf) {
+			// A start code may be the last thing in the buffer; the NAL
+			// header byte it introduces arrives with the next read.
+			return 0, false, false
 		}
-		t := int(s.buf[nal] & 0x1F)
-		if t >= 1 && t <= 5 && nal+1 < len(s.buf) {
-			firstSliceOfPicture := s.buf[nal+1]&0x80 != 0
+		t := int(buf[nal] & 0x1F)
+		if t >= 1 && t <= 5 && nal+1 < len(buf) {
+			firstSliceOfPicture := buf[nal+1]&0x80 != 0
 			if firstSliceOfPicture {
 				if firstVCL < 0 {
 					firstVCL = startCode
 				} else {
-					return startCode, true
+					// This NAL starts the following AU; its own type does
+					// not belong to the AU ending here.
+					return startCode, idr, true
 				}
 			}
+		}
+		if t == 5 {
+			idr = true
 		}
 		off = nal
 	}
@@ -77,19 +119,4 @@ func nextNAL(buf []byte, from int) (startCode int, nalHeader int, ok bool) {
 		i++
 	}
 	return 0, 0, false
-}
-
-// auContainsIDR scans an access unit for an IDR NAL (type 5).
-func auContainsIDR(au []byte) bool {
-	off := 0
-	for {
-		_, nal, ok := nextNAL(au, off)
-		if !ok {
-			return false
-		}
-		if int(au[nal]&0x1F) == 5 {
-			return true
-		}
-		off = nal
-	}
 }

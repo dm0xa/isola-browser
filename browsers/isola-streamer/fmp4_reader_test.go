@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"testing"
 )
 
@@ -67,4 +68,79 @@ func makeBox(typ string, contentLen int) []byte {
 	b[2] = byte(size >> 8)
 	b[3] = byte(size)
 	return b
+}
+
+// TestFMP4ReaderReadSegmentsMatchesFeed pins that reading ffmpeg's stdout
+// straight into the reader's buffer produces exactly the segments the
+// append-a-chunk Feed path produces, including the init segment split across
+// reads.
+func TestFMP4ReaderReadSegmentsMatchesFeed(t *testing.T) {
+	init := append(makeBox("ftyp", 20), makeBox("moov", 100)...)
+	var raw []byte
+	raw = append(raw, init...)
+	const fragments = 6
+	for i := 0; i < fragments; i++ {
+		raw = append(raw, makeBox("moof", 50)...)
+		raw = append(raw, makeBox("mdat", 300+i*10)...)
+	}
+
+	ref := newFMP4Reader()
+	want := ref.Feed(raw)
+	if len(want) != fragments+1 {
+		t.Fatalf("Feed produced %d segments, want %d", len(want), fragments+1)
+	}
+
+	r := newFMP4Reader()
+	src := bytes.NewReader(raw)
+	var got [][]byte
+	for {
+		segs, err := r.readSegments(src)
+		got = append(got, segs...)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("readSegments produced %d segments, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(got[i], want[i]) {
+			t.Fatalf("segment %d differs: %d vs %d bytes", i, len(got[i]), len(want[i]))
+		}
+	}
+}
+
+// TestFMP4ReaderBufferReuse pins that the reader stops allocating once its
+// buffer is at working size: a fragmenter must not spend one buffer per
+// fragment on a stream that runs for hours.
+func TestFMP4ReaderBufferReuse(t *testing.T) {
+	frag := append(makeBox("moof", 50), makeBox("mdat", 24*1024)...)
+	init := append(makeBox("ftyp", 20), makeBox("moov", 100)...)
+
+	r := newFMP4Reader()
+	r.Feed(init)
+	for range 8 {
+		if segs := r.Feed(frag); len(segs) != 1 {
+			t.Fatalf("emitted %d segments, want 1", len(segs))
+		}
+	}
+	grown := cap(r.q.buf)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		if segs := r.Feed(frag); len(segs) != 1 {
+			t.Fatalf("emitted %d segments, want 1", len(segs))
+		}
+	})
+	if allocs > 1 {
+		t.Fatalf("steady-state Feed allocated %v times per call, want <= 1 (the result slice)", allocs)
+	}
+	if cap(r.q.buf) != grown {
+		t.Fatalf("internal buffer grew from %d to %d on a steady stream", grown, cap(r.q.buf))
+	}
+	if r.q.off > len(frag)+len(init) {
+		t.Fatalf("consumed prefix reached %d: buffer is not being reclaimed", r.q.off)
+	}
 }
