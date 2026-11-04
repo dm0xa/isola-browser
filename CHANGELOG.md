@@ -6,6 +6,15 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Added
+
+- The viewer now accounts for packet gaps on the video socket: `seq` jumps
+  (TCP, so they mean the streamer shed packets) are counted as `packetsLost`
+  with a 1 Hz `packetLossRatio`, and once a burst reaches five missing packets
+  it asks for a keyframe through the existing recovery budget instead of
+  waiting on the IDR the encoder may never send. The debug metrics also show
+  the server's `dropped` counter when a newer streamer reports it.
+
 ## [1.5.3] - 2026-11-04
 
 ### Fixed

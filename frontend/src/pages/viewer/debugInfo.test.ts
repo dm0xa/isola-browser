@@ -67,6 +67,9 @@ function metrics(overrides: Partial<IsolaStreamMetrics> = {}): IsolaStreamMetric
     captureLastSentMs: 10,
     captureSentFrames: 100,
     captureDedupFrames: 5,
+    packetsLost: 0,
+    packetLossRatio: 0,
+    serverDropped: 0,
     ...overrides,
   };
 }

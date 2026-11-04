@@ -6,6 +6,20 @@ export interface IsolaStreamMetrics {
   recentFps: number;
   sequenceNumber: number;
   keyframeCount: number;
+  // Packet loss off the wire's per-run uint32 sequence number (header offset
+  // 2). The socket is TCP, so a gap is not network loss: it is the streamer
+  // shedding packets for this viewer (mailbox overflow), and the picture
+  // cannot resync until a fresh IDR arrives. `packetsLost` is cumulative for
+  // the whole view (it survives stream_reset; only the gap baseline resets),
+  // and `packetLossRatio` is windowed: lost / (lost + received) over the
+  // packets counted since the previous 1 Hz tick, 0 when that window carried
+  // no packets (an idle stream is not evidence of loss).
+  packetsLost: number;
+  packetLossRatio: number;
+  // The sandbox's own packet-shed counter, when the server reports it
+  // (newer streamers send `dropped` per metrics message). 0 on older servers
+  // that never include the field.
+  serverDropped: number;
   wsState: number;
   inputBackend: string;
   // URL of the page target CDP input is bound to, and whether that is still
