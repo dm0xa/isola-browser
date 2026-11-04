@@ -95,7 +95,10 @@ func TestResizeValidation(t *testing.T) {
 		t.Fatalf("odd resize = %dx%d, want 1022x766", width, height)
 	}
 
-	for _, query := range []string{"width=9000&height=800", "width=0&height=800", "width=abc&height=800"} {
+	// 1x1 rounds down to 0x0. Accepting it sets currentWidth/Height to 0, and
+	// the next viewer then falls back to the env default against a surface of
+	// the old size -- a picture that never arrives.
+	for _, query := range []string{"width=9000&height=800", "width=0&height=800", "width=abc&height=800", "width=1&height=1", "width=15&height=720"} {
 		resp, err := http.Post("http://127.0.0.1:"+port+"/resize?"+query, "", nil)
 		if err != nil {
 			t.Fatalf("resize %q: %v", query, err)

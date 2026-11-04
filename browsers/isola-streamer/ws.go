@@ -13,6 +13,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// bitrateStepMinInterval is the shortest gap between two accepted set_bitrate
+// steps for one viewer. Each accepted step replaces an encoder run, so without
+// it a client could spawn ffmpeg hundreds of times per second; the ABR
+// controller itself steps at most once per 8 s.
+const bitrateStepMinInterval = 1 * time.Second
+
 func parseIntEnv(key string, defaultVal int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -152,6 +158,13 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 					if err := writeBinary(ev.binary); err != nil {
 						log.Printf("ws: binary write error: %v", err)
 						closeDone()
+						// Closing the socket is what ends the session: the read
+						// loop below is parked in ReadMessage and only returns
+						// when the connection dies, and its defer is what
+						// releases the subscription. Without this a write
+						// deadline expires and the viewer stays subscribed --
+						// an encoder and a mailbox kept alive for nobody.
+						_ = conn.Close()
 						return
 					}
 					sub.sentBytes.Add(int64(len(ev.binary)))
@@ -159,6 +172,7 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 					if err := writeText(ev.text); err != nil {
 						log.Printf("ws: control write error: %v", err)
 						closeDone()
+						_ = conn.Close() // see the binary branch
 						return
 					}
 				}
@@ -185,7 +199,28 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 	// of starting a third encoder (stream_hub.go). The rung actually landed on
 	// is whatever the returned run carries — the client reads it back from the
 	// stream_init and metrics that follow, never from its own request.
+	// set_bitrate budget: one accepted step per interval. The ABR controller
+	// steps at most once per 8 s (abr.ts ABR_MIN_INTERVAL_MS); a second is
+	// generous for a manual quality change and still kills a flood. Only the
+	// read loop calls setBitrate, so plain locals need no lock.
+	var (
+		lastBitrateStep     time.Time
+		bitrateStepsRefused int
+	)
 	setBitrate := func(kbps int) {
+		// Budget, like request_keyframe: every accepted step replaces the
+		// encoder run (and resets every viewer of it), and the ABR controller
+		// only ever steps 8 s apart. A client that ignores that is either
+		// broken or hostile — 40 messages used to mean 40 ffmpeg spawns in
+		// 142 ms. Refused steps are silent, as with keyframes, so a flooder
+		// cannot tell how long to wait.
+		now := time.Now()
+		if !lastBitrateStep.IsZero() && now.Sub(lastBitrateStep) < bitrateStepMinInterval {
+			bitrateStepsRefused++
+			log.Printf("ws: set_bitrate ignored, %s since the last step (min %s, %d refused)",
+				now.Sub(lastBitrateStep).Round(time.Millisecond), bitrateStepMinInterval, bitrateStepsRefused)
+			return
+		}
 		newKbps := clampAbrKbps(kbps, baseKbps)
 		newScale := abrScaleForKbps(newKbps, baseKbps)
 		cur := hub.runOf(sub)
@@ -212,6 +247,8 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 				oldKbps, newKbps, landed.key.kbps, maxConcurrentRuns)
 			return
 		}
+		// From here the viewer moved to a different run: the budget is spent.
+		lastBitrateStep = now
 		// A shared run is logged by the hub, which knows both keys; this path
 		// only has to report the step that actually happened.
 		if landed.key.kbps != newKbps || landed.key.scale != newScale {

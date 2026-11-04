@@ -270,3 +270,58 @@ func TestViewerSetBitrate(t *testing.T) {
 	}
 	t.Log("duplicate set_bitrate ignored: PASS")
 }
+
+// TestViewerSetBitrateFloodBudget pins the per-viewer set_bitrate budget: an
+// accepted step replaces the encoder run, so a client that ignores the ABR
+// controller's pacing (8s between steps) must not be able to spawn ffmpeg per
+// message. Twenty distinct rungs in one burst used to mean twenty restarts.
+func TestViewerSetBitrateFloodBudget(t *testing.T) {
+	const port = "15916"
+	listener := startTestStreamer(t, port, 4000)
+	defer listener.Close()
+
+	conn, init := dialTestViewer(t, port)
+	defer conn.Close()
+	base, _ := init["base_bitrate"].(float64)
+	if base == 0 {
+		t.Fatalf("stream_init base_bitrate = %v, want 4000", init["base_bitrate"])
+	}
+
+	// Twenty rungs, all distinct, all inside one second.
+	for i := 1; i <= 20; i++ {
+		kbps := 500 + i*150
+		msg := fmt.Sprintf(`{"type":"set_bitrate","kbps":%d}`, kbps)
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(msg)); err != nil {
+			t.Fatalf("send set_bitrate %d: %v", kbps, err)
+		}
+	}
+
+	// Exactly one step may be accepted: the rest are refused inside the
+	// interval. A refill after the interval is allowed but must not arrive
+	// inside this window, so the reset count is a hard bound here.
+	resets := 0
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		conn.SetReadDeadline(time.Now().Add(time.Until(deadline)))
+		mt, data, err := conn.ReadMessage()
+		if err != nil {
+			break // window elapsed
+		}
+		if mt != websocket.TextMessage || len(data) == 0 || data[0] != '{' {
+			continue
+		}
+		var msg map[string]any
+		if json.Unmarshal(data, &msg) == nil && msg["type"] == "stream_reset" {
+			if msg["reason"] == "bitrate_change" {
+				resets++
+			}
+		}
+	}
+	if resets > 1 {
+		t.Fatalf("20 set_bitrate messages in one burst caused %d restarts, want 1", resets)
+	}
+	if resets == 0 {
+		t.Fatal("the first set_bitrate was refused; the budget must allow one step")
+	}
+	t.Logf("set_bitrate flood: %d restart(s) for 20 messages", resets)
+}

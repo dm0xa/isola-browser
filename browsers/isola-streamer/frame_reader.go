@@ -16,6 +16,10 @@ const frameMagic = 0x4C4F5349 // 'ISOL'
 const (
 	maxDirtyRects = 4096
 	maxSurfaceDim = 8192
+	// minSurfaceDim is the smallest geometry a resize may ask for. H.264 codes
+	// 16x16 macroblocks, and anything below that cannot round-trip through the
+	// encoder's even-dimension and macroblock assumptions.
+	minSurfaceDim = 16
 )
 
 // Frame is one damage update from the producer. Dirty lists the rectangles
