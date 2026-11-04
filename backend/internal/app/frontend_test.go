@@ -11,10 +11,41 @@ import (
 // asset and the favicon route.
 func newTestFrontend() http.Handler {
 	return serveFrontend(fstest.MapFS{
-		"index.html":        &fstest.MapFile{Data: []byte("<html>shell</html>")},
-		"assets/app-abc.js": &fstest.MapFile{Data: []byte("console.log(1)")},
-		"favicon.svg":       &fstest.MapFile{Data: []byte("<svg/>")},
+		"index.html":           &fstest.MapFile{Data: []byte("<html>shell</html>")},
+		"assets/app-abc.js":    &fstest.MapFile{Data: []byte("console.log(1)")},
+		"favicon.svg":          &fstest.MapFile{Data: []byte("<svg/>")},
+		"manifest.webmanifest": &fstest.MapFile{Data: []byte(`{"name":"isola"}`)},
+		"icons/icon-192.png":   &fstest.MapFile{Data: []byte("png")},
 	})
+}
+
+// TestServeFrontendContentTypes pins the headers Chromium's installability
+// check reads. The manifest has no entry in Go's built-in mime table, so
+// without registration it was sniffed and served as text/plain, and the icon
+// route is separate from the SPA fallback so a typo'd icon name cannot answer
+// with index.html.
+func TestServeFrontendContentTypes(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: "/manifest.webmanifest", want: "application/manifest+json"},
+		{path: "/icons/icon-192.png", want: "image/png"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			newTestFrontend().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d, want 200", tc.path, rec.Code)
+			}
+			if got := rec.Header().Get("Content-Type"); got != tc.want {
+				t.Errorf("GET %s Content-Type = %q, want %q", tc.path, got, tc.want)
+			}
+		})
+	}
 }
 
 // TestServeFrontendCachePolicy pins the headers the browser needs to pick up a

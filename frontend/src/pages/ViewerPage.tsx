@@ -58,6 +58,11 @@ export default function ViewerPage() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<string>('provisioning');
+  // Mirrors the session's tor_enabled/tor_country so the toolbar can show the
+  // routing the session was launched with (the ref above survives restarts,
+  // but a ref cannot re-render the badge).
+  const [torEnabled, setTorEnabled] = useState(false);
+  const [torCountry, setTorCountry] = useState('');
   // The launch overlay lives above the router (see lib/launchProgress), so a
   // session started from RunPage keeps the same overlay and only advances its
   // phases from here. For direct deep links the flow is inactive and the
@@ -409,6 +414,10 @@ export default function ViewerPage() {
         }
         if (typeof data.tor_enabled === 'boolean') {
           sessionConfigRef.current.torEnabled = data.tor_enabled;
+          setTorEnabled(data.tor_enabled);
+        }
+        if (typeof data.tor_country === 'string') {
+          setTorCountry(data.tor_country);
         }
 
         if (data.status === 'running') {
@@ -930,6 +939,8 @@ export default function ViewerPage() {
         remainingSec={remainingSec}
         isUnlimited={isUnlimited}
         status={status}
+        torEnabled={torEnabled}
+        torCountry={torCountry}
         extendAvailable={extendAvailable}
         viewOnly={viewOnly}
         onExtend={extend}

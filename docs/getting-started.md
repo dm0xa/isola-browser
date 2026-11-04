@@ -76,9 +76,10 @@ docker compose logs -f
 ## Your First Session
 
 1. On the landing page, enter a URL and start a session. Isola provisions a container, boots the browser, and connects the stream.
-2. The viewer shows the live page with a toolbar for the session controls: **End**, **extend**, resolution, audio, and a share link.
-3. Sessions are time-limited (see `session` [in Configuration](configuration.md#session)). The default session is 10 minutes, extendable in 5-minute steps up to a 30-minute maximum.
-4. Closing a session destroys its container. Nothing persists.
+2. The settings gear beside **Open →** holds resolution, browser and the **Tor** toggle. Turn Tor on and the choice is visible without reopening the menu: a purple `Tor` chip appears beside the backend status dot in the footer and a purple halo appears behind the logo. The preference is remembered for the next launch.
+3. The viewer shows the live page with a toolbar for the session controls: **End**, **extend**, resolution, audio, and a share link. A session launched through Tor carries a `Tor · <exit>` badge after its short id; hovering it names the pinned exit countries when `tor_country` is set.
+4. Sessions are time-limited (see `session` [in Configuration](configuration.md#session)). The default session is 10 minutes, extendable in 5-minute steps up to a 30-minute maximum.
+5. Closing a session destroys its container. Nothing persists.
 
 ### Optional: Launch from the URL bar
 
@@ -102,6 +103,35 @@ https://isola.example/?q=%s&autorun=1
 entry you trust yourself to follow — every visit costs a container. Both
 parameters are removed from the address bar once read, so reloading the viewer
 or the landing page cannot relaunch or re-prefill.
+
+### Optional: Install it as an app
+
+Chromium can install the landing page as a desktop app, so isola opens in its
+own window instead of a tab.
+
+1. Open isola in Chrome/Chromium over `http://localhost` or HTTPS — an install
+   needs a secure context, and a plain-HTTP hostname is not one.
+2. Use the install icon in the address bar, or the **Install app** pill in the
+   bottom-right corner of the landing page. Its **×** closes it for good — the
+   choice is stored in `localStorage` under `isola_install_dismissed`, so it
+   survives reloads and upgrades; remove that key (or use the address-bar icon)
+   if you dismissed it by accident.
+
+   The pill only exists while Chromium holds an unspent install prompt, so
+   clicking it always opens the browser's dialog. Chromium withholds that prompt
+   on its own terms (engagement, an earlier dismissal, an origin that already
+   looks installed) and `prompt()` cannot be called without one, so in that
+   state nothing is rendered — the address-bar install icon and
+   **⋮ → Install isola** are the way in. Firefox and Safari cannot install web
+   apps at all, and already-installed windows render no pill either.
+3. The installed window starts at `/` and the title bar follows the dark/light
+   toggle, because the app rewrites `theme-color` with the theme it is showing.
+
+Behind a reverse proxy, pass `/manifest.webmanifest` and `/icons/*` through to
+the isola process. The embedded server serves both; a proxy that rewrites them
+to `index.html` makes the app silently uninstallable. Chromium caches launcher
+icons per install: after an upgrade that changes the icon, remove the app and
+add it again.
 
 ## Optional: Customize
 

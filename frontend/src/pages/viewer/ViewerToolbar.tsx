@@ -23,6 +23,8 @@ export type ViewerToolbarProps = {
   remainingSec: number;
   isUnlimited: boolean;
   status: string;
+  torEnabled?: boolean;
+  torCountry?: string;
   extendAvailable: boolean;
   viewOnly: boolean;
   onExtend: () => Promise<boolean>;
@@ -56,13 +58,32 @@ export type ViewerToolbarProps = {
 export function ViewerToolbar(props: ViewerToolbarProps) {
   const {
     hideToolbar, id, showOverlay, statusText, isReconnecting, isConnected, isola, viewerCount,
-    remainingSec, isUnlimited, status, extendAvailable, viewOnly, onExtend, isFullscreen,
+    remainingSec, isUnlimited, status, torEnabled, torCountry, extendAvailable, viewOnly, onExtend, isFullscreen,
     tabBarSlotRef, rendererStallVisible, rendererStalledSec, captureStallVisible, clipboardSynced,
     menuOpen, setMenuOpen, audioMuted, toggleAudio, toggleFullscreen, debugEnabled,
     toggleDebug, networkCaptureEnabled, netPanel, setNetPanel, openNetworkPopOut,
     shareCopied, handleShare, toolbarButtons, restarting, sessionTargetUrl, handleRestart, handleEndSession,
     onRecoverRenderer,
   } = props;
+  // The Tor badge mounts one frame before it becomes visible, so the
+  // opacity-0 → 100 transition actually runs instead of snapping in.
+  const [torMounted, setTorMounted] = React.useState(false);
+  const [torVisible, setTorVisible] = React.useState(false);
+  React.useEffect(() => {
+    if (!torEnabled) {
+      setTorVisible(false);
+      return;
+    }
+    setTorMounted(true);
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => setTorVisible(true));
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      cancelAnimationFrame(inner);
+    };
+  }, [torEnabled]);
   // End session takes two clicks. The first arms the button; the second, while
   // it stays armed, actually ends. A stray single click no longer kills the
   // session. A quick double-click still counts, because the first click arms
@@ -109,6 +130,32 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
           <span className="text-xs text-zinc-600 dark:text-gray-500 font-mono">
             {id?.slice(0, 8)}
           </span>
+          {/* Mounted on the first Tor session so it can fade in instead of
+              popping; stays mounted afterwards so toggling off fades out. */}
+          {torMounted && (
+            <span
+              aria-hidden={!torVisible}
+              className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wider text-purple-700 ring-1 ring-inset ring-purple-500/40 bg-purple-500/10 dark:text-purple-300 shrink-0 transition-opacity duration-700 ease-out motion-reduce:transition-none ${
+                torVisible ? 'opacity-100' : 'opacity-0'
+              }`}
+              title={`This session's traffic is routed through Tor${torCountry ? ` (exit: ${torCountry})` : ''}`}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                className="w-2.5 h-2.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                aria-hidden
+              >
+                <circle cx="12" cy="12" r="10" />
+                <circle cx="12" cy="12" r="6" />
+                <circle cx="12" cy="12" r="2" />
+              </svg>
+              Tor{torCountry ? ` · ${torCountry}` : ''}
+            </span>
+          )}
           {showOverlay && (
             <span className="text-xs text-zinc-600 dark:text-gray-500">{statusText}</span>
           )}
