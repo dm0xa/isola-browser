@@ -179,6 +179,12 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 	// for. libx264 CBR cannot re-target its bitrate live, so — exactly like
 	// any other encoder restart — the client recovers from stream_reset +
 	// stream_init.
+	//
+	// The viewer may land on a different rung than it asked for: when the
+	// session is at maxConcurrentRuns, attach joins a compatible run instead
+	// of starting a third encoder (stream_hub.go). The rung actually landed on
+	// is whatever the returned run carries — the client reads it back from the
+	// stream_init and metrics that follow, never from its own request.
 	setBitrate := func(kbps int) {
 		newKbps := clampAbrKbps(kbps, baseKbps)
 		newScale := abrScaleForKbps(newKbps, baseKbps)
@@ -193,9 +199,22 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 		next := key
 		next.kbps = newKbps
 		next.scale = newScale
-		if hub.attach(sub, next, "bitrate_change") == nil {
+		landed := hub.attach(sub, next, "bitrate_change")
+		if landed == nil {
 			// The viewer keeps the rung it is already on.
 			log.Printf("ws: encoder restart at %d kbps failed", newKbps)
+			return
+		}
+		if landed == cur {
+			// The cap mapped the request back onto the run this viewer is
+			// already decoding, so nothing changed and nothing was announced.
+			log.Printf("ws: bitrate %d → %d kbps asked, keeping the %d kbps run (run cap %d)",
+				oldKbps, newKbps, landed.key.kbps, maxConcurrentRuns)
+			return
+		}
+		// A shared run is logged by the hub, which knows both keys; this path
+		// only has to report the step that actually happened.
+		if landed.key.kbps != newKbps || landed.key.scale != newScale {
 			return
 		}
 		log.Printf("ws: bitrate %d → %d kbps, scale %.2f (ABR)", oldKbps, newKbps, newScale)

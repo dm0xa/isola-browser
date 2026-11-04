@@ -278,10 +278,96 @@ func hubFor(bc *frameBroadcaster) *streamHub {
 	return activeHub
 }
 
+// maxConcurrentRuns caps how many ffmpeg processes one session may run at once.
+//
+// Every distinct configuration a viewer asks for used to get its own encoder,
+// and the ABR ladder gives one viewer four configurations: three viewers
+// stepping the ladder differently ran three libx264 processes in a three-CPU
+// container. Measured on the dev host at 720p/25fps with
+// scripts/ab/multi-rung.sh (interleaved runs, three reps each): one viewer
+// 0.40 core-seconds per second of video, three viewers on three rungs 0.77
+// (three encoders), and 0.57 with this cap (two). The container's cores are
+// 2-8x slower, which is where the 0.3-1.2 core-s/s per run comes from. Two of
+// those plus capture, compose and mux already spend most of a three-CPU
+// budget; three is enough to starve the frame pump, so an adaptive step
+// becomes a stall instead of a cheaper picture.
+//
+// Two is also the smallest number that changes nothing for the case that
+// matters: a host and one share watcher on different rungs each keep their own
+// encoder. A third configuration shares the nearest live run instead — see
+// reusableRunLocked — and is told so by stream_init.
+const maxConcurrentRuns = 2
+
+// reusableRunLocked picks the live run a viewer asking for want may share when
+// the session is already at maxConcurrentRuns, or nil when it can decode none
+// of them.
+//
+// Compatibility is the container format and the producer geometry: a WebCodecs
+// client cannot decode fMP4 and an MSE client cannot decode raw Annex-B, and a
+// run encodes the capture size it was started with. The bitrate and scale may
+// differ — that is the point of sharing — and the viewer is never left to
+// discover it: attach always follows with a stream_init carrying the run's real
+// bitrate_kbps and encoded width/height, and every metrics tick repeats them.
+//
+// The pick is the most expensive run at or below the requested bitrate: sharing
+// must never spend more bytes than the client's own evidence allowed, since
+// that is the loss the step was reacting to. When the request is below every
+// live run, the cheapest one wins — the closest thing to the requested rung.
+func (h *streamHub) reusableRunLocked(want runKey) *streamRun {
+	var atOrBelow, cheapest *streamRun
+	for k, r := range h.runs {
+		if r.stopping || !rungCompatible(k, want) {
+			continue
+		}
+		if cheapest == nil || k.kbps < cheapest.key.kbps {
+			cheapest = r
+		}
+		if k.kbps <= want.kbps && (atOrBelow == nil || k.kbps > atOrBelow.key.kbps) {
+			atOrBelow = r
+		}
+	}
+	if atOrBelow != nil {
+		return atOrBelow
+	}
+	return cheapest
+}
+
+// rungCompatible reports whether a viewer whose key is want can decode a run
+// keyed by have. fps, keepalive and base bitrate are properties of the session,
+// not the rung, so they cannot differ between two viewers of one session; the
+// bitrate and its scale are exactly what an ABR step changes.
+func rungCompatible(have, want runKey) bool {
+	return have.rawH264 == want.rawH264 &&
+		have.width == want.width && have.height == want.height &&
+		have.fps == want.fps &&
+		have.keepalive == want.keepalive &&
+		have.baseKbps == want.baseKbps
+}
+
+// liveRunsAfterLocked counts the encoder runs that will still be live once sub
+// has moved off the run it is on now. The cap bounds the steady state, so a
+// viewer that is the last subscriber of its run must not be counted against
+// itself: that encoder is stopped as part of the very step being decided, and
+// counting it would make a viewer that is alone in its rung unable to reach a
+// lower one until an unrelated step moved it.
+func (h *streamHub) liveRunsAfterLocked(sub *streamSub) int {
+	n := len(h.runs)
+	if old := sub.run; old != nil && old.started && !old.stopping && len(old.subs) == 1 {
+		n--
+	}
+	return n
+}
+
 // attach points sub at the run for key, starting one if nobody is streaming
 // that configuration yet. resetReason, when non-empty, prepends a stream_reset
 // so a client that is already decoding tears its pipeline down before the init
 // message that follows it.
+//
+// At maxConcurrentRuns a configuration without a run of its own joins a
+// compatible one instead, so the returned run's key need not be key: callers
+// that report or log a rung must read it off the returned run. When no live run
+// is decodable by this viewer the cap is exceeded rather than leaving it with
+// nothing.
 //
 // It returns nil only when the encoder could not be started, in which case sub
 // is left where it was.
@@ -289,6 +375,9 @@ func (h *streamHub) attach(sub *streamSub, key runKey, resetReason string) *stre
 	h.mu.Lock()
 
 	run := h.runs[key]
+	if run == nil && h.liveRunsAfterLocked(sub) >= maxConcurrentRuns {
+		run = h.reusableRunLocked(key)
+	}
 	fresh := false
 	switch {
 	case run == nil:
@@ -301,7 +390,9 @@ func (h *streamHub) attach(sub *streamSub, key runKey, resetReason string) *stre
 		fresh = true
 	case sub.run == run:
 		// Already streaming exactly this configuration: re-announcing it
-		// would cost the viewer its decoder for nothing.
+		// would cost the viewer its decoder for nothing. This is also how a
+		// capped step that maps back onto the viewer's own run is absorbed —
+		// the viewer keeps decoding, and the client's next step re-evaluates.
 		h.mu.Unlock()
 		return run
 	}
@@ -333,8 +424,13 @@ func (h *streamHub) attach(sub *streamSub, key runKey, resetReason string) *stre
 	if fresh {
 		run.startPumps()
 	}
+	shared := run.key
 	h.mu.Unlock()
 
+	if !fresh && (shared.kbps != key.kbps || shared.scale != key.scale) {
+		log.Printf("ws: run cap %d reached, %d kbps/scale %.2f shares the %d kbps run (scale %.2f)",
+			maxConcurrentRuns, key.kbps, key.scale, shared.kbps, shared.scale)
+	}
 	// Outside the lock: the producer gate reads the hub, and stopping the
 	// orphan waits for its pumps, which take the hub mutex on the way out.
 	syncProducerCapture(false)

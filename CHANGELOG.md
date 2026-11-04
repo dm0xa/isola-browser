@@ -17,6 +17,20 @@ publishes the section matching the tag.
 
 ### Changed
 
+- A session now runs at most two encoder processes. Each distinct
+  (bitrate, scale, decode mode) used to get its own ffmpeg, and the ABR ladder
+  gives one viewer four of them, so three viewers stepping the ladder
+  differently ran three libx264 processes in a three-CPU container — the encode
+  cost alone (0.3-1.2 core-seconds per second of video each) starves the frame
+  pump and turns an adaptive step into a stall. A third configuration now joins
+  the most expensive live run at or below its requested bitrate (else the
+  cheapest one) instead of starting a third encoder; the client sees the real
+  rung in the `stream_reset`/`stream_init` pair and in metrics, so nothing is
+  silent. A viewer alone in the session, and the host + share-watcher pair, keep
+  exactly the rung they ask for, and runs are never shared across decode modes
+  or capture geometries. Measured with `scripts/ab/multi-rung.sh` at 720p/25fps
+  on the dev host, three viewers on three rungs (interleaved, 3 reps):
+  0.77 → 0.57 core-seconds per second of video, encoders 3 → 2.
 - A viewer can no longer restart the session's encoder on demand, indefinitely:
   `request_keyframe` is now budgeted per connection — one forced restart per
   30 seconds, four per connection — and a share-link watcher is additionally
