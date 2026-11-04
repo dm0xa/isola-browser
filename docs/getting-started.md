@@ -76,9 +76,10 @@ docker compose logs -f
 ## Your First Session
 
 1. On the landing page, enter a URL and start a session. Isola provisions a container, boots the browser, and connects the stream.
-2. The viewer shows the live page with a toolbar for the session controls: **End**, **extend**, resolution, audio, and a share link.
-3. Sessions are time-limited (see `session` [in Configuration](configuration.md#session)). The default session is 10 minutes, extendable in 5-minute steps up to a 30-minute maximum.
-4. Closing a session destroys its container. Nothing persists.
+2. The settings gear beside **Open →** holds resolution, browser and the **Tor** toggle. Turn Tor on and the choice is visible without reopening the menu: a purple `Tor` chip appears beside the backend status dot in the footer and a purple halo appears behind the logo. The preference is remembered for the next launch.
+3. The viewer shows the live page with a toolbar for the session controls: **End**, **extend**, resolution, audio, and a share link. A session launched through Tor carries a `Tor · <exit>` badge after its short id; hovering it names the pinned exit countries when `tor_country` is set.
+4. Sessions are time-limited (see `session` [in Configuration](configuration.md#session)). The default session is 10 minutes, extendable in 5-minute steps up to a 30-minute maximum.
+5. Closing a session destroys its container. Nothing persists.
 
 ### Optional: Launch from the URL bar
 

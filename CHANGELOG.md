@@ -9,6 +9,9 @@ publishes the section matching the tag.
 ### Added
 
 - The UI installs as a Chromium app.
+- Tor state no longer hides behind the settings menu: while Tor is enabled the
+  landing page shows a small purple `Tor` chip and a purple halo behind the logo.
+- Session launched through Tor carries a `Tor` badge in the toolbar.
 
 ## [1.5.3] - 2026-11-04
 

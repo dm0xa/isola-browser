@@ -286,7 +286,15 @@ export default function LandingPage() {
         <div className="flex items-center select-none" style={{ width: '320px', margin: '0 auto' }}>
           <div className="shrink-0 pointer-events-none" style={{ width: '96px' }}>
             <style>{ISOLA_LOGO_KEYFRAMES}</style>
-            <IsolaLogo className="w-24 h-24 mt-3" float draggable={false} />
+            <div className="relative">
+              <span
+                aria-hidden
+                className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full bg-purple-500/20 dark:bg-purple-500/30 blur-lg pointer-events-none transition-opacity duration-700 ease-out motion-reduce:transition-none ${
+                  torEnabled ? 'opacity-100' : 'opacity-0'
+                }`}
+              />
+              <IsolaLogo className="w-24 h-24 mt-3" float draggable={false} />
+            </div>
           </div>
           <h1
             className="text-5xl font-extralight tracking-tight text-zinc-900 dark:text-white whitespace-nowrap pl-[25px] pr-[25px] pointer-events-none"
@@ -475,7 +483,7 @@ export default function LandingPage() {
       </form>
 
       <div className="absolute bottom-4 left-0 right-0 px-6 flex items-center justify-between text-[10px] tracking-widest text-zinc-400 dark:text-gray-700">
-        <span className="flex items-center gap-2 mr-auto">
+        <span className="relative flex items-center gap-2 mr-auto">
           <span
             className={`inline-block w-1.5 h-1.5 rounded-full transition-colors ${
               backendOk ? 'bg-emerald-500' : 'bg-red-500 animate-pulse'
@@ -484,6 +492,31 @@ export default function LandingPage() {
           />
           <span className={backendOk ? '' : 'text-red-400/80 dark:text-red-500/70'}>
             {backendOk ? '' : ''}
+          </span>
+          {/* Absolutely positioned on purpose: the chip must not take part in
+              the footer's flex layout, or the centred version line would slide
+              sideways as it fades in. */}
+          <span
+            aria-hidden={!torEnabled}
+            className={`absolute left-full top-1/2 ml-2 -translate-y-1/2 flex items-center gap-1.5 whitespace-nowrap normal-case tracking-normal text-purple-500/90 dark:text-purple-400/80 transition-opacity duration-700 ease-out motion-reduce:transition-none ${
+              torEnabled ? 'opacity-100' : 'opacity-0'
+            }`}
+            title="New sessions route through Tor"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              className="w-2.5 h-2.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden
+            >
+              <circle cx="12" cy="12" r="10" />
+              <circle cx="12" cy="12" r="6" />
+              <circle cx="12" cy="12" r="2" />
+            </svg>
+            Tor
           </span>
         </span>
         <span className="flex-1 text-center">
