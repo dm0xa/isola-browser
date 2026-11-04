@@ -97,8 +97,9 @@ func TestResizeEndpoint(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	// Resize to 1024x768
-	resp, err := http.Get("http://127.0.0.1:" + e2eTestPort + "/resize?width=1024&height=768")
+	// Resize to 1024x768. POST only: a resize mutates session geometry, so a
+	// GET must not reach it (pinned by TestResizeValidation).
+	resp, err := http.Post("http://127.0.0.1:"+e2eTestPort+"/resize?width=1024&height=768", "", nil)
 	if err != nil {
 		t.Fatalf("resize request: %v", err)
 	}
@@ -115,7 +116,7 @@ func TestResizeEndpoint(t *testing.T) {
 	t.Logf("resize endpoint: updated to %dx%d ✓", currentWidth, currentHeight)
 
 	// Bad request
-	resp2, err := http.Get("http://127.0.0.1:" + e2eTestPort + "/resize?width=abc")
+	resp2, err := http.Post("http://127.0.0.1:"+e2eTestPort+"/resize?width=abc", "", nil)
 	if err != nil {
 		t.Fatalf("resize bad request: %v", err)
 	}

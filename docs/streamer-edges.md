@@ -353,15 +353,16 @@ Also observed: `/resize` accepts `GET` (and any other method), unlike
 No production source was changed (harness-only work). Things seen but not
 touched:
 
-- `/resize` has no HTTP method check (state-changing `GET`), unlike `/navigate`.
+- `/resize` had no HTTP method check (a state-changing `GET`), unlike
+  `/navigate`; fixed on `dm0xa/q-control`.
 - `request_keyframe` while `awaitingKey` bypasses the connection budget for up
   to 3 retries (`stream_hub.go:481-483`); the hub cooldown still spaces them, so
   it is bounded, but the code comment ("budget bounds the total") overstates
   what that branch does.
-- `dropped` conflates "mailbox overflow" with "waiting for the first live IDR",
-  so a late joiner always reports a small nonzero count while showing the
-  poster. Accurate for "packets this viewer could not use", misleading if read
-  as transport loss.
+- `dropped` conflated "mailbox overflow" with "waiting for the first live IDR",
+  so a late joiner always reported a small nonzero count while showing the
+  poster. Split into `drop_overflow` / `drop_awaiting_key` (total unchanged) on
+  `dm0xa/q-control`.
 
 ## Status of the findings
 
@@ -384,7 +385,12 @@ scenario bodies now assert the corrected contract, and a full run reports ten
   times faster than the ABR controller's own 8 s pacing; refusals are silent
   and logged with a running count.
 
-Still open by choice: `/resize` accepts any method (a GET mutates geometry),
-`dropped` conflates mailbox overflow with the poster wait, and the three
-awaiting-IDR keyframe retries bypass the connection budget (still bounded by
-the hub-wide cooldown).
+Two of those three leftovers were closed on `dm0xa/q-control`, which also
+tightened the attach-failure and teardown paths. `/resize` now requires `POST`
+(anything else is `405`, pinned by `TestResizeValidation` and by the `geometry`
+scenario, which now asserts a refused `GET`); `dropped` stays the compatible
+total but is split into `drop_overflow` and `drop_awaiting_key`, so a poster
+wait is no longer indistinguishable from a socket that cannot keep up.
+
+Still open by choice: the three awaiting-IDR keyframe retries bypass the
+connection budget (still bounded by the hub-wide cooldown).

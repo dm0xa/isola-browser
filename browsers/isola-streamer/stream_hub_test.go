@@ -185,7 +185,8 @@ func TestKeyframeBudgetAllows(t *testing.T) {
 }
 
 // TestStreamSubDroppedCountsOverflow pins that sub.dropped counts shed
-// packets, which is what the dropped metrics field publishes.
+// packets, which is what the dropped metrics field publishes, and that an
+// overflow is attributed to the overflow cause rather than the poster wait.
 func TestStreamSubDroppedCountsOverflow(t *testing.T) {
 	sub := newStreamSub()
 	for i := 0; i < mailboxSize+5; i++ {
@@ -194,8 +195,72 @@ func TestStreamSubDroppedCountsOverflow(t *testing.T) {
 	if got := sub.dropped.Load(); got != 5 {
 		t.Fatalf("dropped = %d, want 5 shed packets", got)
 	}
+	if got := sub.dropOverflow.Load(); got != 5 {
+		t.Fatalf("drop_overflow = %d, want 5", got)
+	}
+	if got := sub.dropAwaitingKey.Load(); got != 0 {
+		t.Fatalf("drop_awaiting_key = %d, want 0: a full mailbox is not a poster wait", got)
+	}
 	if !sub.awaitingKey {
 		t.Fatal("a mailbox overflow must leave the viewer waiting for a keyframe")
+	}
+}
+
+// TestStreamSubSplitsDropCauses pins the two numbers an operator needs to tell
+// apart: a viewer that cannot keep up (mailbox overflow) and one that simply
+// has no picture yet (the poster wait before its first IDR). Both feed
+// dropped, which stays the compatible total.
+func TestStreamSubSplitsDropCauses(t *testing.T) {
+	hub := &streamHub{runs: make(map[runKey]*streamRun)}
+	sub := newStreamSub()
+	run := &streamRun{hub: hub, subs: map[*streamSub]struct{}{sub: {}}}
+	sub.run = run
+	sub.awaitingKey = true
+
+	// A delta frame with no reference yet is shed as a poster wait.
+	run.deliver([]byte{0x01, 0x00}, false, false)
+	if got := sub.dropAwaitingKey.Load(); got != 1 {
+		t.Fatalf("drop_awaiting_key = %d, want 1", got)
+	}
+	if got := sub.dropOverflow.Load(); got != 0 {
+		t.Fatalf("drop_overflow = %d, want 0", got)
+	}
+	if got := sub.dropped.Load(); got != 1 {
+		t.Fatalf("dropped = %d, want 1", got)
+	}
+
+	// The IDR ends the wait and is queued, not shed.
+	run.deliver([]byte{0x01, 0x01}, true, false)
+	if sub.awaitingKey {
+		t.Fatal("a keyframe must end the poster wait")
+	}
+	select {
+	case ev := <-sub.ch:
+		if ev.binary == nil {
+			t.Fatal("the keyframe must be queued as video")
+		}
+	default:
+		t.Fatal("the keyframe was not queued")
+	}
+	run.deliver([]byte{0x01, 0x02}, false, false)
+	select {
+	case <-sub.ch:
+	default:
+		t.Fatal("a delta with a picture must be queued")
+	}
+
+	// The other cause counts on its own side of the split.
+	for range mailboxSize + 4 {
+		sub.push([]byte{0x03})
+	}
+	if got := sub.dropOverflow.Load(); got != 4 {
+		t.Fatalf("drop_overflow = %d, want 4", got)
+	}
+	if got := sub.dropAwaitingKey.Load(); got != 1 {
+		t.Fatalf("drop_awaiting_key = %d, want 1 unchanged by the overflow", got)
+	}
+	if got := sub.dropped.Load(); got != 5 {
+		t.Fatalf("dropped = %d, want 5 (the two causes summed)", got)
 	}
 }
 
@@ -474,6 +539,8 @@ func TestMetricsCarriesDropped(t *testing.T) {
 		t.Fatalf("run has %d subscribers, want 1", len(subs))
 	}
 	subs[0].dropped.Store(7)
+	subs[0].dropOverflow.Store(5)
+	subs[0].dropAwaitingKey.Store(2)
 
 	metrics := readTextUntil(t, conn, 5*time.Second, "metrics")
 	got, ok := metrics["dropped"].(float64)
@@ -482,6 +549,14 @@ func TestMetricsCarriesDropped(t *testing.T) {
 	}
 	if got != 7 {
 		t.Fatalf("metrics dropped = %v, want 7", got)
+	}
+	// The split is what tells "this viewer is too slow" (overflow) from "this
+	// viewer joined a moment ago" (poster wait). Both must reach the client.
+	if got, ok := metrics["drop_overflow"].(float64); !ok || got != 5 {
+		t.Fatalf("metrics drop_overflow = %v, want 5", metrics["drop_overflow"])
+	}
+	if got, ok := metrics["drop_awaiting_key"].(float64); !ok || got != 2 {
+		t.Fatalf("metrics drop_awaiting_key = %v, want 2", metrics["drop_awaiting_key"])
 	}
 }
 

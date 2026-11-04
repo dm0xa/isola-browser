@@ -19,6 +19,13 @@ import (
 // controller itself steps at most once per 8 s.
 const bitrateStepMinInterval = 1 * time.Second
 
+// closeCodeEncoderError is the WebSocket close code a viewer socket ends with
+// when the streamer cannot start an encoder for it (range 4000-4999 is
+// application-private). The relay copies messages rather than close frames, so
+// a browser behind it sees an ordinary close; the stream_error JSON written
+// just before this frame is the signal both paths can act on.
+const closeCodeEncoderError = 4001
+
 func parseIntEnv(key string, defaultVal int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -121,10 +128,25 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		return conn.WriteJSON(v)
 	}
+	// abort ends this viewer's session for good: it stops the writers waiting
+	// on done and closes the socket, which is what unblocks the read loop and
+	// runs its deferred hub.release. Every write path uses it, because a write
+	// that fails is the only evidence of a socket that will never drain again
+	// — and a read loop left parked in ReadMessage keeps the subscription and
+	// the encoder alive for a viewer that cannot receive a byte. The video
+	// path has frames to fail on; on a static page metrics are the only
+	// traffic, so they must be able to end the session too.
+	abort := func(why string, err error) {
+		log.Printf("ws: %s: %v", why, err)
+		closeDone()
+		_ = conn.Close()
+	}
 	// Audio packets flow only while the viewer has audio enabled server-side
 	// (broadcastAudio already gates on the flag).
 	unregisterAudio := registerAudioListener(func(pkt []byte) {
-		_ = writeBinary(pkt)
+		if err := writeBinary(pkt); err != nil {
+			abort("audio write error", err)
+		}
 	})
 	defer unregisterAudio()
 
@@ -156,23 +178,13 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case ev.binary != nil:
 					if err := writeBinary(ev.binary); err != nil {
-						log.Printf("ws: binary write error: %v", err)
-						closeDone()
-						// Closing the socket is what ends the session: the read
-						// loop below is parked in ReadMessage and only returns
-						// when the connection dies, and its defer is what
-						// releases the subscription. Without this a write
-						// deadline expires and the viewer stays subscribed --
-						// an encoder and a mailbox kept alive for nobody.
-						_ = conn.Close()
+						abort("binary write error", err)
 						return
 					}
 					sub.sentBytes.Add(int64(len(ev.binary)))
 				case ev.text != nil:
 					if err := writeText(ev.text); err != nil {
-						log.Printf("ws: control write error: %v", err)
-						closeDone()
-						_ = conn.Close() // see the binary branch
+						abort("control write error", err)
 						return
 					}
 				}
@@ -184,7 +196,25 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 	// the init segment, if the run already has one) before the pumps can
 	// deliver anything.
 	if hub.attach(sub, key, "") == nil {
-		sendJSON(conn, map[string]any{"type": msgTypeStreamReset, "reason": "encoder_error"})
+		// No encoder could be started, so no run exists and none will follow on
+		// this socket. A bare stream_reset would be a lie — every real reset is
+		// followed by stream_init, and a client waiting for one waits forever —
+		// and an abrupt TCP close is indistinguishable from a network drop. Say
+		// what happened on the wire, then close with an application close code
+		// so the failure is explicit and bounded: the socket is gone when this
+		// handler returns, and it says why before it goes.
+		if err := writeText(map[string]any{
+			"type":      msgTypeStreamError,
+			"reason":    "encoder_error",
+			"retryable": true,
+		}); err != nil {
+			log.Printf("ws: encoder error report failed: %v", err)
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(closeCodeEncoderError, "encoder_error"),
+			time.Now().Add(time.Second),
+		)
 		return
 	}
 	defer hub.release(sub)
@@ -316,7 +346,7 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 				probeStreak, probeFailAgoMS := rendererProbeHealth()
 				stalled, stalledMs, stallRecoveries := rendererStallState()
 				capHealth, capFresh := captureHealthSnapshot()
-				_ = writeText(map[string]any{
+				if err := writeText(map[string]any{
 					"type":            msgTypeMetrics,
 					"input_backend":   effectiveInputBackend(),
 					"input_target":    attachedTargetURL(),
@@ -332,11 +362,16 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 					"encode_scale":    run.key.scale,
 					"static_secs":     staticSecs,
 					"skipped_ticks":   run.skippedTicks.Load(),
-					// dropped counts this viewer's shed packets — mailbox
-					// overflow and video discarded while waiting for a keyframe.
-					// It is per-viewer, so a rising counter points at the one
-					// socket that cannot keep up rather than at the encoder.
-					"dropped": sub.dropped.Load(),
+					// dropped is this viewer's total shed packets, per viewer so
+					// a rising counter points at the one socket that cannot keep
+					// up rather than at the encoder. The two causes are split:
+					// drop_overflow is a socket that is not draining,
+					// drop_awaiting_key is the poster wait every late joiner
+					// serves before its first IDR and says nothing about the
+					// transport.
+					"dropped":           sub.dropped.Load(),
+					"drop_overflow":     sub.dropOverflow.Load(),
+					"drop_awaiting_key": sub.dropAwaitingKey.Load(),
 					// Did the picture actually change? skipped_ticks and a decoded
 					// fps both stay high while the encoder is fed duplicate frames,
 					// so changes_per_sec near zero with a healthy fps is the
@@ -365,7 +400,12 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 					"capture_last_sent_ms": capHealth.LastSentMS,
 					"capture_sent_frames":  capHealth.SentTotal,
 					"capture_dedup_frames": capHealth.DedupTotal,
-				})
+				}); err != nil {
+					// Metrics are the only traffic on a session with no frames,
+					// so this write is the evidence a stalled socket leaves.
+					abort("metrics write error", err)
+					return
+				}
 			}
 		}
 	}()
@@ -408,12 +448,6 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 		default:
 			handleInputEvent(data)
 		}
-	}
-}
-
-func sendJSON(conn *websocket.Conn, v any) {
-	if err := conn.WriteJSON(v); err != nil {
-		log.Printf("ws: writeJSON error: %v", err)
 	}
 }
 
