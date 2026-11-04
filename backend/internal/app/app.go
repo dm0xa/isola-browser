@@ -7,6 +7,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"mime"
@@ -20,6 +21,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+
+	"github.com/dm0xa/isola-browser/backend/pkg/models"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -252,11 +255,7 @@ func Run(opts Options) error {
 	// Embedded SPA (single-user build only).
 	if opts.FrontendFS != nil {
 		frontend := serveFrontend(opts.FrontendFS)
-		r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-			// SPA fallback: serve index.html for non-API routes.
-			r.URL.Path = "/"
-			frontend.ServeHTTP(w, r)
-		})
+		r.NotFound(notFound(frontend))
 		r.Get("/assets/*", frontend.ServeHTTP)
 		r.Get("/fonts/*", frontend.ServeHTTP)
 		r.Get("/favicon.svg", frontend.ServeHTTP)
@@ -323,6 +322,33 @@ func Run(opts Options) error {
 // changed and can keep running the previous bundle — a frontend fix then never
 // reaches the user. Vite content-hashes everything under /assets, so those are
 // safe to pin; the shell must be revalidated.
+// notFound serves the SPA for client routes and a JSON 404 for the API.
+//
+// The SPA fallback used to answer every unmatched path with index.html, so a
+// typo'd or removed API route returned HTTP 200 and a page of HTML to a client
+// that expects JSON — a silent failure that reads as success. Client routes
+// (/session/:id, /share/:token, ...) still get the shell, which is what makes
+// a deep link survive a reload.
+func notFound(frontend http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
+			respondJSONError(w, http.StatusNotFound, "not_found", "no such API route")
+			return
+		}
+		r.URL.Path = "/"
+		frontend.ServeHTTP(w, r)
+	}
+}
+
+func respondJSONError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(models.ErrorResponse{
+		Error: models.APIError{Code: code, Message: message},
+	})
+}
+
 func serveFrontend(fsys fs.FS) http.Handler {
 	// Go's built-in mime table has no .webmanifest entry, so http.FileServer
 	// would sniff the body and serve the manifest as text/plain. Register the

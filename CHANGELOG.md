@@ -97,6 +97,10 @@ publishes the section matching the tag.
   teardown releases its subscription exactly once whichever way the socket dies
   (read error, write deadline, failed write), and stops the encoder run when it
   was the last viewer.
+- An unknown `/api/...` path answers a JSON `404` (`{"error":{"code":"not_found"}}`)
+  instead of the SPA shell with HTTP 200. Client routes (`/session/:id`,
+  `/share/:token`) still serve the shell so a deep link survives a reload, but a
+  typo'd or removed API route no longer reads as success to a JSON client.
 - The streamer's `/resize` requires `POST`, like `/navigate`: any other method
   is refused with `405` and leaves the session untouched. A `GET` — a browser
   prefetch, a link preview, an `<img>` tag — used to re-key every attached
