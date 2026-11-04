@@ -178,9 +178,33 @@ First message after attach, and again after every encoder restart:
 
 Sent immediately before a new `stream_init` when the encoder run is replaced (bitrate change, keyframe request, resize). Tear down `VideoDecoder` / `SourceBuffer` and wait for the following init.
 
+A reset always has an init behind it. The matching local control surface is `POST /resize?width=&height=` on the streamer port (the backend calls it for `POST /api/sessions/{id}/resize`); like `/navigate` it refuses any method but `POST` with `405`, so a stray `GET` — a prefetch, a link preview, an `<img>` tag — cannot re-key every viewer's encoder.
+
+### `stream_error` (server → client)
+
+The last message on the socket when the streamer could not start an encoder for this viewer at all — ffmpeg missing from the image, a process or memory limit, a container out of slots:
+
+```json
+{ "type": "stream_error", "reason": "encoder_error", "retryable": true }
+```
+
+It is **not** a `stream_reset`: no `stream_init` follows, no video will arrive on this socket, and the streamer closes it immediately with application close code `4001`. The distinction is the whole point — a client that treats every reset as "wait for the next init" waits forever, and a bare TCP close is indistinguishable from a network drop.
+
+What a client should do: stop decoding, surface an error, and reconnect the **socket** with backoff (a few attempts seconds apart, never a tight loop). `retryable: true` means the failure was the encoder, not the session, so a reconnect can succeed once transient pressure clears; if every attempt fails the session is unusable and needs replacing. Behind the relay the close code does not survive the hop — the relay copies messages, not close frames — so branch on `stream_error`, not on the close code.
+
 ### `metrics` (server → client)
 
-A periodic snapshot of capture, encode, and renderer health. The bundled debug overlay renders it; custom clients can ignore it. Useful fields for a frozen picture: `changes_per_sec`, `damaged_pct`, `capture_empty_window`, `capture_fallback`, `renderer_stalled`, `cdp_probe_fail_streak`. `dropped` is cumulative and per viewer: packets this socket shed because its mailbox overflowed or because they arrived while it was waiting for a keyframe. A rising `dropped` with a healthy `encode_fps` means this viewer is the one falling behind. Older streamers omit `dropped` and clients must tolerate that. Fields may be added; ignore the ones you do not know.
+A periodic snapshot of capture, encode, and renderer health. The bundled debug overlay renders it; custom clients can ignore it. Useful fields for a frozen picture: `changes_per_sec`, `damaged_pct`, `capture_empty_window`, `capture_fallback`, `renderer_stalled`, `cdp_probe_fail_streak`.
+
+Three cumulative, per-viewer counters say what this socket could not use — each viewer is metered on its own, so a counter that rises points at that one viewer, never at the encoder:
+
+| Field | Meaning | What to read into it |
+| :--- | :--- | :--- |
+| `drop_overflow` | Packets shed because this viewer's mailbox was full. | The socket is not draining at the encode rate: the viewer is too slow, or the path to it is. Everything until the next IDR is undecodable for it. |
+| `drop_awaiting_key` | Packets shed because the viewer had no picture yet and they were deltas whose references it never received (the poster wait after joining, or after a resync). | Expected for the first GOP of any late join, and it stops on its own when the first IDR lands. A number that keeps climbing means no IDR is arriving — a different problem. |
+| `dropped` | `drop_overflow + drop_awaiting_key`. | The compatible total, kept so a single-number reader keeps its meaning. |
+
+A rising `dropped` with a healthy `encode_fps` means this viewer is falling behind — but check which half moved before blaming the network: `drop_awaiting_key` on a viewer that joined 100 ms ago is the poster, `drop_overflow` on a long-lived one is the socket. Older streamers omit all three, and clients must tolerate that. Fields may be added; ignore the ones you do not know.
 
 ### Packet sequence and loss
 
@@ -249,8 +273,9 @@ ISOLA_FPS_E2E=1 go test -run TestViewerFrameRateOnRealSite -v ./browsers/isola-s
 3. Wait for `stream_init`, configure the decoder from `codec` / `width` / `height`.
 4. Decode `0x02` (or `0x01`) packets; map clicks using `capture_width` / `capture_height`.
 5. Open `channel=input&host=1` for JSON input. Do not send input on the video socket — the streamer will accept some types there as a fallback, but they head-of-line behind video.
-6. On `stream_reset`, dispose the decoder and wait for the next `stream_init`.
+6. On `stream_reset`, dispose the decoder and wait for the next `stream_init`. If `stream_error` arrives instead, no init will follow and the socket is closing — surface it and reconnect with backoff (the section above is the contract).
 7. If the decoder errors, send `request_keyframe` rather than reconnecting the whole session.
+8. Closing the socket ends the viewer: the streamer releases the subscription whether the close handshake completed or not, and stops the encoder run once its last viewer is gone. Abandoning a socket without closing it costs a dead subscription until the server's 10 s write deadline fires, so do close it.
 
 The origin check on the upgrade requires a browser `Origin` that matches the request host (localhost origins only when the request itself is local). A non-browser client that strips `Origin` is refused — see [Security](security.md).
 

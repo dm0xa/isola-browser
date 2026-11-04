@@ -67,9 +67,19 @@ type streamSub struct {
 	// packets that bridged the gap are gone and only an IDR can resync it.
 	awaitingKey bool
 
-	// dropped counts packets shed by this viewer, either because its mailbox
-	// was full or because it was waiting for a keyframe.
+	// dropped counts packets shed by this viewer for either of the two
+	// reasons below. It stays the published total, so an operator reading one
+	// number keeps the old meaning; the split says which of the two it is.
 	dropped atomic.Int64
+	// dropOverflow counts packets shed because the mailbox was full: this
+	// viewer's socket is not draining at the rate the encoder produces, and
+	// everything until the next IDR is undecodable for it.
+	dropOverflow atomic.Int64
+	// dropAwaitingKey counts packets shed because the viewer had no picture
+	// yet — it joined (or resynced) and these were deltas whose references it
+	// never received. This is expected for the first GOP of a late join and
+	// says nothing about the socket.
+	dropAwaitingKey atomic.Int64
 	// sentBytes counts video bytes actually handed to this viewer's socket.
 	// The client's ABR compares its arrival rate against this rather than
 	// against the bitrate target, so it must be per-viewer: two viewers of the
@@ -93,6 +103,19 @@ func newStreamSub() *streamSub {
 	return &streamSub{ch: make(chan streamEvent, mailboxSize)}
 }
 
+// noteDrop records one shed packet against its cause and the compatibility
+// total. The two causes are not interchangeable: overflow means this viewer
+// cannot keep up, awaitingKey is the poster wait every late joiner goes
+// through, and only the first is a transport problem.
+func (s *streamSub) noteDrop(overflow bool) {
+	if overflow {
+		s.dropOverflow.Add(1)
+	} else {
+		s.dropAwaitingKey.Add(1)
+	}
+	s.dropped.Add(1)
+}
+
 // push queues a video packet without blocking. A viewer that cannot keep up
 // loses packets and resyncs at the next keyframe instead of stalling the
 // encoder for everyone else.
@@ -101,7 +124,7 @@ func (s *streamSub) push(pkt []byte) {
 	case s.ch <- streamEvent{binary: pkt}:
 	default:
 		s.awaitingKey = true
-		s.dropped.Add(1)
+		s.noteDrop(true)
 	}
 }
 
@@ -1110,7 +1133,7 @@ func (r *streamRun) deliver(pkt []byte, isKey, isInit bool) {
 			// The stall is over: a later one gets its own retry allowance.
 			s.keyframeRetries = 0
 		} else if s.awaitingKey {
-			s.dropped.Add(1)
+			s.noteDrop(false)
 			continue
 		}
 		s.push(pkt)

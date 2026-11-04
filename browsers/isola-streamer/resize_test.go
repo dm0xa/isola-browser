@@ -80,6 +80,25 @@ func TestResizeValidation(t *testing.T) {
 	listener := startTestStreamer(t, port, 4000)
 	defer listener.Close()
 
+	// A resize mutates the session geometry, so it is a POST like /navigate. A
+	// GET used to re-key every encoder — reachable by any link preview, image
+	// tag or browser prefetch that guesses the URL.
+	getResp, err := http.Get("http://127.0.0.1:" + port + "/resize?width=800&height=600")
+	if err != nil {
+		t.Fatalf("GET resize: %v", err)
+	}
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET resize returned %d, want 405", getResp.StatusCode)
+	}
+	currentMu.RLock()
+	getWidth, getHeight := currentWidth, currentHeight
+	currentMu.RUnlock()
+	if getWidth != e2eTestWidth || getHeight != e2eTestHeight {
+		t.Fatalf("a GET resize changed the geometry to %dx%d, want %dx%d",
+			getWidth, getHeight, e2eTestWidth, e2eTestHeight)
+	}
+
 	resp, err := http.Post("http://127.0.0.1:"+port+"/resize?width=1023&height=767", "", nil)
 	if err != nil {
 		t.Fatalf("resize request: %v", err)

@@ -83,15 +83,34 @@ publishes the section matching the tag.
   socket is closed, so the subscription is released and the encoder stops.
   Before, the write goroutine exited but left the connection half-dead — the
   session kept an encoder and a mailbox for a viewer that would never read
-  again, until the peer eventually closed.
+  again, until the peer eventually closed. The same now holds for every other
+  write path: a failed metrics or audio write ends the session instead of being
+  ignored. On a static page the 1 Hz metrics are the only traffic, so a
+  half-open socket there used to keep the encoder alive for nobody. A viewer's
+  teardown releases its subscription exactly once whichever way the socket dies
+  (read error, write deadline, failed write), and stops the encoder run when it
+  was the last viewer.
+- The streamer's `/resize` requires `POST`, like `/navigate`: any other method
+  is refused with `405` and leaves the session untouched. A `GET` — a browser
+  prefetch, a link preview, an `<img>` tag — used to re-key every attached
+  viewer's encoder.
+- A viewer that cannot get an encoder now learns why. When no encoder process
+  can be started, the streamer sends `{"type":"stream_error","reason":
+  "encoder_error","retryable":true}` and closes the socket with application
+  code `4001`, instead of a `stream_reset` that every client reads as "wait for
+  the `stream_init` that follows" — none ever did, so the viewer sat on its
+  poster until the connection died. See `docs/transport.md` for what a client
+  should do (reconnect the socket with backoff, a few attempts).
 - `POST /api/sessions/{id}/resize` rejects geometries that cannot survive the
   even-dimension rounding (1x1 became 0x0) instead of zeroing the session's
   geometry and leaving the next viewer waiting forever for a surface that never
   arrives.
 - The 1 Hz `metrics` snapshot now carries `dropped`, the number of video packets
-  this viewer's socket shed (mailbox overflow or discarded while waiting for a
-  keyframe), so a stalling viewer is visible instead of looking like a slow
-  encoder.
+  this viewer's socket shed, so a stalling viewer is visible instead of looking
+  like a slow encoder. The total is split into `drop_overflow` (the mailbox was
+  full — this viewer cannot keep up) and `drop_awaiting_key` (video discarded
+  while it waited for its first IDR — the poster wait every late joiner serves),
+  so an operator can tell the two apart; `dropped` stays their sum.
 - `docs/transport.md` claimed an ABR `set_bitrate` reset every other viewer of
   the run; only the requesting viewer moves rungs, and the previous run stops
   when its last viewer leaves. The same page also said the streamer does not

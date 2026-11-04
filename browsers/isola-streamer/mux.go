@@ -79,6 +79,14 @@ func setupMux(port string, wsHandler http.HandlerFunc) (net.Listener, error) {
 	mux.HandleFunc("/debug/encoder", writeDebugEncoder)
 	registerRecordRoutes(mux)
 	mux.HandleFunc("/resize", func(w http.ResponseWriter, r *http.Request) {
+		// Resizing mutates the session's geometry for every attached viewer,
+		// so it is a state change and must be a POST — same rule as
+		// /navigate. Without the check any GET (a browser prefetch, a link
+		// preview, an image tag) re-keyed every encoder.
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		widthStr := r.URL.Query().Get("width")
 		heightStr := r.URL.Query().Get("height")
 		width, errW := strconv.Atoi(widthStr)

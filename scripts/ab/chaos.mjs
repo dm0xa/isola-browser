@@ -583,8 +583,11 @@ class Streamer {
     }
   }
 
-  async resize(w, h) {
-    const r = await fetch(`http://127.0.0.1:${this.port}/resize?width=${w}&height=${h}`, { signal: AbortSignal.timeout(5000) });
+  async resize(w, h, method = 'POST') {
+    const r = await fetch(`http://127.0.0.1:${this.port}/resize?width=${w}&height=${h}`, {
+      method,
+      signal: AbortSignal.timeout(5000),
+    });
     return { status: r.status, body: (await r.text()).slice(0, 120) };
   }
 
@@ -1430,6 +1433,16 @@ scenarios.geometry = async () => {
     note: 'must be 400 with the session geometry untouched',
   };
 
+  // Method contract: /resize mutates session geometry, so anything but POST
+  // must be refused with 405 and must not touch the session.
+  const getResize = await st.resize(800, 600, 'GET');
+  const debugAfterGet = await st.debugEncoder();
+  results.get_resize = {
+    response: getResize,
+    debug_resolution: debugAfterGet.resolution,
+    note: 'must be 405; a GET used to re-key every encoder',
+  };
+
   // A viewer attaching after the rejected resize must still see frames: the
   // session geometry is whatever the last accepted resize set (800x600).
   const waitsBefore = st.counted('waiting for producer geometry');
@@ -1480,10 +1493,13 @@ scenarios.geometry = async () => {
   const lateViewerSeesFrames = results.post_1x1_viewer.packets_in_3s > 0;
   const noGeometryWait = results.post_1x1_viewer.geometry_wait_logged === 0;
   const oddOk = results.odd.recovered === true && results.odd.response.status === 200;
+  const getRefused = results.get_resize.response.status === 405
+    && results.get_resize.debug_resolution === '800x600';
   const bad = [
     !oddOk && 'an odd geometry (801x601) must round to 800x600 and recover',
     !rejected1x1 && '1x1 must be rejected: rounding turns it into 0x0',
     !geometryKept && 'a rejected resize must leave the session geometry alone',
+    !getRefused && 'a GET /resize must be refused with 405 and leave the session alone',
     !lateViewerSeesFrames && 'a viewer attaching after a rejected resize must still receive frames',
     !noGeometryWait && 'no viewer should wait for a producer geometry that cannot arrive',
   ].filter(Boolean);
@@ -1499,6 +1515,7 @@ scenarios.geometry = async () => {
       : [
         '801x601 rounds to 800x600, re-keys, and the viewer recovers on the next IDR',
         '1x1 is rejected with 400 and leaves the session geometry untouched',
+        'a GET /resize is refused with 405: only POST mutates the geometry',
         'a viewer attaching afterwards decodes normally, with no producer-geometry wait',
       ],
   };
