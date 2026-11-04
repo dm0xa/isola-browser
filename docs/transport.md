@@ -190,6 +190,26 @@ Isola treats those as first-class:
 
 If frames keep flowing but the page never changes, that is the page, not the transport.
 
+## Frame Rate
+
+The session has two rates, and both matter:
+
+- **capture rate** — `ISOLA_FPS` (default 25). The streamer encodes at this rate and reports it as `capture_fps` in `metrics`.
+- **compositor rate** — what the runner's offscreen tab actually renders at. It is the capture rate *only for the active tab of an attached viewer*; every other tab, and every tab with no viewer attached, renders at `BACKGROUND_FPS` (1). Composing a page nobody watches at 25 fps would burn CPU for frames that are never encoded.
+
+The runner learns about viewers from the streamer's `{"cmd":"capture","on":true|false}` on `/run/isola/ctrl.sock`. Two rules keep the two rates consistent:
+
+- A `capture` command whose value equals the runner's own state is a **re-assertion, not a no-op** — the streamer re-sends the current state whenever its ctrl socket reconnects, so the command must re-apply the rate. Ignoring it (the pre-1.5.3 behaviour) could leave a session at 1-2 fps with `activity_mode: active` in every metric while scrolling and typing looked frozen.
+- While a viewer is attached, the runner re-applies the active tab's rate every 5 s, so a rate lost through any path that is not a capture transition (a late resize, a re-attached tab) repairs itself.
+
+Measure the *compositor* rate when diagnosing a frozen viewer, not the frame counter: `requestAnimationFrame` over one second inside the page. With a viewer attached it should match `capture_fps`; with none attached, 1-2 fps is correct behaviour, not a bug.
+
+The regression is covered end to end by [`browsers/isola-streamer/fps_e2e_test.go`](../browsers/isola-streamer/fps_e2e_test.go), which boots the sandbox image against a real site (`https://github.com/` by default), attaches a real viewer and asserts the rate on attach, reconnect, capture re-send, live resize, and detach:
+
+```bash
+ISOLA_FPS_E2E=1 go test -run TestViewerFrameRateOnRealSite -v ./browsers/isola-streamer
+```
+
 ## Building a Custom Viewer
 
 1. `POST /api/sessions`, keep `id` and `session_token`.

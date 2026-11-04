@@ -93,3 +93,46 @@ jobs:
       - name: Stop the container
         if: always()
         run: docker rm -f isola-ci || true
+
+  # The viewer-visible frame rate, end to end: build the sandbox image, boot it
+  # against a real site and assert the compositor follows the capture rate as a
+  # viewer attaches, reconnects, forces a capture re-send, resizes, and leaves.
+  # A session that silently latches at the background rate (~1 fps) while every
+  # metric still says "active" is invisible to the unit suites — this job is the
+  # only place the two rates are measured together.
+  fps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.10'
+          cache-dependency-path: browsers/isola-streamer/go.sum
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Same cache scope as publish-browser-image.yml, so a release reuses the
+      # layers this job just built instead of starting cold.
+      - name: Build the sandbox image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./browsers
+          file: ./browsers/browser-node-electron/Dockerfile
+          tags: isola-browser:electron
+          load: true
+          cache-from: type=gha,scope=isola-browser-image
+          cache-to: type=gha,mode=max,scope=isola-browser-image
+
+      # 960x540: the assertion is the rate ratio, and the smaller surface keeps
+      # raster+encode off the CI runner's two cores.
+      - name: Viewer frame rate on a real site
+        working-directory: browsers/isola-streamer
+        env:
+          ISOLA_FPS_E2E: '1'
+          ISOLA_FPS_E2E_RESOLUTION: 960x540
+        run: go test -run TestViewerFrameRateOnRealSite -v -count=1 -timeout 10m .
+
+      - name: Container inventory
+        if: failure()
+        run: docker ps -a

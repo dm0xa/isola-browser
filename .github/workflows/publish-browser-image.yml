@@ -48,5 +48,7 @@ jobs:
             ghcr.io/dm0xa/isola-browser:electron
             ghcr.io/dm0xa/isola-browser:${{ github.ref_name }}
             ghcr.io/dm0xa/isola-browser:sha-${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Shared with ci.yml's `fps` job, which builds this image to run the
+          # viewer frame-rate test.
+          cache-from: type=gha,scope=isola-browser-image
+          cache-to: type=gha,mode=max,scope=isola-browser-image
