@@ -35,11 +35,11 @@ scenario, no other load on the box.
 |`saturation` (100 Mbps noise)|fine|same stall: 50 packets shed, viewer resynced, fresh joiner unaffected, still 1 encoder|
 |`storm` (40 keyframe requests)|fine|1 restart, 39 refused, both viewers back to a live IDR in 50 ms|
 |`abr` (10 steps / 25 s)|fine|top-rung viewer 0 resets, 0 seq gaps, 628 packets, ≤2 encoders|
-|`abr-burst` (40 steps in 142 ms)|**rough edge**|40 encoder spawns (301/s), co-viewer lost 146 ms of frames|
+|`abr-burst` (40 steps in 142 ms)|fine (fixed)|1 spawn for 40 steps, top-rung viewer 0 resets, 0 seq gaps; a step is budgeted to one per second|
 |`slow-reader` (5 s socket pause)|fine|healthy viewer 125 packets in 5 s (25.0/s), `dropped=0` on both, encoder never stalled|
-|`deadline` (13 s stall, 100 Mbps)|**bug**|write deadline fires; the viewer goes dark but keeps its hub subscription and encoder until the peer closes|
+|`deadline` (13 s stall, 100 Mbps)|fine (fixed)|the write deadline now closes the socket: subscribers 0, encoder runs 0, ffmpeg children 0 within 1.5 s|
 |`zero-frame`|fine|`stream_init` at 51.2 ms with no frames in existence; first IDR 51.2 ms after feeding starts|
-|`geometry`|**bug**|`/resize?width=1&height=1` returns 200, zeroes the session geometry, strands the next viewer|
+|`geometry`|fine (fixed)|`/resize?width=1&height=1` returns 400, session geometry untouched, the next viewer decodes immediately|
 
 ## Scenario detail
 
@@ -362,3 +362,29 @@ touched:
   so a late joiner always reports a small nonzero count while showing the
   poster. Accurate for "packets this viewer could not use", misleading if read
   as transport loss.
+
+## Status of the findings
+
+The three defects above were fixed on `dm0xa/transport` in `87d2bf2`; the
+scenario bodies now assert the corrected contract, and a full run reports ten
+`fine` scenarios (see `verdicts` in `chaos-results.json`).
+
+- **Write deadline** (`ws.go`): the drain goroutine closed `done` but never the
+  socket, so the read loop stayed parked in `ReadMessage` and the deferred
+  `hub.release` never ran. It now closes the connection, which unblocks the
+  read loop and tears the session down: 1.5 s after the timeout a run reports
+  `subscribers 0`, `encoder_runs 0`, no ffmpeg child.
+- **Resize geometry** (`mux.go`): the even-dimension mask ran after the range
+  check, so 1x1 became 0x0 and zeroed `currentWidth`/`currentHeight`. Minimum
+  `minSurfaceDim` (16) is enforced after rounding; a rejected resize leaves the
+  session geometry exactly as it was.
+- **`set_bitrate` storm** (`ws.go`): every accepted step replaces an encoder
+  run, and nothing paced them — 40 messages meant 40 ffmpeg spawns in 142 ms.
+  One accepted step per `bitrateStepMinInterval` (1 s) now, which is eight
+  times faster than the ABR controller's own 8 s pacing; refusals are silent
+  and logged with a running count.
+
+Still open by choice: `/resize` accepts any method (a GET mutates geometry),
+`dropped` conflates mailbox overflow with the poster wait, and the three
+awaiting-IDR keyframe retries bypass the connection budget (still bounded by
+the hub-wide cooldown).

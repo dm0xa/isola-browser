@@ -64,9 +64,22 @@ publishes the section matching the tag.
   1080p 0.978 → 0.985 for 0.478 → 0.593. Finer presets buy a few thousandths
   more SSIM for two to four times the CPU, so this is the knee rather than the
   maximum.
+- `set_bitrate` is paced per viewer at one accepted step per second. Each
+  accepted step replaces an encoder run, and the ABR controller only steps
+  every 8 s, so nothing legitimate notices; the 40-messages-in-142 ms case used
+  to spawn 40 ffmpeg processes. Refusals are silent, like keyframe refusals.
 
 ### Fixed
 
+- A viewer whose socket hit the 10 s write deadline now loses its session: the
+  socket is closed, so the subscription is released and the encoder stops.
+  Before, the write goroutine exited but left the connection half-dead — the
+  session kept an encoder and a mailbox for a viewer that would never read
+  again, until the peer eventually closed.
+- `POST /api/sessions/{id}/resize` rejects geometries that cannot survive the
+  even-dimension rounding (1x1 became 0x0) instead of zeroing the session's
+  geometry and leaving the next viewer waiting forever for a surface that never
+  arrives.
 - The 1 Hz `metrics` snapshot now carries `dropped`, the number of video packets
   this viewer's socket shed (mailbox overflow or discarded while waiting for a
   keyframe), so a stalling viewer is visible instead of looking like a slow

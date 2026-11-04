@@ -1415,7 +1415,9 @@ scenarios.geometry = async () => {
     log_rekey: st.counted('ws: encoder re-keyed to 800x600'),
   };
 
-  // 1x1: accepted, masked to 0x0, resizeAll no-ops
+  // 1x1: masked to 0x0 by the even-dimension rule, so it must be rejected
+  // outright; accepting it would zero the session geometry and leave every
+  // later viewer waiting for a surface that never arrives.
   const one = await st.resize(1, 1);
   const debugAfterOne = await st.debugEncoder();
   const zResetsAfterOne = z.resets.length;
@@ -1425,12 +1427,12 @@ scenarios.geometry = async () => {
     debug_resolution: debugAfterOne.resolution,
     encoder_runs: debugAfterOne.encoder_runs,
     new_resets_on_z: z.resets.length - zResetsAfterOne,
-    note: 'currentWidth/Height become 0; /debug falls back to env so it reports 1280x720',
+    note: 'must be 400 with the session geometry untouched',
   };
 
-  // A viewer attaching now asks for the env fallback geometry (1280x720) while
-  // the producer surface is 800x600 (the last geometry the resize path could
-  // apply). It should be pinned waiting for a surface that never comes.
+  // A viewer attaching after the rejected resize must still see frames: the
+  // session geometry is whatever the last accepted resize set (800x600).
+  const waitsBefore = st.counted('waiting for producer geometry');
   const n = await new Viewer('post-1x1', st.port).attach();
   await sleep(3000);
   const dbgN = await st.debugEncoder();
@@ -1442,10 +1444,10 @@ scenarios.geometry = async () => {
     encoder_runs: dbgN.encoder_runs,
     subscribers: dbgN.subscribers,
     debug_resolution: dbgN.resolution,
-    geometry_wait_logged: st.counted('waiting for producer geometry'),
+    geometry_wait_logged: st.counted('waiting for producer geometry') - waitsBefore,
   };
 
-  // Recovery: resize back to the geometry the producer is actually sending.
+  // Recovery check: the same viewer after an explicit resize back.
   const nResetsBefore = n.resets.length;
   const back = await st.resize(800, 600);
   const nRecovered = await poll(() => n.firstKeyMs !== null, 4000, 20);
@@ -1473,22 +1475,32 @@ scenarios.geometry = async () => {
   n.close(); z.close();
   await st.stop();
 
-  const stuck = results.post_1x1_viewer.packets_in_3s === 0 &&
-    results.post_1x1_viewer.geometry_wait_logged > 0 &&
-    results.post_1x1_viewer.encoder_runs >= 2;
-  const verdict = results.one.response.status === 200 && stuck ? 'bug' : 'rough edge';
+  const rejected1x1 = results.one.response.status === 400;
+  const geometryKept = results.one.debug_resolution === '800x600' && results.one.new_resets_on_z === 0;
+  const lateViewerSeesFrames = results.post_1x1_viewer.packets_in_3s > 0;
+  const noGeometryWait = results.post_1x1_viewer.geometry_wait_logged === 0;
+  const oddOk = results.odd.recovered === true && results.odd.response.status === 200;
+  const bad = [
+    !oddOk && 'an odd geometry (801x601) must round to 800x600 and recover',
+    !rejected1x1 && '1x1 must be rejected: rounding turns it into 0x0',
+    !geometryKept && 'a rejected resize must leave the session geometry alone',
+    !lateViewerSeesFrames && 'a viewer attaching after a rejected resize must still receive frames',
+    !noGeometryWait && 'no viewer should wait for a producer geometry that cannot arrive',
+  ].filter(Boolean);
+  const verdict = bad.length === 0 ? 'fine' : 'bug';
 
   return {
     scenario: 'geometry',
     config: { boot: `${st.width}x${st.height}`, odd_request: '801x601', tiny_request: '1x1' },
     numbers: results,
     verdict,
-    notes: [
-      'mux.go masks odd dimensions with width &^= 1, then only checks width>0 BEFORE masking: 1x1 passes validation and becomes 0x0.',
-      'resizeAll(0,0) returns early, so the running encoders keep 800x600 while currentWidth/currentHeight are 0.',
-      'ws.go falls back to ISOLA_WIDTH/HEIGHT when currentWidth==0, so a new viewer requests 1280x720 against an 800x600 producer surface and pumpFrames() waits forever (frameMatchesRun).',
-      'the recovery step proves it is the geometry key, not a dead encoder: resize back to 800x600 lets the pinned viewer decode.',
-    ],
+    notes: bad.length
+      ? bad
+      : [
+        '801x601 rounds to 800x600, re-keys, and the viewer recovers on the next IDR',
+        '1x1 is rejected with 400 and leaves the session geometry untouched',
+        'a viewer attaching afterwards decodes normally, with no producer-geometry wait',
+      ],
   };
 };
 
