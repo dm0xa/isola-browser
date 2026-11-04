@@ -79,6 +79,20 @@ publishes the section matching the tag.
   the run; only the requesting viewer moves rungs, and the previous run stops
   when its last viewer leaves. The same page also said the streamer does not
   read the capture `ts_ns` header field; it does, nothing downstream uses it.
+- The streamer's three parsers now treat their input as hostile. A capture
+  header can no longer wrap `X+W`/`Y+H` past the surface bounds into a
+  multi-gigabyte `make()` (it panicked), claim more damaged pixels than the
+  surface holds, set an absurd stride, or reserve a full-surface payload before
+  a pixel arrives; a frame that starts and stalls is dropped after 5 s instead
+  of pinning its reader forever (waiting for a new frame stays unbounded, so an
+  idle page is unaffected). An fMP4 box is capped at 32 MiB — a measured 1080p
+  fragment is 3.1 MiB — and corrupt or truncated muxer output (a `moof` with no
+  `mdat`, a size-0 box, a 4 GiB size) resyncs to the next `ftyp`/`moof`
+  instead of buffering without bound or wedging the stream. An Annex-B stream
+  that never reaches a picture boundary is capped at 8 MiB and dropped back to
+  a NAL start code, and a reader that returns zero bytes no longer spins the
+  output pump. Valid input produces byte-identical packets: the fMP4 equality
+  corpus and the Annex-B chunking tests are unchanged.
 
 ## [1.5.4] - 2026-11-04
 

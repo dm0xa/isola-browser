@@ -10,6 +10,16 @@ import (
 // does not make the pump hold a syscall longer than a frame interval.
 const fmp4ReadChunk = 64 * 1024
 
+// maxFMP4Box bounds one fMP4 box the reader is willing to buffer or wait for.
+//
+// ffmpeg's fragment sizes are set by the GOP and the bitrate, not by this
+// reader: a measured 1080p 2 s fragment (12 Mbit/s, x264) is a 512-byte moof
+// plus a 3.1 MiB mdat, and the init pair is under 1 KiB. 32 MiB leaves ~10x
+// headroom for a bigger keyframe or a higher-bitrate stream while keeping a
+// corrupt or hostile box header (which may declare up to 4 GiB) from growing
+// the accumulation buffer without bound.
+const maxFMP4Box = 32 << 20
+
 // pipeBuffer accumulates bytes read from an encoder's stdout and reclaims the
 // consumed prefix in place.
 //
@@ -47,13 +57,27 @@ func (p *pipeBuffer) append(data []byte) {
 	p.end += copy(p.buf[p.end:], data)
 }
 
+// maxEmptyReads bounds consecutive zero-byte reads before the pump is told the
+// source made no progress. io.Reader permits (0, nil); an OS pipe never returns
+// it, but handing it back to the pump's read loop would spin that loop forever
+// without delivering a byte.
+const maxEmptyReads = 100
+
 // readFrom reads the next chunk straight from src into the accumulation
 // buffer and returns what it read.
 func (p *pipeBuffer) readFrom(src io.Reader) (int, error) {
 	p.reserve(fmp4ReadChunk)
-	n, err := src.Read(p.buf[p.end:])
-	p.end += n
-	return n, err
+	for empty := 0; ; {
+		n, err := src.Read(p.buf[p.end:])
+		p.end += n
+		if n > 0 || err != nil {
+			return n, err
+		}
+		empty++
+		if empty >= maxEmptyReads {
+			return 0, io.ErrNoProgress
+		}
+	}
 }
 
 // reserve makes room for n more bytes, first moving any pending tail to the
@@ -133,20 +157,29 @@ func (r *fmp4Reader) extractOne() ([]byte, bool) {
 		if !r.initSent {
 			if string(buf[4:8]) != "ftyp" {
 				// Drop bytes until ftyp (shouldn't happen with ffmpeg).
-				r.q.consume(1)
+				r.resync()
 				continue
 			}
 			ftypSize, ok := boxSize(buf, 0)
-			if !ok || len(buf) < ftypSize+8 {
+			if !ok || ftypSize > maxFMP4Box {
+				// The ftyp header itself is unusable, so the parse position
+				// is lost. resync skips this occurrence because its declared
+				// size does not validate.
+				r.resync()
+				continue
+			}
+			if len(buf) < ftypSize+8 {
 				return nil, false
 			}
 			moovOff := ftypSize
-			if string(buf[moovOff+4:moovOff+8]) != "moov" {
-				return nil, false
-			}
 			moovSize, ok := boxSize(buf, moovOff)
-			if !ok {
-				return nil, false
+			if string(buf[moovOff+4:moovOff+8]) != "moov" || !ok || moovSize > maxFMP4Box {
+				// An ftyp whose moov never follows cannot seed a decoder.
+				// Drop it and wait for the next init pair instead of
+				// blocking on this one forever.
+				r.q.consume(ftypSize)
+				r.resync()
+				continue
 			}
 			initEnd := moovOff + moovSize
 			if len(buf) < initEnd {
@@ -161,23 +194,32 @@ func (r *fmp4Reader) extractOne() ([]byte, bool) {
 		if string(buf[4:8]) != "moof" {
 			// Skip stray boxes between fragments.
 			size, ok := boxSize(buf, 0)
-			if !ok || len(buf) < size {
+			if !ok || size > maxFMP4Box {
+				r.resync()
+				continue
+			}
+			if len(buf) < size {
 				return nil, false
 			}
 			r.q.consume(size)
 			continue
 		}
 		moofSize, ok := boxSize(buf, 0)
-		if !ok || len(buf) < moofSize+8 {
+		if !ok || moofSize > maxFMP4Box {
+			r.resync()
+			continue
+		}
+		if len(buf) < moofSize+8 {
 			return nil, false
 		}
 		mdatOff := moofSize
-		if string(buf[mdatOff+4:mdatOff+8]) != "mdat" {
-			return nil, false
-		}
 		mdatSize, ok := boxSize(buf, mdatOff)
-		if !ok {
-			return nil, false
+		if string(buf[mdatOff+4:mdatOff+8]) != "mdat" || !ok || mdatSize > maxFMP4Box {
+			// A moof that is not followed by its mdat: this fragment is
+			// unrecoverable, but the next one must still reach viewers.
+			r.q.consume(moofSize)
+			r.resync()
+			continue
 		}
 		fragEnd := mdatOff + mdatSize
 		if len(buf) < fragEnd {
@@ -188,6 +230,33 @@ func (r *fmp4Reader) extractOne() ([]byte, bool) {
 		return seg, true
 	}
 	return nil, false
+}
+
+// resync drops bytes from the front of the buffer until the next plausible box
+// start of the kind the reader is waiting for: ftyp before the init segment,
+// moof after it. It is only reached on malformed input — a declared size that
+// cannot be trusted means the parse position is lost, and honouring it would
+// either buffer gigabytes or wedge the stream forever. The last seven bytes are
+// kept because a box header can straddle two reads.
+func (r *fmp4Reader) resync() {
+	buf := r.q.pending()
+	want := "moof"
+	if !r.initSent {
+		want = "ftyp"
+	}
+	for i := 4; i+4 <= len(buf); i++ {
+		if string(buf[i:i+4]) != want {
+			continue
+		}
+		if size, ok := boxSize(buf, i-4); ok && size <= maxFMP4Box {
+			r.q.consume(i - 4)
+			return
+		}
+	}
+	const keep = 7
+	if len(buf) > keep {
+		r.q.consume(len(buf) - keep)
+	}
 }
 
 func boxSize(data []byte, off int) (int, bool) {
