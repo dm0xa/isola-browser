@@ -17,6 +17,20 @@ publishes the section matching the tag.
 
 ### Changed
 
+- The WebCodecs viewer no longer replays a decode backlog. `VideoDecoder`
+  output is fire-and-forget, so a burst — or a tab that was throttled — left the
+  past queued ahead of the live picture with nothing to drop it. Access-unit
+  admission is now bounded at 250 ms of stream time: past that the client
+  abandons the decoder queue, asks for a keyframe, and resumes on the next IDR.
+  The delay and the drops are published at 1 Hz as `decodeBacklogMs`,
+  `decodeDroppedFrames` and `decodeCatchUps`.
+- An ABR step no longer costs the client its decoder or its canvas.
+  `stream_reset` followed by `stream_init` with an unchanged codec reuses the
+  same `VideoDecoder` — reset leaves it unconfigured, so it is reconfigured in
+  place — and resizes the existing canvas instead of appending a new one. Before
+  this, a bitrate-only step left the decoder unconfigured and every later access
+  unit was silently refused for the rest of the connection, and a scale step
+  allocated a new decoder and left the old canvas in the container.
 - A viewer can no longer restart the session's encoder on demand, indefinitely:
   `request_keyframe` is now budgeted per connection — one forced restart per
   30 seconds, four per connection — and a share-link watcher is additionally

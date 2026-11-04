@@ -59,6 +59,23 @@ export interface IsolaStreamMetrics {
   abrLevel: number;
   decodeErrorCount: number;
   lastRecoveryMs: number | null;
+  // ── WebCodecs decode backpressure ──
+  // decodeBacklogMs is the presentation delay the raw-Annex-B path is carrying
+  // at the moment the tick runs: access units submitted to the VideoDecoder but
+  // not yet painted, × the frame interval — stream time, not wall time, so it
+  // is independent of how bursty the wire was. 0 when caught up (an idle page
+  // included); ~one frame interval with a single frame in flight. Above
+  // MAX_DECODE_BACKLOG_MS the client stops replaying the backlog and resumes on
+  // the next IDR (see webCodecsVideoPath.ts).
+  //
+  // decodeDroppedFrames counts every access unit the backlog policy threw
+  // away — both the ones abandoned in the decoder queue and the ones refused
+  // while waiting for the replacement IDR — and decodeCatchUps counts the
+  // skips themselves. Drops rising while catchUps stays flat would mean the
+  // resync IDR never lands.
+  decodeBacklogMs: number;
+  decodeDroppedFrames: number;
+  decodeCatchUps: number;
   encodeScale: number;
   staticSecs: number;
   skippedTicks: number;

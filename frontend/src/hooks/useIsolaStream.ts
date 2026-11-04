@@ -25,7 +25,13 @@ import {
   playoutMetricsPatch,
   type PlayoutMetrics,
 } from './isola/msePlayout';
-import { createWcDecoder as buildWcDecoder, setupWebCodecsVideoPath } from './isola/webCodecsVideoPath';
+import {
+  applyWcStreamInit,
+  createWcAccessUnitSink,
+  createWcDecoder as buildWcDecoder,
+  resetWcDecoder,
+  setupWebCodecsVideoPath,
+} from './isola/webCodecsVideoPath';
 import { isPlaceholderUrl, seedForActiveTab, shouldCarryUrlEdit } from './isola/addressBar';
 import type { IsolaStreamMetrics } from './isola/streamMetrics';
 import {
@@ -470,6 +476,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     abrLevel: 0,
     decodeErrorCount: 0,
     lastRecoveryMs: null,
+    decodeBacklogMs: 0,
+    decodeDroppedFrames: 0,
+    decodeCatchUps: 0,
     encodeScale: 0,
     staticSecs: 0,
     skippedTicks: 0,
@@ -1691,6 +1700,38 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       pendingSegmentsRef,
       videoRef,
     };
+    function noteDecodeError(e: unknown) {
+      console.error('[isola-wc] decode error:', e);
+      decodeErrorCountRef.current++;
+      keyframeSeenRef.current = false; // out of sync until the next IDR
+      beginRecovery();
+      requestKeyframeNow();
+      setMetrics((m) => ({ ...m, decodeErrorCount: decodeErrorCountRef.current }));
+    }
+
+    // Bounded decode admission for the Annex-B path. Without it every access
+    // unit went into VideoDecoder.decode() and a burst (or a throttled tab)
+    // left the past queued in front of the live picture; the sink measures
+    // that queue and skips to the next IDR once it exceeds
+    // MAX_DECODE_BACKLOG_MS. Its stats are published by the 1 Hz tick.
+    const auSink = createWcAccessUnitSink({
+      getDecoder: () => decoderRef.current,
+      getChunkCtor: () => wcChunkCtorRef.current,
+      frameStepUs: () => frameStepUsRef.current,
+      tsUs: tsUsRef,
+      isKeyframeSeen: () => keyframeSeenRef.current,
+      setKeyframeSeen: (v: boolean) => { keyframeSeenRef.current = v; },
+      onSkipAhead: () => {
+        // Abandon what the decoder still has queued (reset leaves it
+        // unconfigured, so it must be reconfigured in the same breath) and ask
+        // for a fresh IDR so the wait is an encoder restart, not a whole GOP.
+        resetWcDecoder(decoderRef.current, lastWcConfigRef.current);
+        beginRecovery();
+        requestKeyframeNow();
+      },
+      onDecodeError: noteDecodeError,
+    });
+
     const wcPathCallbacks = {
       setFirstFrame,
       setMetrics,
@@ -1700,6 +1741,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       letterboxBg: CAPTURE_LETTERBOX_BG[themeRef.current],
       onVideoRemoved: () => { currentCaptureVideo = null; },
       onCanvasMounted: (canvas: HTMLCanvasElement) => { currentCaptureCanvas = canvas; },
+      onFramePainted: () => auSink.notePainted(),
     };
 
     function createWcDecoder(): WCDecoder | null {
@@ -1764,11 +1806,18 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         const fps = wcFramesRef.current;
         wcFramesRef.current = 0;
         const canvas = canvasRef.current;
+        // Decode-queue state as of this tick: the presentation delay the
+        // Annex-B path is carrying and how much the backlog policy threw away
+        // to keep it bounded (see MAX_DECODE_BACKLOG_MS).
+        const wcStats = auSink.stats();
         setMetrics((m) => ({
           ...m,
           recentFps: fps,
           videoWidth: canvas ? canvas.width : m.videoWidth,
           videoHeight: canvas ? canvas.height : m.videoHeight,
+          decodeBacklogMs: wcStats.backlogMs,
+          decodeDroppedFrames: wcStats.droppedFrames,
+          decodeCatchUps: wcStats.catchUps,
         }));
       }
       const lastSegmentAgeMs = lastSegmentAtRef.current > 0
@@ -1871,16 +1920,19 @@ export function useIsolaStream(defaultTargetUrl?: string) {
             // would report the whole previous run as lost.
             resetPacketLoss(frameCountersRef.current);
             if (wcModeRef.current && msg.mode === 'webcodecs') {
-              // Rebuild canvas+decoder only when geometry actually changed:
-              // an ABR bitrate restart keeps codec/dimensions identical, and
-              // a rebuild would blank the canvas until the next frame.
-              // stream_reset already reset the decoder — it just waits for
-              // the fresh IDR that the new encoder emits first.
-              const cv = canvasRef.current;
-              const sameGeometry = !!cv
-                && typeof msg.width === 'number' && cv.width === msg.width
-                && typeof msg.height === 'number' && cv.height === msg.height;
-              if (!sameGeometry && !setupWebCodecs(msg)) {
+              // An ABR bitrate step is stream_reset + stream_init with the same
+              // codec and geometry; the stream_reset path already dropped and
+              // reconfigured the decoder, so there is nothing to rebuild. Only
+              // the very first init (no canvas/decoder yet) tears anything
+              // down — applyWcStreamInit resizes and reconfigures in place.
+              const firstEntry = !canvasRef.current || !decoderRef.current;
+              const ok = firstEntry ? setupWebCodecs(msg) : applyWcStreamInit(
+                msg,
+                container,
+                wcPathRefs,
+                wcPathCallbacks,
+              );
+              if (!ok) {
                 setError('WebCodecs H.264 decode unavailable in this browser');
                 setReconnecting(false);
               }
@@ -1961,9 +2013,13 @@ export function useIsolaStream(defaultTargetUrl?: string) {
               a.goodSecs = 0;
             }
             if (wcModeRef.current) {
-              // Encoder restarted (resize/ABR): drop decoder state, the
-              // next IDR re-initializes it. ts restarts with the new stream.
-              try { decoderRef.current?.reset(); } catch { /* ignore */ }
+              // Encoder restarted (resize/ABR): abandon its queued frames but
+              // keep the decoder object. VideoDecoder.reset() leaves the state
+              // "unconfigured" — a bare reset made every later decode() a
+              // no-op, so an ABR step froze the picture for good — so
+              // resetWcDecoder re-arms the same decoder for the next run.
+              resetWcDecoder(decoderRef.current, lastWcConfigRef.current);
+              auSink.resetForNewRun();
               keyframeSeenRef.current = false;
               tsUsRef.current = 0;
               beginRecovery(true); // full window for the replacement encoder's IDR
@@ -2076,54 +2132,38 @@ export function useIsolaStream(defaultTargetUrl?: string) {
 
       if (bytes[0] === 0x02 && wcModeRef.current) {
         // Access unit: H.264 deltas depend on their reference chain, so
-        // decode everything in order — the decoder is far faster than the
-        // wire at these bitrates. Timestamps are synthetic CFR ticks.
-        let decoder = decoderRef.current;
-        const ChunkCtor = wcChunkCtorRef.current;
-        if (!ChunkCtor) return;
-        if (decoder && decoder.state === 'closed') {
+        // in-order delivery is mandatory — but the queue is bounded. The sink
+        // drops the backlog once it exceeds MAX_DECODE_BACKLOG_MS and resumes
+        // on the next IDR instead of replaying it. Timestamps are synthetic
+        // CFR ticks.
+        if (decoderRef.current && decoderRef.current.state === 'closed') {
           // A fatal decode error closes the VideoDecoder, and nothing else
           // rebuilt it — every packet was silently dropped from then on and
           // the picture froze for good. Re-create it from the last negotiated
           // config; deltas are ignored below until the next IDR re-syncs.
           console.warn('[isola-wc] decoder closed — rebuilding');
-          decoder = createWcDecoder();
+          createWcDecoder();
+          auSink.resetForNewRun();
         }
-        if (!decoder || decoder.state !== 'configured') return;
-        if (!keyframeSeenRef.current) {
-          if (!isKeyframe) return; // join mid-GOP: wait for an IDR
-          keyframeSeenRef.current = true;
-          tsUsRef.current = 0;
-          // Recovery complete: a usable IDR landed; record how long it took.
-          const recoveryStart = recoveryStartedAtRef.current;
-          if (recoveryStart !== null) {
-            lastRecoveryMsRef.current = Math.round(performance.now() - recoveryStart);
-            recoveryStartedAtRef.current = null;
-            recoveryRequestedRef.current = false;
-            recoveryRequestsRef.current = 0;
-            if (keyframeRequestTimerRef.current !== null) {
-              clearTimeout(keyframeRequestTimerRef.current);
-              keyframeRequestTimerRef.current = null;
+        const outcome = auSink.push(isKeyframe, bytes.subarray(10));
+        if (outcome === 'resynced' || outcome === 'decoded') {
+          if (outcome === 'resynced') {
+            // Recovery complete: a usable IDR landed; record how long it took.
+            const recoveryStart = recoveryStartedAtRef.current;
+            if (recoveryStart !== null) {
+              lastRecoveryMsRef.current = Math.round(performance.now() - recoveryStart);
+              recoveryStartedAtRef.current = null;
+              recoveryRequestedRef.current = false;
+              recoveryRequestsRef.current = 0;
+              if (keyframeRequestTimerRef.current !== null) {
+                clearTimeout(keyframeRequestTimerRef.current);
+                keyframeRequestTimerRef.current = null;
+              }
             }
           }
-        }
-        try {
-          decoder.decode(new ChunkCtor({
-            type: isKeyframe ? 'key' : 'delta',
-            timestamp: tsUsRef.current,
-            data: bytes.subarray(10),
-          }));
-          tsUsRef.current += frameStepUsRef.current;
           // Ref only — a per-frame setMetrics re-rendered the whole viewer at
           // the decode rate. The 1 Hz metrics tick publishes these.
           notePacket(seq, isKeyframe);
-        } catch (e) {
-          console.error('[isola-wc] decode error:', e);
-          decodeErrorCountRef.current++;
-          keyframeSeenRef.current = false; // out of sync until the next IDR
-          beginRecovery();
-          requestKeyframeNow();
-          setMetrics((m) => ({ ...m, decodeErrorCount: decodeErrorCountRef.current }));
         }
         return;
       }

@@ -117,6 +117,10 @@ Set `binaryType = 'arraybuffer'` on the socket. Ignore unknown markers.
 
 **WebCodecs (`0x02`).** Payload is one H.264 access unit in Annex-B (`avc1.6400LL` / High profile in current builds). SPS/PPS ride in-band before each IDR. Feed `EncodedVideoChunk` with `type: 'key'` when flag bit 0 is set. Draw onto a canvas.
 
+`VideoDecoder.decode()` is fire-and-forget, so the queue is the presentation delay: after a burst or a throttled tab every access unit is still decoded in order and the viewer replays the past. The bundled viewer therefore bounds that queue (250 ms of stream time, `MAX_DECODE_BACKLOG_MS`): when it is exceeded it abandons the decoder queue, asks for a keyframe, and resumes on the next IDR — the current picture — refusing deltas in between. Its state is published at 1 Hz in the viewer's metrics (`decodeBacklogMs`, `decodeDroppedFrames`, `decodeCatchUps` in `IsolaStreamMetrics`).
+
+Two lifecycle rules follow from WebCodecs itself. `VideoDecoder.reset()` leaves the decoder **unconfigured**, not "configured": a client that resets on `stream_reset` must `configure()` again or every later `decode()` throws. And `stream_reset` + `stream_init` with an unchanged codec string needs neither a new decoder nor a new canvas — the canvas is resized in place, so an ABR step costs no decoder allocation and does not blank the picture.
+
 **MSE (`0x01`).** Payload is an fMP4 fragment. The first segment after `stream_init` is an init segment; later ones are media. Use this only when WebCodecs is unavailable.
 
 **Audio (`0x03`).** Raw Opus packets (20 ms), forwarded only while the session has audio enabled (`POST /api/sessions/{id}/audio`). Decode with `AudioDecoder` into an `AudioContext`. Audio shares the video socket; it is not a third channel.
