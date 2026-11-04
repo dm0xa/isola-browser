@@ -42,3 +42,49 @@ frames directly and therefore keeps 1:1 frame order.
 
 CPU numbers include the `ffmpeg` subprocess (the streamer reaps it). Compare
 arms on the same host in the same session; absolute values move with load.
+
+## Edge/chaos harness
+
+`chaos.mjs` drives the paths a steady A/B run never reaches: viewers coming and
+going, attaching exactly while the encoder is being replaced, keyframe request
+storms, ABR stepping, a viewer that stops reading its socket, and resize
+geometry nobody meant to request. It boots one real streamer per scenario with
+its own port and frame socket, so scenarios cannot contaminate each other, and
+prints one JSON object per scenario plus a summary.
+
+```bash
+# build and run everything (~3 minutes)
+node scripts/ab/chaos.mjs
+
+# use an existing build; keep logs under a directory you can inspect
+node scripts/ab/chaos.mjs --bin /tmp/isola-streamer --out /tmp/chaos
+
+# one or a few scenarios
+node scripts/ab/chaos.mjs --only storm,geometry --bin /tmp/isola-streamer
+
+# longer churn run (default 20 cycles)
+node scripts/ab/chaos.mjs --only churn --cycles 60 --bin /tmp/isola-streamer
+```
+
+Scenarios: `churn`, `restart-attach`, `saturation` (shipped 6 Mbps and a noisy
+100 Mbps run), `storm`, `abr`, `abr-burst`, `slow-reader`, `deadline`,
+`zero-frame`, `geometry`. Every verdict is computed from measured counters,
+never from log strings alone; logs and `/debug/encoder` samples are included in
+the JSON.
+
+Notes that matter when reading the numbers:
+
+- `/debug/pprof/goroutine` is **not** registered (the binary does not import
+  `net/http/pprof`), so goroutine leaks are proxied by fd count, thread count
+  and RSS trends across churn cycles.
+- The slow-reader/saturation/deadline scenarios use a raw TCP WebSocket client
+  rather than the global `WebSocket`, because they need `socket.pause()`:
+  stopping the kernel receive path is what makes the server's per-viewer mailbox
+  fill and, past 10 s, trips the socket write deadline.
+- The per-viewer mailbox holds 192 packets ≈ 7.7s at the 25fps encoder cap, but
+  on loopback the kernel buffers absorb several MB before the server's writer
+  blocks. At the shipped 6 Mbps a 9s stall therefore does not overflow the
+  mailbox at all; the saturation scenario runs a 100 Mbps noise stream to reach
+  the shed path. This is measured, not assumed — see `docs/streamer-edges.md`.
+- Results land in `$OUT/chaos-results.json`; per-scenario streamer logs are at
+  `$OUT/<scenario>/streamer.log`.
