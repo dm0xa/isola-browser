@@ -6,6 +6,8 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-11-04
+
 ### Fixed
 
 - Sessions no longer get stuck at ~1 fps with a viewer attached: the sandbox
@@ -373,7 +375,8 @@ publishes the section matching the tag.
 Initial release: a Go control plane that boots a disposable Docker sandbox
 running offscreen Chromium.
 
-[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.5.3...HEAD
+[1.5.3]: https://github.com/dm0xa/isola-browser/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/dm0xa/isola-browser/compare/v1.5.1...v1.5.2
 [1.5.1]: https://github.com/dm0xa/isola-browser/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/dm0xa/isola-browser/compare/v1.4.1...v1.5.0
