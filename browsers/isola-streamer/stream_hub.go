@@ -930,50 +930,60 @@ func (r *streamRun) pumpFrames(wg *sync.WaitGroup) {
 func (r *streamRun) pumpOutput(wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	// Both reassemblers read ffmpeg's stdout straight into their own buffer,
+	// so each byte is copied once — into the packet the viewers receive —
+	// instead of once on the read and again on the way out. The segments they
+	// return alias those buffers and are packed here before the next read.
 	reader := newFMP4Reader()
 	splitter := &auSplitter{}
 	first := true
-	buf := make([]byte, 64*1024)
 	for {
 		select {
 		case <-r.stop:
 			return
 		default:
 		}
-		n, rerr := r.stdout.Read(buf)
-		if n > 0 {
-			if r.key.rawH264 {
-				recordRawRun() // no-op when not recording
-				for _, au := range splitter.feed(buf[:n]) {
-					if au.keyframe {
-						r.recordKeyframe(time.Now())
-					}
-					r.deliver(packAccessUnit(au.data, r.seq.Add(1), au.keyframe), au.keyframe, false)
+		if r.key.rawH264 {
+			recordRawRun() // no-op when not recording
+			aus, rerr := splitter.readFrom(r.stdout)
+			for _, au := range aus {
+				if au.keyframe {
+					r.recordKeyframe(time.Now())
 				}
-			} else {
-				for _, seg := range reader.Feed(buf[:n]) {
-					isKey := isKeyframeFragment(seg)
-					if isKey {
-						r.recordKeyframe(time.Now())
-					}
-					if rec.active || recordingActive.Load() {
-						recordSegment(seg, first) // raw fMP4 segment tee
-					}
-					r.deliver(packVideoSegment(seg, r.seq.Add(1), isKey), isKey, first)
-					first = false
-				}
+				r.deliver(packAccessUnit(au.data, r.seq.Add(1), au.keyframe), au.keyframe, false)
 			}
+			if rerr != nil {
+				r.reportOutputError(rerr)
+				return
+			}
+			continue
+		}
+		segs, rerr := reader.readSegments(r.stdout)
+		for _, seg := range segs {
+			isKey := isKeyframeFragment(seg)
+			if isKey {
+				r.recordKeyframe(time.Now())
+			}
+			if rec.active || recordingActive.Load() {
+				recordSegment(seg, first) // raw fMP4 segment tee
+			}
+			r.deliver(packVideoSegment(seg, r.seq.Add(1), isKey), isKey, first)
+			first = false
 		}
 		if rerr != nil {
-			// EOF after a stop/kill is normal; anything else is ffmpeg dying
-			// mid-session.
-			select {
-			case <-r.stop:
-			default:
-				log.Printf("ws: ffmpeg stdout read error: %v", rerr)
-			}
+			r.reportOutputError(rerr)
 			return
 		}
+	}
+}
+
+// reportOutputError logs a stdout read failure. EOF after a stop/kill is
+// normal; anything else is ffmpeg dying mid-session.
+func (r *streamRun) reportOutputError(err error) {
+	select {
+	case <-r.stop:
+	default:
+		log.Printf("ws: ffmpeg stdout read error: %v", err)
 	}
 }
 
