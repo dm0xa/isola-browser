@@ -6,6 +6,18 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Changed
+
+- libx264 now runs `-preset fast` with `subme=3:me=hex` instead of
+  `superfast` with `subme=1:me:dia`. The old tuning came from a corpus that
+  never left the near-lossless regime, so it optimised motion-search cost while
+  the bitrate budget sat unused; on text-heavy pages it was leaving quality on
+  the table. Measured on an offline bench (`encoder_quality_bench_test.go`,
+  gated on `ISOLA_QUALITY_BENCH=1`) against a dense-text corpus: 720p SSIM
+  0.951 → 0.968 for 0.234 → 0.448 core-seconds per second of video, 1080p
+  0.977 → 0.986 for 0.47 → 1.15. Both fit the ~1.5 core-s/s a session container
+  can give the encoder.
+
 ## [1.5.3] - 2026-11-04
 
 ### Fixed
