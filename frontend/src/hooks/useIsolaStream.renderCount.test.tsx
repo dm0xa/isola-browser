@@ -136,4 +136,73 @@ describe('useIsolaStream frame path', () => {
     expect(api!.metrics.sequenceNumber).toBe(N);
     expect(api!.metrics.keyframeCount).toBe(4); // seq 30, 60, 90, 120
   });
+
+  // Generalised setup for the tests below.
+  function connectStream(): FakeWebSocket {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    render(<Probe />);
+    act(() => {
+      api!.connect(
+        'ws://test/ws/session1?session_token=tok',
+        'ws://test/ws/session1?channel=input&session_token=tok',
+        container,
+        false,
+        undefined,
+        'session1',
+      );
+    });
+    const streamWs = FakeWebSocket.instances.find((w) => w.url.includes('channel=isola'))!;
+    act(() => { streamWs.open(); });
+    act(() => {
+      streamWs.deliver(JSON.stringify({
+        type: 'stream_init', codec: 'avc1.42E01F', width: 1280, height: 720,
+      }));
+    });
+    return streamWs;
+  }
+
+  function keyframeRequests(ws: FakeWebSocket): number {
+    return ws.sent.filter((m) => typeof m === 'string' && m.includes('request_keyframe')).length;
+  }
+
+  it('consumes the server dropped counter when present and tolerates its absence', () => {
+    const ws = connectStream();
+
+    // Older streamer: no `dropped` field. Existing fields must still land and
+    // serverDropped must not regress to a bogus value.
+    act(() => { ws.deliver(JSON.stringify({ type: 'metrics', bitrate_kbps: 2000, sent_kbps: 1900 })); });
+    expect(api!.metrics.targetBitrateKbps).toBe(2000);
+    expect(api!.metrics.serverDropped).toBe(0);
+
+    act(() => { ws.deliver(JSON.stringify({ type: 'metrics', dropped: 7 })); });
+    expect(api!.metrics.serverDropped).toBe(7);
+
+    // A later message without it keeps the last value instead of zeroing it.
+    act(() => { ws.deliver(JSON.stringify({ type: 'metrics', bitrate_kbps: 2100 })); });
+    expect(api!.metrics.targetBitrateKbps).toBe(2100);
+    expect(api!.metrics.serverDropped).toBe(7);
+  });
+
+  it('requests one keyframe per loss burst and publishes the loss counts', () => {
+    const ws = connectStream();
+
+    for (let seq = 1; seq <= 3; seq++) {
+      act(() => { ws.deliver(segmentPacket(seq, seq === 1)); });
+    }
+    expect(keyframeRequests(ws)).toBe(0);
+
+    // 4..8 missing: five consecutive packets shed by the server.
+    act(() => { ws.deliver(segmentPacket(9, false)); });
+    expect(keyframeRequests(ws)).toBe(1);
+
+    // The same burst keeps growing without spending the budget again.
+    act(() => { ws.deliver(segmentPacket(10, false)); });
+    act(() => { ws.deliver(segmentPacket(30, false)); });
+    expect(keyframeRequests(ws)).toBe(1);
+
+    act(() => { vi.advanceTimersByTime(2200); });
+    expect(api!.metrics.packetsLost).toBe(24); // 4..8 (5) + 11..29 (19)
+    expect(api!.metrics.packetLossRatio).toBeGreaterThan(0);
+  });
 });

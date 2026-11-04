@@ -152,7 +152,11 @@ Sent immediately before a new `stream_init` when the encoder run is replaced (bi
 
 ### `metrics` (server → client)
 
-A periodic snapshot of capture, encode, and renderer health. The bundled debug overlay renders it; custom clients can ignore it. Useful fields for a frozen picture: `changes_per_sec`, `damaged_pct`, `capture_empty_window`, `capture_fallback`, `renderer_stalled`, `cdp_probe_fail_streak`. `dropped` is cumulative and per viewer: packets this socket shed because its mailbox overflowed or because they arrived while it was waiting for a keyframe. A rising `dropped` with a healthy `encode_fps` means this viewer is the one falling behind. Fields may be added; ignore the ones you do not know.
+A periodic snapshot of capture, encode, and renderer health. The bundled debug overlay renders it; custom clients can ignore it. Useful fields for a frozen picture: `changes_per_sec`, `damaged_pct`, `capture_empty_window`, `capture_fallback`, `renderer_stalled`, `cdp_probe_fail_streak`. `dropped` is cumulative and per viewer: packets this socket shed because its mailbox overflowed or because they arrived while it was waiting for a keyframe. A rising `dropped` with a healthy `encode_fps` means this viewer is the one falling behind. Older streamers omit `dropped` and clients must tolerate that. Fields may be added; ignore the ones you do not know.
+
+### Packet sequence and loss
+
+Each binary packet carries a per-run `seq` (`uint32` LE at header offset 2) that restarts at 0 with every encoder run. Over TCP a gap is therefore not network loss: it is the streamer shedding packets for this viewer, and everything until the next IDR is undecodable. The client counts `seq > last + 1` as missing, treats a backward/duplicate `seq` as a run change (baseline reset, nothing counted), and ignores all of it across `stream_init`/`stream_reset`. Progressive missing counts are not worth a restart — one or two dropped delta frames heal on the next P-frame — but a burst of 5 missing packets is: the viewer then sends `request_keyframe` through its normal keyframe-recovery budget (one request per burst), exactly as it does after a decode error.
 
 ### Client → server (video socket)
 
