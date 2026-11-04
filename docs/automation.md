@@ -432,9 +432,9 @@ canvas.tabIndex = 0;   // focusable, or keydown never fires
 Notes on the edges:
 
 - **Audio is not a third channel.** Turn it on with `POST /api/sessions/{id}/audio` (`{"enabled":true}`); Opus packets then arrive on the video socket as marker `0x03`.
-- **A stalled decoder is fixed in place.** Send `{"type":"request_keyframe"}` on the video socket instead of reconnecting the session; the streamer replaces the encoder run and you get `stream_reset` + a fresh `stream_init`.
+- **A stalled decoder is fixed in place.** Send `{"type":"request_keyframe"}` on the video socket instead of reconnecting the session; the streamer replaces the encoder run and you get `stream_reset` + a fresh `stream_init`. It is budgeted: one request per 30 s and four per connection, so treat a refusal (no `stream_reset` follows) as "wait or reconnect" rather than retrying in a loop.
 - **The surface can change under you.** `POST /api/sessions/{id}/resize` (and a session restart) changes the capture; an ABR step changes the encoded `width` / `height`. Re-read both pairs on every `stream_init` rather than caching them once.
-- **`host=1` marks a socket as the host connection** — the bundled viewer sends it on both, and it keeps that connection out of the session's viewer count. Permission, however, comes from the token: a view-only share token gets `403` on `channel=input` / `host=1`, and on the video socket the relay forwards only `ping` and `request_keyframe`, so a viewer cannot even ask for a bitrate change.
+- **`host=1` marks a socket as the host connection** — the bundled viewer sends it on both, and it keeps that connection out of the session's viewer count. Permission, however, comes from the token: a view-only share token gets `403` on `channel=input` / `host=1`, and on the video socket the relay forwards only `ping` and `request_keyframe` (the latter at most once per 30 s), so a viewer cannot even ask for a bitrate change.
 - **Input belongs on the input socket.** The video socket accepts some input types as a fallback, but a click sent there waits behind video frames.
 
 The reference implementation of all of this is [`frontend/src/hooks/useIsolaStream.ts`](../frontend/src/hooks/useIsolaStream.ts), and the relay that forwards both channels is [`backend/pkg/wsproxy/proxy.go`](../backend/pkg/wsproxy/proxy.go).

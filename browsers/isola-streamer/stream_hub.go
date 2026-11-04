@@ -75,6 +75,13 @@ type streamSub struct {
 	// against the bitrate target, so it must be per-viewer: two viewers of the
 	// same shared run need not receive the same bytes.
 	sentBytes atomic.Int64
+
+	// keyframeReqAt is when this viewer last forced an encoder restart, and
+	// keyframeReqs how many it has forced over the life of the connection.
+	// Together they enforce the per-viewer keyframe budget; both are guarded
+	// by the hub mutex.
+	keyframeReqAt time.Time
+	keyframeReqs  int
 }
 
 func newStreamSub() *streamSub {
@@ -442,6 +449,37 @@ const keyframeRestartGrace = 4 * time.Second
 // client's recovery timer cannot thrash ffmpeg.
 const lateJoinRestartCooldown = keyframeRestartGrace + time.Second
 
+// Per-viewer keyframe budget. lateJoinRestartCooldown bounds a *storm*; it
+// does not bound the total, so before this budget one viewer could restart
+// the session's encoder — and reset every other viewer of that run — every
+// lateJoinRestartCooldown forever. A viewer may now force one restart per
+// keyframeRequestWindow and keyframeRequestsPerConn over the life of its
+// connection. The budget is per subscription, so a share watcher on the same
+// run cannot spend the host's allowance, and neither can another viewer's.
+const (
+	keyframeRequestWindow   = 30 * time.Second
+	keyframeRequestsPerConn = 4
+)
+
+// keyframeBudgetAllows reports whether this viewer may force another IDR at
+// now, and why not when it may not. It does not record the request; only a
+// restart that actually happened spends the budget.
+func (s *streamSub) keyframeBudgetAllows(now time.Time) (bool, string) {
+	if s.keyframeReqs >= keyframeRequestsPerConn {
+		return false, "connection budget exhausted"
+	}
+	if !s.keyframeReqAt.IsZero() && now.Sub(s.keyframeReqAt) < keyframeRequestWindow {
+		return false, "per-viewer cooldown"
+	}
+	return true, ""
+}
+
+// noteKeyframeRequest spends one unit of this viewer's budget.
+func (s *streamSub) noteKeyframeRequest(now time.Time) {
+	s.keyframeReqAt = now
+	s.keyframeReqs++
+}
+
 // keyframeRestartAllowed reports whether a client request_keyframe should
 // replace the run. A run that has already emitted an IDR can be restarted
 // immediately (the viewer is stuck mid-GOP). A run that has not is still
@@ -461,7 +499,9 @@ func keyframeRestartAllowed(startedAt time.Time, keyframeAtUnixNano int64, now t
 //
 // libx264 on a live pipe cannot be signalled for a keyframe, so — exactly like
 // the ABR path — the cheapest reliable way is a fresh encoder. Every viewer of
-// that run is reset with it, because they are all decoding the same stream.
+// that run is reset with it, because they are all decoding the same stream,
+// which is why the request is budgeted per viewer: one stuck decoder must not
+// be able to restart the encoder for everybody else indefinitely.
 func (h *streamHub) requestKeyframe(sub *streamSub) {
 	h.mu.Lock()
 	run := sub.run
@@ -469,12 +509,20 @@ func (h *streamHub) requestKeyframe(sub *streamSub) {
 		h.mu.Unlock()
 		return
 	}
-	if !keyframeRestartAllowed(run.startedAt, run.keyframeAt.Load(), time.Now()) {
+	now := time.Now()
+	if ok, reason := sub.keyframeBudgetAllows(now); !ok {
+		reqs, lastAt := sub.keyframeReqs, sub.keyframeReqAt
+		h.mu.Unlock()
+		log.Printf("ws: keyframe request refused (%s): viewer used %d/%d, last request %s ago",
+			reason, reqs, keyframeRequestsPerConn, now.Sub(lastAt).Round(time.Second))
+		return
+	}
+	if !keyframeRestartAllowed(run.startedAt, run.keyframeAt.Load(), now) {
 		h.mu.Unlock()
 		log.Printf("ws: keyframe request ignored, encoder has not emitted an IDR yet")
 		return
 	}
-	if !h.lastForcedKeyframe.IsZero() && time.Since(h.lastForcedKeyframe) < lateJoinRestartCooldown {
+	if !h.lastForcedKeyframe.IsZero() && now.Sub(h.lastForcedKeyframe) < lateJoinRestartCooldown {
 		h.mu.Unlock()
 		log.Printf("ws: keyframe request ignored, restart cooldown")
 		return
@@ -487,7 +535,8 @@ func (h *streamHub) requestKeyframe(sub *streamSub) {
 		log.Printf("ws: keyframe restart at %d kbps failed", run.key.kbps)
 		return
 	}
-	h.lastForcedKeyframe = time.Now()
+	h.lastForcedKeyframe = now
+	sub.noteKeyframeRequest(now)
 	key := run.key
 	subs := make([]*streamSub, 0, len(run.subs))
 	for s := range run.subs {

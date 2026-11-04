@@ -47,7 +47,7 @@ Inside the container the capture never leaves the box: Electron writes damage re
 
 ### Capture (`ISOL`)
 
-The producer does not ship a full BGRA surface every tick. Each frame is a 32-byte header (`ISOL` magic, surface size and stride, dirty-rect count, and a `ts_ns` timestamp) plus the damaged rectangles and their pixels. `ts_ns` is wall-clock UTC nanoseconds (`CLOCK_REALTIME`), so a consumer can subtract its own clock to get a buffer delay; the field is carried for that reason and is not yet read by the streamer. A blinking caret is a few kilobytes; a 1440p full frame would be ~15 MB. A single rect that covers the whole surface is a full refresh and can seed the compositor from scratch.
+The producer does not ship a full BGRA surface every tick. Each frame is a 32-byte header (`ISOL` magic, surface size and stride, dirty-rect count, and a `ts_ns` timestamp) plus the damaged rectangles and their pixels. `ts_ns` is wall-clock UTC nanoseconds (`CLOCK_REALTIME`), so a consumer can subtract its own clock to get a buffer delay; the streamer parses it into the frame's timestamp, but nothing downstream uses it — the encoder is fed `-f rawvideo`, which carries no PTS, so ffmpeg synthesises CFR from the capture rate. A blinking caret is a few kilobytes; a 1440p full frame would be ~15 MB. A single rect that covers the whole surface is a full refresh and can seed the compositor from scratch.
 
 The encode loop skips ticks while the surface is unchanged, but never for longer than `ISOLA_STATIC_KEEPALIVE_MS` (default 2 s, `0` disables). Idle pages stay cheap without looking like a stall. On the MSE path a quiet change also gets a 40 ms follow-up frame so the fMP4 muxer can close the fragment — otherwise a single edit would sit unflushed until keepalive.
 
@@ -152,17 +152,17 @@ Sent immediately before a new `stream_init` when the encoder run is replaced (bi
 
 ### `metrics` (server → client)
 
-A periodic snapshot of capture, encode, and renderer health. The bundled debug overlay renders it; custom clients can ignore it. Useful fields for a frozen picture: `changes_per_sec`, `damaged_pct`, `capture_empty_window`, `capture_fallback`, `renderer_stalled`, `cdp_probe_fail_streak`.
+A periodic snapshot of capture, encode, and renderer health. The bundled debug overlay renders it; custom clients can ignore it. Useful fields for a frozen picture: `changes_per_sec`, `damaged_pct`, `capture_empty_window`, `capture_fallback`, `renderer_stalled`, `cdp_probe_fail_streak`. `dropped` is cumulative and per viewer: packets this socket shed because its mailbox overflowed or because they arrived while it was waiting for a keyframe. A rising `dropped` with a healthy `encode_fps` means this viewer is the one falling behind. Fields may be added; ignore the ones you do not know.
 
 ### Client → server (video socket)
 
 | Message | Effect |
 | :--- | :--- |
 | `{"type":"ping","ts":…}` | Echoed as `{"type":"pong","ts":…}` for RTT. `ts` is passed through verbatim. |
-| `{"type":"set_bitrate","kbps":N}` | Move this viewer onto an encoder run at `N` kbps (clamped to `base_bitrate`). Other viewers of the old run are reset with it. |
-| `{"type":"request_keyframe"}` | Replace the current run so a late joiner or a dropped decoder gets an IDR. |
+| `{"type":"set_bitrate","kbps":N}` | Move **this** viewer onto an encoder run at `N` kbps (clamped to `base_bitrate`). Other viewers keep the run they are on; the previous run stops when its last viewer leaves it. |
+| `{"type":"request_keyframe"}` | Replace the current run so a late joiner or a dropped decoder gets an IDR. Budgeted per connection: at most one forced restart every 30 s and four per connection — a refused request is ignored silently. Every viewer of that run is reset with it. |
 
-The relay forwards `ping` and `request_keyframe` even on view-only sockets. Pointer and key events belong on `channel=input` with `host=1`.
+The relay forwards `ping` and `request_keyframe` even on view-only sockets. Pointer and key events belong on `channel=input` with `host=1`. A view-only connection may forward one `request_keyframe` per 30 s — the relay drops the rest and logs them — because each request restarts the shared encoder for the session owner too. `ping` is not limited.
 
 ## Adaptive Quality
 

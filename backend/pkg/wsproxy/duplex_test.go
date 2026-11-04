@@ -2,6 +2,8 @@ package wsproxy
 
 import (
 	"bytes"
+	"errors"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -164,21 +166,21 @@ func TestProxyDuplexKeepaliveRefreshesActivity(t *testing.T) {
 	}
 }
 
-func TestViewOnlyControlAllowed(t *testing.T) {
+func TestViewOnlyControlType(t *testing.T) {
 	cases := []struct {
 		in   string
-		want bool
+		want string
 	}{
-		{`{"type":"ping","ts":1}`, true},
-		{`{"type":"request_keyframe"}`, true},
-		{`{"type":"set_bitrate","kbps":500}`, false},
-		{`{"type":"input","x":1}`, false},
-		{`{"type":"clipboard_sync","text":"x"}`, false},
-		{`not json`, false},
+		{`{"type":"ping","ts":1}`, "ping"},
+		{`{"type":"request_keyframe"}`, "request_keyframe"},
+		{`{"type":"set_bitrate","kbps":500}`, ""},
+		{`{"type":"input","x":1}`, ""},
+		{`{"type":"clipboard_sync","text":"x"}`, ""},
+		{`not json`, ""},
 	}
 	for _, tc := range cases {
-		if got := viewOnlyControlAllowed([]byte(tc.in)); got != tc.want {
-			t.Errorf("viewOnlyControlAllowed(%s) = %v, want %v", tc.in, got, tc.want)
+		if got := viewOnlyControlType([]byte(tc.in)); got != tc.want {
+			t.Errorf("viewOnlyControlType(%s) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
@@ -238,5 +240,138 @@ func TestProxyDuplexViewOnlyForwardsStreamControl(t *testing.T) {
 	case <-proxyDone:
 	case <-time.After(3 * time.Second):
 		t.Fatal("proxyDuplex did not return")
+	}
+}
+
+// TestViewOnlyKeyframeAllowed pins the relay's per-connection arithmetic: one
+// forward per window, and a refusal that does not move the window.
+func TestViewOnlyKeyframeAllowed(t *testing.T) {
+	original := viewOnlyKeyframeWindow
+	viewOnlyKeyframeWindow = 100 * time.Millisecond
+	defer func() { viewOnlyKeyframeWindow = original }()
+
+	var last time.Time
+	now := time.Now()
+	if !viewOnlyKeyframeAllowed(&last, now) {
+		t.Fatal("the first request on a connection must be forwarded")
+	}
+	if viewOnlyKeyframeAllowed(&last, now.Add(viewOnlyKeyframeWindow-time.Millisecond)) {
+		t.Fatal("a second request inside the window must be dropped")
+	}
+	if !last.Equal(now) {
+		t.Fatal("a dropped request moved the window")
+	}
+	if !viewOnlyKeyframeAllowed(&last, now.Add(viewOnlyKeyframeWindow)) {
+		t.Fatal("a request at the window boundary must be forwarded")
+	}
+}
+
+// readContainerText reads the next container-bound text frame, or reports
+// that nothing arrived inside timeout.
+func readContainerText(t *testing.T, peer *websocket.Conn, timeout time.Duration) (string, bool) {
+	t.Helper()
+	if err := peer.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		t.Fatalf("container deadline: %v", err)
+	}
+	_, payload, err := peer.ReadMessage()
+	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return "", false
+		}
+		t.Fatalf("container read: %v", err)
+	}
+	return string(payload), true
+}
+
+func writeClientText(t *testing.T, conn *websocket.Conn, payload string) {
+	t.Helper()
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
+		t.Fatalf("client write %s: %v", payload, err)
+	}
+}
+
+func startDuplexForTest(t *testing.T, viewOnly bool) (client, containerPeer *websocket.Conn, cleanup func(), proxyDone chan struct{}) {
+	t.Helper()
+	clientConn, browserConn, cleanupClient := newWebSocketPair(t)
+	containerConn, peer, cleanupContainer := newWebSocketPair(t)
+
+	done := make(chan struct{})
+	var closeOnce sync.Once
+	closeAll := func() {
+		closeOnce.Do(func() {
+			close(done)
+			_ = browserConn.Close()
+			_ = peer.Close()
+		})
+	}
+
+	proxyDone = make(chan struct{})
+	go func() {
+		defer close(proxyDone)
+		proxyDuplex(clientConn, containerConn, "sess-budget", closeAll, done, func(string) {}, new(int64), new(int64), nil, viewOnly)
+	}()
+
+	cleanup = func() {
+		closeAll()
+		select {
+		case <-proxyDone:
+		case <-time.After(3 * time.Second):
+			t.Error("proxyDuplex did not return")
+		}
+		cleanupClient()
+		cleanupContainer()
+	}
+	return browserConn, peer, cleanup, proxyDone
+}
+
+// TestProxyDuplexViewOnlyKeyframeBudget pins the relay-side share-link guard:
+// a view-only connection gets one forwarded request_keyframe per window, while
+// ping keeps flowing unrestricted.
+func TestProxyDuplexViewOnlyKeyframeBudget(t *testing.T) {
+	original := viewOnlyKeyframeWindow
+	viewOnlyKeyframeWindow = 150 * time.Millisecond
+	defer func() { viewOnlyKeyframeWindow = original }()
+
+	client, containerPeer, cleanup, _ := startDuplexForTest(t, true)
+	defer cleanup()
+
+	writeClientText(t, client, `{"type":"request_keyframe"}`)
+	if got, ok := readContainerText(t, containerPeer, 2*time.Second); !ok || got != `{"type":"request_keyframe"}` {
+		t.Fatalf("first request_keyframe not forwarded: %q ok=%v", got, ok)
+	}
+
+	// Inside the window the request is dropped. Prove it by ordering instead
+	// of a timed-out read: gorilla poisons a connection after a read deadline,
+	// so the ping that follows must be the very next frame the container sees.
+	writeClientText(t, client, `{"type":"request_keyframe"}`)
+	writeClientText(t, client, `{"type":"ping","ts":1}`)
+	if got, ok := readContainerText(t, containerPeer, 2*time.Second); !ok || got != `{"type":"ping","ts":1}` {
+		t.Fatalf("container saw %q ok=%v after the dropped request; want ping next", got, ok)
+	}
+
+	// Past the window the connection may ask again.
+	time.Sleep(viewOnlyKeyframeWindow + 50*time.Millisecond)
+	writeClientText(t, client, `{"type":"request_keyframe"}`)
+	if got, ok := readContainerText(t, containerPeer, 2*time.Second); !ok || got != `{"type":"request_keyframe"}` {
+		t.Fatalf("request_keyframe after the window not forwarded: %q ok=%v", got, ok)
+	}
+}
+
+// TestProxyDuplexControlKeyframesUnrestricted keeps the relay budget off the
+// normal control path: a non-view-only socket still forwards every request.
+func TestProxyDuplexControlKeyframesUnrestricted(t *testing.T) {
+	original := viewOnlyKeyframeWindow
+	viewOnlyKeyframeWindow = time.Hour
+	defer func() { viewOnlyKeyframeWindow = original }()
+
+	client, containerPeer, cleanup, _ := startDuplexForTest(t, false)
+	defer cleanup()
+
+	for i := 0; i < 2; i++ {
+		writeClientText(t, client, `{"type":"request_keyframe"}`)
+		if got, ok := readContainerText(t, containerPeer, 2*time.Second); !ok || got != `{"type":"request_keyframe"}` {
+			t.Fatalf("control request_keyframe %d not forwarded: %q ok=%v", i+1, got, ok)
+		}
 	}
 }

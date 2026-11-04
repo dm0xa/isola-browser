@@ -276,6 +276,11 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 					"encode_scale":    run.key.scale,
 					"static_secs":     staticSecs,
 					"skipped_ticks":   run.skippedTicks.Load(),
+					// dropped counts this viewer's shed packets — mailbox
+					// overflow and video discarded while waiting for a keyframe.
+					// It is per-viewer, so a rising counter points at the one
+					// socket that cannot keep up rather than at the encoder.
+					"dropped": sub.dropped.Load(),
 					// Did the picture actually change? skipped_ticks and a decoded
 					// fps both stay high while the encoder is fed duplicate frames,
 					// so changes_per_sec near zero with a healthy fps is the

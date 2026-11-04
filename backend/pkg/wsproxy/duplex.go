@@ -8,12 +8,22 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog/log"
 )
 
 // viewOnlyControlMaxBytes caps JSON a view-only client may send. Stream
 // control messages (ping, request_keyframe) are tiny; anything larger is
 // treated as input and dropped.
 const viewOnlyControlMaxBytes = 4096
+
+// viewOnlyKeyframeWindow is how often a view-only connection may forward a
+// request_keyframe to its container. Every such request replaces the session's
+// encoder run and resets every viewer of it, so one share-link watcher must not
+// be able to restart the host's encoder back-to-back. This is the relay's own
+// limit: the streamer budgets per subscription too, but a share watch and the
+// host are different websockets and only the relay can tell them apart. It is
+// a var so tests can shrink the window.
+var viewOnlyKeyframeWindow = 30 * time.Second
 
 // Liveness / safety guards for the isola duplex relay. These exist because a
 // wedged container must never hang a viewer forever, and because a malicious
@@ -160,6 +170,9 @@ func relayViewOnlyClient(
 	trackActivity func(string),
 	bytesIn *int64,
 ) {
+	// Per-connection keyframe budget. ping is not budgeted: it is an RTT probe,
+	// cheap, and its rate is what keeps a static session alive.
+	var lastKeyframeAt time.Time
 	for {
 		mt, r, err := client.NextReader()
 		if err != nil {
@@ -177,7 +190,15 @@ func relayViewOnlyClient(
 			_, _ = io.Copy(io.Discard, r)
 			continue
 		}
-		if !viewOnlyControlAllowed(payload) {
+		ctrlType := viewOnlyControlType(payload)
+		if ctrlType == "" {
+			continue
+		}
+		if ctrlType == "request_keyframe" && !viewOnlyKeyframeAllowed(&lastKeyframeAt, time.Now()) {
+			log.Warn().
+				Str("session_id", sessionID).
+				Dur("window", viewOnlyKeyframeWindow).
+				Msg("view-only request_keyframe dropped: one per window")
 			continue
 		}
 		w, err := container.NextWriter(websocket.TextMessage)
@@ -195,19 +216,31 @@ func relayViewOnlyClient(
 	}
 }
 
-// viewOnlyControlAllowed reports whether a view-only client text frame is
-// stream control that must reach the encoder, rather than input that must not.
-func viewOnlyControlAllowed(payload []byte) bool {
+// viewOnlyControlType returns the control message type of a view-only client
+// text frame when that frame is stream control that must reach the encoder,
+// and "" for input that must not.
+func viewOnlyControlType(payload []byte) string {
 	var ctrl struct {
 		Type string `json:"type"`
 	}
 	if json.Unmarshal(payload, &ctrl) != nil {
-		return false
+		return ""
 	}
 	switch ctrl.Type {
 	case "ping", "request_keyframe":
-		return true
+		return ctrl.Type
 	default:
+		return ""
+	}
+}
+
+// viewOnlyKeyframeAllowed reports whether a view-only connection may forward a
+// request_keyframe now, and records the forward when it may. The caller holds
+// the per-connection state, so concurrent connections never share a budget.
+func viewOnlyKeyframeAllowed(last *time.Time, now time.Time) bool {
+	if !last.IsZero() && now.Sub(*last) < viewOnlyKeyframeWindow {
 		return false
 	}
+	*last = now
+	return true
 }
