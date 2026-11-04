@@ -26,15 +26,16 @@ publishes the section matching the tag.
   until it reconnects. Every forced restart replaces the encoder run for
   everyone watching it, so one stuck decoder could previously reset the host's
   stream forever.
-- libx264 now runs `-preset fast` with `subme=3:me=hex` instead of
+- libx264 now runs `-preset veryfast` with `subme=2:me=hex` instead of
   `superfast` with `subme=1:me:dia`. The old tuning came from a corpus that
   never left the near-lossless regime, so it optimised motion-search cost while
   the bitrate budget sat unused; on text-heavy pages it was leaving quality on
-  the table. Measured on an offline bench (`encoder_quality_bench_test.go`,
-  gated on `ISOLA_QUALITY_BENCH=1`) against a dense-text corpus: 720p SSIM
-  0.951 → 0.968 for 0.234 → 0.448 core-seconds per second of video, 1080p
-  0.977 → 0.986 for 0.47 → 1.15. Both fit the ~1.5 core-s/s a session container
-  can give the encoder.
+  the table. Measured on the offline bench (`encoder_quality_bench_test.go`,
+  gated on `ISOLA_QUALITY_BENCH=1`) against a dense-text corpus, 3 runs per row:
+  720p SSIM 0.951 → 0.965 for 0.227 → 0.303 core-seconds per second of video,
+  1080p 0.978 → 0.985 for 0.478 → 0.593. Finer presets buy a few thousandths
+  more SSIM for two to four times the CPU, so this is the knee rather than the
+  maximum.
 
 ### Fixed
 

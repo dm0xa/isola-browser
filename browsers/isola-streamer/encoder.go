@@ -289,8 +289,8 @@ type libx264Tuning struct {
 
 var libx264Quality = libx264Tuning{
 	tune:   "zerolatency",
-	preset: "fast",
-	params: "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=3:me=hex:force-cfr=1",
+	preset: "veryfast",
+	params: "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=2:me=hex:force-cfr=1",
 }
 
 // startEncoder launches ffmpeg as a subprocess, consuming raw BGRA frames on
@@ -377,54 +377,57 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 			"-bufsize", fmt.Sprintf("%dk", bufsizeKbps),
 		)
 	} else {
-		// fast + hex motion search, at the same aq-mode=2: this is the knee
-		// of the measured preset/quality curve, not a guess. The corpus is a
-		// deterministic 100-frame 25fps clip of dense small (5x7) antialiased
-		// text over a textured photo strip plus an animated 480x320 panel,
-		// scrolled; each row is encoded through this exact argv, decoded, and
-		// scored against the source with ffmpeg ssim/psnr. Three runs per row,
-		// median; host 10 CPUs / 8 encoder threads. core-seconds per second
-		// of video / achieved kbps / mean SSIM:
+		// veryfast + subme=2:me=hex: the measured knee of the preset/quality
+		// curve, not a guess. The corpus is a deterministic 100-frame 25fps
+		// clip of dense small (5x7) antialiased text over a textured photo
+		// strip plus an animated 480x320 panel, scrolled; each row is encoded
+		// through this exact argv, decoded, and scored against the source with
+		// ffmpeg ssim/psnr. Three runs per row, median; host 10 CPUs / 8
+		// encoder threads. core-seconds per second of video / achieved kbps /
+		// mean SSIM:
 		//
 		//   720p  @6Mbps target
-		//     superfast dia  aq2 (previous) 0.231 /  6568 / 0.9515
-		//     veryfast  dia  aq2            0.243 /  6535 / 0.9551
-		//     faster    dia  aq2            0.332 /  6532 / 0.9592
-		//     medium    dia  aq2            0.358 /  6498 / 0.9618
-		//     veryfast  hex3 aq2            0.326 /  6417 / 0.9647
-		//     faster    hex3 aq2            0.412 /  6410 / 0.9678
-		//     medium    hex3 aq2            0.462 /  6364 / 0.9685
-		//     fast      hex3 aq2 (shipped)  0.448 /  6372 / 0.9686
+		//     superfast dia  aq2 (previous) 0.227 /  6574 / 0.9509
+		//     veryfast  dia  aq2            0.244 /  6544 / 0.9552
+		//     superfast hex3 aq2            0.294 /  6505 / 0.9635
+		//     veryfast  hex2 aq2 (shipped)  0.303 /  6466 / 0.9646
+		//     veryfast  hex3 aq2            0.322 /  6429 / 0.9643
+		//     fast      hex3 aq2            0.440 /  6360 / 0.9684
+		//     medium    hex3 aq2            0.463 /  6380 / 0.9686
 		//   1080p @13.5Mbps target
-		//     superfast dia  aq2 (previous) 0.467 / 13094 / 0.9778
-		//     veryfast  dia  aq2            0.488 / 12911 / 0.9785
-		//     faster    dia  aq2            0.694 / 12653 / 0.9799
-		//     medium    dia  aq2            0.739 / 12608 / 0.9811
-		//     veryfast  hex3 aq2            0.747 / 13261 / 0.9847
-		//     faster    hex3 aq2            1.122 / 13099 / 0.9859
-		//     medium    hex3 aq2            1.219 / 12989 / 0.9859
-		//     fast      hex3 aq2 (shipped)  1.153 / 13030 / 0.9863
+		//     superfast dia  aq2 (previous) 0.478 / 13067 / 0.9775
+		//     veryfast  dia  aq2            0.495 / 12868 / 0.9785
+		//     veryfast  hex2 aq2 (shipped)  0.593 / 13318 / 0.9846
+		//     superfast hex3 aq2            0.662 / 13418 / 0.9838
+		//     veryfast  hex3 ref1           0.680 / 13336 / 0.9847
+		//     veryfast  hex3 aq2            0.744 / 13307 / 0.9847
+		//     faster    hex3 aq2            1.113 / 13103 / 0.9860
+		//     medium    hex3 aq2            1.182 / 13016 / 0.9862
+		//     fast      hex3 aq2            1.136 / 13012 / 0.9862
 		//
 		// The old subme=1:me=dia tuning came from a corpus that never left the
 		// near-lossless regime (0.9MB for 250 frames, PSNR ~59), so it ranked
 		// the motion search while the bitrate budget sat unused. Under real bit
-		// pressure the finer search wins: subme=3:me=hex alone is +0.013 SSIM
-		// at 720p for +0.10 core-s/s. medium buys +0.0002 over fast at 1080p
-		// for +6% CPU and loses at 720p, so fast is the knee; both fit the
-		// 1.5 core-s/s ceiling, which is what a 3-CPU session container can
-		// give the encoder while capture, Electron and muxing take ~0.5 core.
-		// At 1080p the encoder now costs 1.15, 2.5x the old setting — that is
-		// the price of +0.0085 SSIM / +2.7dB PSNR, and it still leaves >1.8
-		// cores for the rest of the session. Thread count is not a lever:
-		// total CPU is flat across pools (see maxEncoderThreads), and because
-		// zerolatency slices each frame, a 3-thread container does slightly
-		// better than the 8 threads measured here — these SSIM numbers are
-		// conservative.
+		// pressure the finer search wins: hex alone is +0.013 SSIM at 720p.
+		// Where to stop is a CPU question, and the answer is return per core:
+		// at 1080p, hex2 buys +0.0071 SSIM over the old setting for +0.115
+		// core-s/s (0.062 SSIM per core), while fast gives +0.0087 for +0.658
+		// (0.013 per core) — five times the CPU for a fifth of the picture
+		// again. At 720p the same order holds (0.18 vs 0.10 per core). hex2
+		// therefore takes ~93% of the quality gain for ~25% of its CPU cost,
+		// and the encoder stays near 0.3 core at 720p and 0.6 at 1080p, inside
+		// the ~1.5 core-s/s a 3-CPU session container can give it while
+		// capture, Electron and muxing take ~0.5 core.
 		//
-		// aq-mode=3 (dark-scene bias) lost at every preset it was tried on
-		// (fast hex3: 0.9672 vs 0.9686 at 720p, same CPU) because both this
-		// corpus and real browser pages are light. -preset ultrafast was
-		// rejected despite being cheaper (0.230): it drops to Constrained
+		// Thread count is not a lever: total CPU is flat across pools (see
+		// maxEncoderThreads), and because zerolatency slices each frame, a
+		// 3-thread container does slightly better than the 8 threads measured
+		// here — these SSIM numbers are conservative.
+		//
+		// aq-mode=3 (dark-scene bias) is neutral at 720p (0.9681 vs 0.9684 at
+		// fast hex) and loses at 1080p (0.9853 vs 0.9862 for more CPU) because
+		// both this corpus and real browser pages are light. -preset ultrafast
+		// was rejected despite being cheaper: it drops to Constrained
 		// Baseline, which would invalidate the avc1.6400LL codec string and
 		// cost ~24% bytes. cabac=0 was also rejected (~10% bytes for ~4%
 		// CPU). zerolatency keeps B-frames and lookahead off for end-to-end
