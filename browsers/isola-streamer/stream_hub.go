@@ -82,6 +82,11 @@ type streamSub struct {
 	// by the hub mutex.
 	keyframeReqAt time.Time
 	keyframeReqs  int
+	// keyframeRetries counts the restarts this viewer forced while it was
+	// still waiting for an IDR. A viewer with no picture is recovering, not
+	// farming, so those come out of a small separate allowance that resets
+	// when an IDR finally arrives.
+	keyframeRetries int
 }
 
 func newStreamSub() *streamSub {
@@ -456,15 +461,26 @@ const lateJoinRestartCooldown = keyframeRestartGrace + time.Second
 // keyframeRequestWindow and keyframeRequestsPerConn over the life of its
 // connection. The budget is per subscription, so a share watcher on the same
 // run cannot spend the host's allowance, and neither can another viewer's.
+//
+// A viewer that is still waiting for an IDR is recovering, not farming: it
+// gets keyframeRetriesPerStall consecutive restarts before the connection
+// budget and window take over. The hub-wide lateJoinRestartCooldown still
+// spaces those restarts like any other, so a hostile viewer is bounded at
+// keyframeRetriesPerStall fast restarts per stall and then one per window. The
+// allowance resets when an IDR is finally delivered.
 const (
 	keyframeRequestWindow   = 30 * time.Second
 	keyframeRequestsPerConn = 4
+	keyframeRetriesPerStall = 3
 )
 
 // keyframeBudgetAllows reports whether this viewer may force another IDR at
 // now, and why not when it may not. It does not record the request; only a
 // restart that actually happened spends the budget.
 func (s *streamSub) keyframeBudgetAllows(now time.Time) (bool, string) {
+	if s.awaitingKey && s.keyframeRetries < keyframeRetriesPerStall {
+		return true, ""
+	}
 	if s.keyframeReqs >= keyframeRequestsPerConn {
 		return false, "connection budget exhausted"
 	}
@@ -474,9 +490,15 @@ func (s *streamSub) keyframeBudgetAllows(now time.Time) (bool, string) {
 	return true, ""
 }
 
-// noteKeyframeRequest spends one unit of this viewer's budget.
+// noteKeyframeRequest records a restart this viewer forced. A retry while it
+// still has no picture comes out of the per-stall allowance instead of the
+// connection budget.
 func (s *streamSub) noteKeyframeRequest(now time.Time) {
 	s.keyframeReqAt = now
+	if s.awaitingKey {
+		s.keyframeRetries++
+		return
+	}
 	s.keyframeReqs++
 }
 
@@ -979,6 +1001,8 @@ func (r *streamRun) deliver(pkt []byte, isKey, isInit bool) {
 		}
 		if isKey {
 			s.awaitingKey = false
+			// The stall is over: a later one gets its own retry allowance.
+			s.keyframeRetries = 0
 		} else if s.awaitingKey {
 			s.dropped.Add(1)
 			continue

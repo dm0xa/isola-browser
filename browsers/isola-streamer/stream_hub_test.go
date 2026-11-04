@@ -236,10 +236,25 @@ func currentRun(hub *streamHub, key runKey) *streamRun {
 	return hub.runs[key]
 }
 
+// markKeyframeDelivered puts the viewers in the state deliver() leaves them in
+// after an IDR — picture resumed, retry allowance refilled — so a budget test
+// can model "the viewer got its picture back" without feeding frames to
+// ffmpeg.
+func markKeyframeDelivered(hub *streamHub, subs ...*streamSub) {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	for _, s := range subs {
+		s.awaitingKey = false
+		s.keyframeRetries = 0
+	}
+}
+
 // TestPerViewerKeyframeBudget is the contract that keeps one stuck decoder
 // from restarting the encoder for everyone else: inside a viewer's window a
 // second request must not replace the run, after it must, and another viewer's
-// exhausted budget must not touch a fresh viewer.
+// exhausted budget must not touch a fresh viewer. Both viewers here have
+// received an IDR, so the retry allowance is not in play — this is the
+// windowed budget alone.
 func TestPerViewerKeyframeBudget(t *testing.T) {
 	const port = "15933"
 	listener := startTestStreamer(t, port, 4000)
@@ -258,6 +273,7 @@ func TestPerViewerKeyframeBudget(t *testing.T) {
 	}
 	key := run.key
 	asker, other := subs[0], subs[1]
+	markKeyframeDelivered(hub, asker, other)
 
 	allowRestartForTest(hub, run)
 	hub.requestKeyframe(asker)
@@ -265,6 +281,7 @@ func TestPerViewerKeyframeBudget(t *testing.T) {
 	if first == run {
 		t.Fatal("the first request must replace the run")
 	}
+	markKeyframeDelivered(hub, asker, other) // the replacement emitted its IDR
 
 	// Second request inside the window: everything global allows a restart,
 	// only the viewer's own budget refuses it.
@@ -284,10 +301,17 @@ func TestPerViewerKeyframeBudget(t *testing.T) {
 	if second == first {
 		t.Fatal("a request after the per-viewer window must replace the run")
 	}
+	markKeyframeDelivered(hub, asker)
 
 	// Spend the rest of asker's connection budget, then prove it is refused
 	// even with the clock and global cooldown wide open.
-	for asker.keyframeReqs < keyframeRequestsPerConn {
+	for {
+		hub.mu.Lock()
+		spent := asker.keyframeReqs
+		hub.mu.Unlock()
+		if spent >= keyframeRequestsPerConn {
+			break
+		}
 		cur := currentRun(hub, key)
 		hub.mu.Lock()
 		asker.keyframeReqAt = time.Now().Add(-(keyframeRequestWindow + time.Second))
@@ -296,8 +320,9 @@ func TestPerViewerKeyframeBudget(t *testing.T) {
 		hub.requestKeyframe(asker)
 		if currentRun(hub, key) == cur {
 			t.Fatalf("request %d/%d was refused before the budget ran out",
-				asker.keyframeReqs+1, keyframeRequestsPerConn)
+				spent+1, keyframeRequestsPerConn)
 		}
+		markKeyframeDelivered(hub, asker)
 	}
 	exhausted := currentRun(hub, key)
 	hub.mu.Lock()
@@ -320,6 +345,114 @@ func TestPerViewerKeyframeBudget(t *testing.T) {
 	hub.requestKeyframe(other)
 	if got := currentRun(hub, key); got == exhausted {
 		t.Fatal("another viewer's exhausted budget blocked a fresh viewer")
+	}
+}
+
+// TestKeyframeRetryWhileNoIDR is the recovery contract: a viewer that asked
+// for a keyframe and still has no picture may retry the restart a few times
+// (each after the hub-wide cooldown) instead of waiting out the 30s window
+// that exists to stop a viewer with a working picture from farming restarts.
+func TestKeyframeRetryWhileNoIDR(t *testing.T) {
+	const port = "15935"
+	listener := startTestStreamer(t, port, 4000)
+	defer listener.Close()
+
+	conn, _ := dialTestViewer(t, port)
+	defer conn.Close()
+	waitForFanout(t, 1, 1)
+
+	hub := hubFor(globalBroadcaster)
+	run, subs := hubRunForTest(t, hub)
+	sub := subs[0]
+	key := run.key
+	if !sub.awaitingKey {
+		t.Fatal("a viewer that never received an IDR must be awaiting one")
+	}
+
+	cur := run
+	for i := 0; i < keyframeRetriesPerStall; i++ {
+		allowRestartForTest(hub, cur)
+		hub.requestKeyframe(sub)
+		next := currentRun(hub, key)
+		if next == cur {
+			t.Fatalf("retry %d of %d was refused while no IDR had arrived",
+				i+1, keyframeRetriesPerStall)
+		}
+		cur = next
+	}
+
+	hub.mu.Lock()
+	retries, reqs := sub.keyframeRetries, sub.keyframeReqs
+	hub.mu.Unlock()
+	if retries != keyframeRetriesPerStall || reqs != 0 {
+		t.Fatalf("after %d retries: retries = %d, connection budget = %d; want %d/0",
+			keyframeRetriesPerStall, retries, reqs, keyframeRetriesPerStall)
+	}
+
+	// Past the allowance the window applies again — a hostile viewer is
+	// bounded at keyframeRetriesPerStall fast restarts per stall.
+	allowRestartForTest(hub, cur)
+	hub.requestKeyframe(sub)
+	if got := currentRun(hub, key); got != cur {
+		t.Fatalf("retry %d replaced the run; the per-stall allowance must cap at %d",
+			keyframeRetriesPerStall+1, keyframeRetriesPerStall)
+	}
+
+	// An IDR ends the stall and refills the per-stall allowance, but the
+	// windowed budget still applies: this viewer has a picture again, so it
+	// waits out keyframeRequestWindow like any other viewer instead of being
+	// treated as recovering.
+	markKeyframeDelivered(hub, sub)
+	hub.mu.Lock()
+	if sub.keyframeRetries != 0 {
+		retries := sub.keyframeRetries
+		hub.mu.Unlock()
+		t.Fatalf("an IDR left %d retries on the viewer, want 0", retries)
+	}
+	sub.keyframeReqAt = time.Now().Add(-(keyframeRequestWindow + time.Second))
+	hub.mu.Unlock()
+	allowRestartForTest(hub, cur)
+	hub.requestKeyframe(sub)
+	if got := currentRun(hub, key); got == cur {
+		t.Fatal("after the window elapsed the viewer's budget must be usable again")
+	}
+}
+
+// TestKeyframeRetriesResetOnIDR pins the deliver() side of the retry
+// allowance: an IDR clears awaitingKey and zeroes the per-stall count, so the
+// next stall gets its own retries.
+func TestKeyframeRetriesResetOnIDR(t *testing.T) {
+	hub := &streamHub{runs: map[runKey]*streamRun{}}
+	sub := newStreamSub()
+	sub.awaitingKey = true
+	sub.keyframeRetries = keyframeRetriesPerStall
+	sub.keyframeReqAt = time.Now()
+	run := &streamRun{hub: hub, subs: map[*streamSub]struct{}{sub: {}}}
+
+	// A delta frame while the viewer waits is shed and must not touch the
+	// retry allowance.
+	run.deliver([]byte{0x02}, false, false)
+	if got := sub.dropped.Load(); got != 1 {
+		t.Fatalf("delta while awaiting a keyframe: dropped = %d, want 1", got)
+	}
+	if sub.keyframeRetries != keyframeRetriesPerStall {
+		t.Fatalf("a shed delta frame reset the retry allowance to %d", sub.keyframeRetries)
+	}
+
+	run.deliver([]byte{0x02}, true, false)
+	if sub.awaitingKey {
+		t.Fatal("an IDR must clear awaitingKey")
+	}
+	if sub.keyframeRetries != 0 {
+		t.Fatalf("keyframeRetries = %d after an IDR, want 0", sub.keyframeRetries)
+	}
+
+	// The next stall gets its retries again.
+	hub.mu.Lock()
+	sub.awaitingKey = true
+	hub.mu.Unlock()
+	if ok, reason := sub.keyframeBudgetAllows(time.Now()); !ok {
+		t.Fatalf("the next stall was refused a retry: %s", reason)
 	}
 }
 

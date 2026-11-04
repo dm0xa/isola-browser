@@ -160,7 +160,7 @@ A periodic snapshot of capture, encode, and renderer health. The bundled debug o
 | :--- | :--- |
 | `{"type":"ping","ts":…}` | Echoed as `{"type":"pong","ts":…}` for RTT. `ts` is passed through verbatim. |
 | `{"type":"set_bitrate","kbps":N}` | Move **this** viewer onto an encoder run at `N` kbps (clamped to `base_bitrate`). Other viewers keep the run they are on; the previous run stops when its last viewer leaves it. |
-| `{"type":"request_keyframe"}` | Replace the current run so a late joiner or a dropped decoder gets an IDR. Budgeted per connection: at most one forced restart every 30 s and four per connection — a refused request is ignored silently. Every viewer of that run is reset with it. |
+| `{"type":"request_keyframe"}` | Replace the current run so a late joiner or a dropped decoder gets an IDR. Budgeted per connection: while the viewer still has no picture it may retry the restart three times, spaced by the hub-wide 5 s cooldown; once it has a picture it gets one forced restart per 30 s, four per connection. A refused request is ignored silently. Every viewer of that run is reset with it. |
 
 The relay forwards `ping` and `request_keyframe` even on view-only sockets. Pointer and key events belong on `channel=input` with `host=1`. A view-only connection may forward one `request_keyframe` per 30 s — the relay drops the rest and logs them — because each request restarts the shared encoder for the session owner too. `ping` is not limited.
 

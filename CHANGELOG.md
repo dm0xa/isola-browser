@@ -11,9 +11,12 @@ publishes the section matching the tag.
 - A viewer can no longer restart the session's encoder on demand, indefinitely:
   `request_keyframe` is now budgeted per connection — one forced restart per
   30 seconds, four per connection — and a share-link watcher is additionally
-  limited to one forwarded request per 30 seconds by the relay. Every forced
-  restart replaces the encoder run for everyone watching it, so one stuck
-  decoder could previously reset the host's stream forever.
+  limited to one forwarded request per 30 seconds by the relay. A viewer that
+  still has no picture keeps a small retry allowance (three restarts, spaced by
+  the existing 5 s cooldown) so a restart that produced no IDR cannot wedge it
+  until it reconnects. Every forced restart replaces the encoder run for
+  everyone watching it, so one stuck decoder could previously reset the host's
+  stream forever.
 
 ### Fixed
 
