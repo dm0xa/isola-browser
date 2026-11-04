@@ -18,6 +18,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
     localStorage.setItem('isola_theme', theme);
+    // An installed window paints its title bar from this before the first
+    // frame; keep it in step with the app's own theme rather than the OS's.
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute('content', theme === 'dark' ? '#030712' : '#f4f4f5');
   }, [theme]);
 
   const toggle = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));

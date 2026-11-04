@@ -1,6 +1,8 @@
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { MonitorDown, X } from 'lucide-react';
 import { useConfig } from '../hooks/useConfig';
+import { useInstallPrompt } from '../hooks/useInstallPrompt';
 import { useTheme } from '../lib/ThemeContext';
 import { getVersion, getCommit, onBackendStatusChange, setBackendReachable } from '../lib/config';
 import { IsolaLogo, ISOLA_LOGO_KEYFRAMES } from '../components/IsolaLogo';
@@ -80,6 +82,7 @@ export default function LandingPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { resolutionVisible, resolutions, browsers } = useConfig();
+  const { available: installAvailable, install: promptInstall, dismiss: dismissInstall } = useInstallPrompt();
   const { theme, toggle: toggleTheme } = useTheme();
   const menuRef = useRef<HTMLDivElement>(null);
   const searchError = searchParams.get('error');
@@ -535,6 +538,34 @@ export default function LandingPage() {
           </svg>
         </a>
       </div>
+
+      {/* Install affordance: shown only while Chromium holds an unspent prompt,
+          so a click always opens its install dialog. It is not rendered when
+          Chromium withholds the event — the address-bar install entry covers
+          that case. The × is a separate control (a button inside a button is
+          invalid HTML) and its choice is stored in localStorage. */}
+      {installAvailable && (
+        <div className="fixed bottom-16 right-6 flex items-center gap-1 pl-3.5 pr-1.5 py-1.5 rounded-full text-xs border border-zinc-300 dark:border-gray-800 bg-white/85 dark:bg-gray-900/85 backdrop-blur text-zinc-700 dark:text-[#aea2a2] shadow-lg">
+          <button
+            type="button"
+            onClick={() => { void promptInstall(); }}
+            className="flex items-center gap-2 text-left hover:text-zinc-900 dark:hover:text-white transition-colors"
+            title="Install isola as an app"
+          >
+            <MonitorDown className="w-4 h-4 shrink-0" aria-hidden />
+            <span>Install app</span>
+          </button>
+          <button
+            type="button"
+            onClick={dismissInstall}
+            className="p-1 rounded-full text-zinc-400 hover:text-zinc-700 dark:text-gray-500 dark:hover:text-gray-300 transition-colors"
+            title="Don't show this again"
+            aria-label="Dismiss install prompt"
+          >
+            <X className="w-3 h-3" aria-hidden />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

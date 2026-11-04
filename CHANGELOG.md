@@ -6,6 +6,10 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Added
+
+- The UI installs as a Chromium app.
+
 ## [1.5.3] - 2026-11-04
 
 ### Fixed

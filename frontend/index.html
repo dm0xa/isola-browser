@@ -4,11 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- Installed as an app, this paints the title bar before the first frame,
+         so it has to match the stored theme; the inline script below fixes it
+         up for light mode and ThemeContext keeps it in sync afterwards. -->
+    <meta name="theme-color" content="#030712" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="isola" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>isola — Remote Browser</title>
     <script>
       (function() {
         var stored = localStorage.getItem('isola_theme');
-        if (stored === 'light') document.documentElement.classList.remove('dark');
+        if (stored === 'light') {
+          document.documentElement.classList.remove('dark');
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', '#f4f4f5');
+        }
       })();
     </script>
   </head>

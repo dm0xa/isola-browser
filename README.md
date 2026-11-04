@@ -54,6 +54,7 @@ The whole design follows from one constraint: the browser you are looking at sho
 - **Traffic panel** — Per-tab requests, request graph, domains, response headers + security posture, tracker inventory and on-demand recon, captured over CDP and streamed beside the video. See [Traffic panel](#traffic-panel).
 - **One TCP port** — UI, API, and WebSocket relay share a single port (default `8080`), so it drops cleanly behind a reverse proxy with one hostname, one TLS certificate, and one firewall rule — no extra media or VNC ports to open.
 - **Optional Tor** — SOCKS for the session.
+- **Installable UI** — Chromium installs the landing page as a desktop app (manifest, launcher icons, a dismissible **Install app** pill on the landing page), so isola runs in its own window. See [docs/getting-started.md](./docs/getting-started.md#optional-install-it-as-an-app).
 - **Share links** — View-only tokens.
 - **Timers and idle reaper** — Configurable session length and inactivity kill.
 - **REST API** — Create, extend, delete, metrics.

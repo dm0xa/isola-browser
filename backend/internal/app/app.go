@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"mime"
 	"net/http"
 	"os"
 	"os/signal"
@@ -259,6 +260,12 @@ func Run(opts Options) error {
 		r.Get("/assets/*", frontend.ServeHTTP)
 		r.Get("/fonts/*", frontend.ServeHTTP)
 		r.Get("/favicon.svg", frontend.ServeHTTP)
+		// Install surface: the manifest and its icons are fetched by Chromium
+		// with the page. Without these routes the SPA fallback would answer
+		// with index.html, and a manifest or icon served as HTML fails the
+		// installability check without an obvious error.
+		r.Get("/manifest.webmanifest", frontend.ServeHTTP)
+		r.Get("/icons/*", frontend.ServeHTTP)
 		r.Get("/index.html", frontend.ServeHTTP)
 	}
 
@@ -317,6 +324,11 @@ func Run(opts Options) error {
 // reaches the user. Vite content-hashes everything under /assets, so those are
 // safe to pin; the shell must be revalidated.
 func serveFrontend(fsys fs.FS) http.Handler {
+	// Go's built-in mime table has no .webmanifest entry, so http.FileServer
+	// would sniff the body and serve the manifest as text/plain. Register the
+	// type once here rather than per request.
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+
 	files := http.FileServer(http.FS(fsys))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/assets/") {
