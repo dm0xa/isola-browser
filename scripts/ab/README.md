@@ -106,3 +106,51 @@ Notes that matter when reading the numbers:
   the shed path. This is measured, not assumed — see `docs/streamer-edges.md`.
 - Results land in `$OUT/chaos-results.json`; per-scenario streamer logs are at
   `$OUT/<scenario>/streamer.log`.
+
+## Soak harness
+
+`soak.mjs` answers a different question from the other two: does a session stay
+healthy over time? `driver.mjs` measures one steady stream and `chaos.mjs` runs
+each edge in a fresh process, so neither can see a leak, an fd or thread that
+never comes back, an encoder run that is never reaped, or a change-driven
+suppression latch that never wakes up — all of which are trends, not events.
+
+It boots **one** streamer, **one** feeder and **one** long-lived viewer, then
+mixes the normal workload into that single session for N minutes: viewer churn
+every 20 s, ABR steps every 45 s (cycling down and back up), a forced keyframe
+every 60 s, one resize round trip, and one two-minute static stretch that
+exercises change-driven suppression and its wake-up. Every 5 s it samples RSS,
+fds, thread count, child ffmpeg count, `subscribers`, `encoder_runs`, the
+steady viewer's packets/s, and any log line matching
+`error|panic|timeout|leak|refused`. Each attachment records its
+first-packet latency.
+
+```bash
+# canonical 10-minute run against a build you made yourself
+(cd browsers/isola-streamer && go build -o /tmp/q-soak .)
+node scripts/ab/soak.mjs --bin /tmp/q-soak --minutes 10
+
+# 2-minute smoke: the phase boundaries scale, the cadences do not
+node scripts/ab/soak.mjs --bin /tmp/q-soak --minutes 2 --out /tmp/isola-soak-smoke
+```
+
+It prints a per-minute table and a PASS/FAIL verdict from ten rules (RSS slope
+and plateau, fd/thread return-to-baseline, encoders reaped, anomaly log lines,
+packet-rate decay, static suppression + wake-up, attach latency, restart
+recovery, stream integrity, resize round trip). Exit code 0 = PASS, 1 = FAIL,
+2 = harness error. Artifacts: `$OUT/soak-samples.csv` (the raw 5 s samples),
+`$OUT/soak-result.json` (rules, events, attaches, anomalies), and
+`$OUT/soak/streamer.log`.
+
+Two things to know before reading a result:
+
+- The hub's `request_keyframe` budget is 4 per connection for the life of that
+  connection, so after the fourth accepted restart a session that keeps asking
+  gets refusals. The harness counts those as a reported finding and only
+  requires that the refusal be a no-op (no reset, frames keep arriving) — it is
+  not a failure. `set_bitrate` remains an IDR lever either way.
+- A run shorter than five minutes cannot satisfy the RSS-plateau rule: Go's
+  heap is still warming up through the first minute and the resize allocates new
+  surfaces. `--minutes 2` is for smoke-testing the harness, not for a verdict.
+
+`docs/streamer-soak.md` holds a 10-minute run's numbers and the verdict.
