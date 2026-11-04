@@ -937,8 +937,12 @@ func (r *streamRun) pumpFrames(wg *sync.WaitGroup) {
 		// the one allowed to run closer, because the fMP4 muxer only closes a
 		// fragment when the next frame arrives.
 		if fedOnce {
-			minGap := interval
-			if lastFedChange && muxFlushFollowUpMs < minGap {
+			// A tenth of the interval of slack: a producer paced at exactly the
+			// encode rate jitters below it, and a strict comparison threw those
+			// frames away (1080p dropped from 25 to 17 fps against a realtime
+			// feeder). The slack still forbids the double feed this guards.
+			minGap := interval - interval/10
+			if lastFedChange && muxFlushFollowUpMs*time.Millisecond < minGap {
 				minGap = muxFlushFollowUpMs * time.Millisecond
 			}
 			if time.Since(lastFeedAt) < minGap {
