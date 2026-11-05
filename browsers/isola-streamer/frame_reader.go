@@ -68,15 +68,21 @@ func (f *Frame) IsFull() bool {
 // has started, though, all of its bytes are on their way over a local socket,
 // so a stall means a broken producer — drop it instead of pinning this reader
 // goroutine and its buffers forever.
-//
-// A var, not a const, so tests can shorten it.
-var frameReadTimeout = 5 * time.Second
+const frameReadTimeout = 5 * time.Second
 
 // frameReadChunk is the allocation granularity for a pixel payload. Ordinary
 // damage updates fit in one chunk; a full-surface refresh is read in doublings.
 const frameReadChunk = 64 << 10
 
 func readFrame(conn net.Conn) (*Frame, error) {
+	return readFrameWithin(conn, frameReadTimeout)
+}
+
+// readFrameWithin is readFrame with an explicit in-progress timeout. The
+// timeout is a parameter rather than a package variable because a variable
+// shared with a still-running listener goroutine is a data race the moment a
+// test shortens it.
+func readFrameWithin(conn net.Conn, rest time.Duration) (*Frame, error) {
 	hdr := make([]byte, 32)
 	// No deadline while waiting for a frame to begin.
 	if err := conn.SetReadDeadline(time.Time{}); err != nil {
@@ -85,7 +91,7 @@ func readFrame(conn net.Conn) (*Frame, error) {
 	if _, err := io.ReadFull(conn, hdr[:1]); err != nil {
 		return nil, err
 	}
-	if err := conn.SetReadDeadline(time.Now().Add(frameReadTimeout)); err != nil {
+	if err := conn.SetReadDeadline(time.Now().Add(rest)); err != nil {
 		return nil, err
 	}
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()

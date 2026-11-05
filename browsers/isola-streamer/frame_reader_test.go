@@ -167,10 +167,6 @@ func TestReadFramePayloadAllocationFollowsBytes(t *testing.T) {
 // the first byte of a new frame stays unbounded — an idle page sends no damage
 // for minutes — but a frame already in progress must finish.
 func TestReadFramePartialHeaderTimesOut(t *testing.T) {
-	old := frameReadTimeout
-	frameReadTimeout = 250 * time.Millisecond
-	defer func() { frameReadTimeout = old }()
-
 	server, client := net.Pipe()
 	defer server.Close()
 	defer client.Close()
@@ -181,7 +177,7 @@ func TestReadFramePartialHeaderTimesOut(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := readFrame(client)
+		_, err := readFrameWithin(client, 250*time.Millisecond)
 		done <- err
 	}()
 	select {
