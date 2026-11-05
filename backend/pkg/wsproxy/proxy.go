@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dm0xa/isola-browser/backend/pkg/orchestrator"
@@ -92,17 +93,19 @@ type Proxy struct {
 	cache         *store.MemCache
 	st            *store.Store
 	orch          *orchestrator.Orchestrator
-	activityMu    sync.Mutex
-	activity      map[string]time.Time // sessionID → last activity
+	// activity holds the sessions that produced relay traffic since the last
+	// flush. Presence is what flushActivity needs; the timestamp is only the
+	// debounce clock. sync.Map + atomic keeps the per-message path lock-free —
+	// trackActivity runs 25–50 times a second per viewer.
+	activity sync.Map // sessionID → *atomic.Int64 (unix nanos)
 }
 
 // New creates a new Proxy.
 func New(cache *store.MemCache, st *store.Store, orch *orchestrator.Orchestrator) *Proxy {
 	p := &Proxy{
-		cache:    cache,
-		st:       st,
-		orch:     orch,
-		activity: make(map[string]time.Time),
+		cache: cache,
+		st:    st,
+		orch:  orch,
 	}
 	return p
 }
@@ -139,12 +142,7 @@ func (p *Proxy) StartActivityFlusher(ctx context.Context, interval time.Duration
 }
 
 func (p *Proxy) flushActivity() {
-	p.activityMu.Lock()
-	toFlush := p.activity
-	p.activity = make(map[string]time.Time)
-	p.activityMu.Unlock()
-
-	for sid := range toFlush {
+	for _, sid := range p.drainActivity() {
 		id, err := uuid.Parse(sid)
 		if err != nil {
 			continue
@@ -155,11 +153,50 @@ func (p *Proxy) flushActivity() {
 	}
 }
 
-// trackActivity records activity for a session (debounced — caller should call often).
+// drainActivity removes and returns every session with relay activity since the
+// last drain. Deleting an entry a relay goroutine is recording at the same
+// moment is harmless: this drain has already observed that session, so the
+// update it triggers is not lost, and the next message re-creates the entry.
+func (p *Proxy) drainActivity() []string {
+	var ids []string
+	p.activity.Range(func(key, _ any) bool {
+		ids = append(ids, key.(string))
+		p.activity.Delete(key)
+		return true
+	})
+	return ids
+}
+
+// activityDebounce is how often one session's activity timestamp is refreshed.
+// trackActivity is called once per relayed message (25–50/s per viewer), while
+// the flusher runs every 10s and only needs presence, so refreshing at most
+// once a second loses nothing and keeps the relay's hot path off any lock.
+var activityDebounce = time.Second
+
+// trackActivity records activity for a session. It is debounced: a call inside
+// activityDebounce is a single atomic load and a compare, with no write and no
+// lock, so it cannot become the hot path at video frame rates.
 func (p *Proxy) trackActivity(sessionID string) {
-	p.activityMu.Lock()
-	p.activity[sessionID] = time.Now()
-	p.activityMu.Unlock()
+	if sessionID == "" {
+		return
+	}
+	now := time.Now().UnixNano()
+	if slot, ok := p.activity.Load(sessionID); ok {
+		last := slot.(*atomic.Int64)
+		if now-last.Load() < int64(activityDebounce) {
+			return
+		}
+		last.Store(now)
+		return
+	}
+	slot := new(atomic.Int64)
+	slot.Store(now)
+	if existing, loaded := p.activity.LoadOrStore(sessionID, slot); loaded {
+		last := existing.(*atomic.Int64)
+		if now-last.Load() >= int64(activityDebounce) {
+			last.Store(now)
+		}
+	}
 }
 
 // HandleWebSocket handles incoming WebSocket connections on /ws/{sessionId}.

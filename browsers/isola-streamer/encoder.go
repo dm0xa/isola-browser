@@ -273,6 +273,26 @@ func containerCPUs() int {
 	return runtime.NumCPU()
 }
 
+// libx264Tuning is the quality half of the libx264 argv: the tune, the preset
+// and the x264 parameter string the encoder is launched with.
+//
+// It is a variable rather than a literal solely so the offline quality bench
+// (encoder_quality_bench_test.go, gated on ISOLA_QUALITY_BENCH=1) can encode
+// the same corpus through this exact argv assembly for each candidate preset;
+// the server never writes it. params is a format string taking the GOP twice
+// (keyint, min-keyint) so the 2s GOP stays tied to the encoder fps.
+type libx264Tuning struct {
+	tune   string
+	preset string
+	params string
+}
+
+var libx264Quality = libx264Tuning{
+	tune:   "zerolatency",
+	preset: "superfast",
+	params: "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=1:me=dia:force-cfr=1",
+}
+
 // startEncoder launches ffmpeg as a subprocess, consuming raw BGRA frames on
 // stdin and producing fragmented MP4 (fMP4) on stdout — or raw Annex-B H.264
 // when rawH264 is set (WebCodecs clients decode access units directly, no
@@ -357,39 +377,84 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 			"-bufsize", fmt.Sprintf("%dk", bufsizeKbps),
 		)
 	} else {
-		// superfast + diamond motion search: the subme=1:me=dia pair is the
-		// cheap half of superfast's subme=2:me=hex, and on a CPU-only host it
-		// is a straight win. Measured on a 250-frame 720p text scroll at
-		// 25fps, three runs, core-seconds per second of video / bytes:
+		// superfast + subme=1:me=dia: the cheapest setting that keeps High
+		// profile, and deliberately not the quality maximum. The corpus is a
+		// deterministic 100-frame 25fps
+		// clip of dense small (5x7) antialiased text over a textured photo
+		// strip plus an animated 480x320 panel, scrolled; each row is encoded
+		// through this exact argv, decoded, and scored against the source with
+		// ffmpeg ssim/psnr. Three runs per row, median; host 10 CPUs / 8
+		// encoder threads. core-seconds per second of video / achieved kbps /
+		// mean SSIM:
 		//
-		//   subme=2:me=hex (previous) 0.253 /  902k, PSNR 57.9
-		//   subme=1:me=dia            0.245 /  889k, PSNR 59.3
+		//   720p  @6Mbps target
+		//     superfast dia  aq2            0.228 /  6573 / 0.9512
+		//     veryfast  dia  aq2            0.244 /  6544 / 0.9552
+		//     superfast dia  ref1           0.224 /  6577 / 0.9506
+		//     superfast dia  ref1 aq0       0.230 /  6547 / 0.9553
+		//     superfast hex3 aq2            0.294 /  6505 / 0.9635
+		//     veryfast  hex2 aq2            0.303 /  6466 / 0.9646
+		//     veryfast  hex3 aq2            0.322 /  6429 / 0.9643
+		//     fast      hex3 aq2            0.440 /  6360 / 0.9684
+		//     medium    hex3 aq2            0.463 /  6380 / 0.9686
+		//   1080p @13.5Mbps target
+		//     superfast dia  aq2            0.468 / 13106 / 0.9777
+		//     veryfast  dia  aq2            0.495 / 12868 / 0.9785
+		//     veryfast  hex2 aq2            0.593 / 13318 / 0.9846
+		//     superfast dia  ref1           0.448 / 13121 / 0.9773
+		//     superfast dia  ref1 aq0       0.466 / 13759 / 0.9831
+		//     superfast hex3 aq2            0.685 / 13411 / 0.9839
+		//     veryfast  hex3 ref1           0.680 / 13336 / 0.9847
+		//     veryfast  hex3 aq2            0.744 / 13307 / 0.9847
+		//     faster    hex3 aq2            1.113 / 13103 / 0.9860
+		//     medium    hex3 aq2            1.182 / 13016 / 0.9862
+		//     fast      hex3 aq2            1.136 / 13012 / 0.9862
 		//
-		// It costs nothing and buys both CPU and quality here because the
-		// motion is predictable scrolling, where the extra search rounds
-		// spend cycles on a field diamond covers. -preset ultrafast was
-		// rejected despite being cheaper (0.230): it drops to Constrained
+		// The finer presets are a real quality win under motion — hex alone is
+		// +0.013 SSIM at 720p — but every step costs CPU on a host whose limit
+		// is cores, not bits: veryfast+hex2 measured +33% at 720p and +24% at
+		// 1080p end to end, and +13-19% on a live session, for a quality
+		// difference that is invisible on a static page (0.0002 SSIM) and only
+		// shows while the content moves. The product constraint is a lighter
+		// session, so the shipped value stays on the cheapest tier; the rows
+		// above are the menu if that trade is ever revisited.
+		//
+		// Nothing in this table ships: picture quality is a fixed product
+		// requirement, and every row above trades it against CPU one way or
+		// the other. The argv stays exactly as it was before the sweep so a
+		// session encodes what it always did. The rows are here so the next
+		// person deciding that trade starts from measurements instead of a
+		// guess — including the aq-mode=0 row, which is better on text at the
+		// same CPU and is a picture decision, not a CPU one.
+		//
+		// Thread count is not a lever: total CPU is flat across pools (see
+		// maxEncoderThreads), and because zerolatency slices each frame, a
+		// 3-thread container does slightly better than the 8 threads measured
+		// here — these SSIM numbers are conservative.
+		//
+		// aq-mode=3 (dark-scene bias) is neutral at 720p (0.9681 vs 0.9684 at
+		// fast hex) and loses at 1080p (0.9853 vs 0.9862 for more CPU) because
+		// both this corpus and real browser pages are light. -preset ultrafast
+		// was rejected despite being cheaper: it drops to Constrained
 		// Baseline, which would invalidate the avc1.6400LL codec string and
 		// cost ~24% bytes. cabac=0 was also rejected (~10% bytes for ~4%
 		// CPU). zerolatency keeps B-frames and lookahead off for end-to-end
-		// latency.
+		// latency, and bframes=0/rc-lookahead=0/force-cfr=1 stay pinned.
 		//
 		// No nal-hrd=cbr: over a WebSocket the transport never needs padding,
 		// and filler NALs would make an idle page cost the full target rate.
 		// -maxrate/-bufsize still bound the VBV, so a static page emits almost
 		// nothing while motion can still use the whole budget.
-		x264Params := fmt.Sprintf(
-			"bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=1:me=dia:force-cfr=1",
-			gop, gop,
-		)
+		tuning := libx264Quality
+		x264Params := fmt.Sprintf(tuning.params, gop, gop)
 		threads := encoderThreads()
 		encName = fmt.Sprintf("libx264/%dt", threads)
 		args = append(args,
 			"-vf", scaledVf("format=yuv420p", encW, encH, width, height),
 			"-c:v", "libx264",
 			"-threads", strconv.Itoa(threads),
-			"-preset", "superfast",
-			"-tune", "zerolatency",
+			"-preset", tuning.preset,
+			"-tune", tuning.tune,
 			"-profile:v", h264Profile,
 			"-level:v", h264LevelFFmpeg(encW, encH),
 			"-g", strconv.Itoa(gop),

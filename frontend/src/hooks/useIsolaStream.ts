@@ -25,7 +25,13 @@ import {
   playoutMetricsPatch,
   type PlayoutMetrics,
 } from './isola/msePlayout';
-import { createWcDecoder as buildWcDecoder, setupWebCodecsVideoPath } from './isola/webCodecsVideoPath';
+import {
+  applyWcStreamInit,
+  createWcAccessUnitSink,
+  createWcDecoder as buildWcDecoder,
+  resetWcDecoder,
+  setupWebCodecsVideoPath,
+} from './isola/webCodecsVideoPath';
 import { isPlaceholderUrl, seedForActiveTab, shouldCarryUrlEdit } from './isola/addressBar';
 import type { IsolaStreamMetrics } from './isola/streamMetrics';
 import {
@@ -280,17 +286,129 @@ export interface FrameCounters {
   sequenceNumber: number;
   /** Running total of IDR packets received this view. */
   keyframeCount: number;
+  /**
+   * Sequence number of the previous packet in the current encoder run, or
+   * null before the first packet and after a run change. A gap is only
+   * meaningful relative to this baseline: `seq === lastSeq + 1` is in order.
+   */
+  lastSeq: number | null;
+  /** Missing packets accumulated in the current loss burst (since the last
+   *  IDR or run reset). Drives the one-shot keyframe request. */
+  burstLost: number;
+  /** True once the current burst has already spent its keyframe request, so a
+   *  long gap fires recovery exactly once instead of once per packet. */
+  burstRequested: boolean;
+  /** Cumulative packets counted missing this view (survives a run reset). */
+  packetsLost: number;
+  /** Cumulative packets accepted on the wire this view, including reordered
+   *  and duplicate ones — they were received, just not in sequence. */
+  packetsReceived: number;
 }
 
 export function createFrameCounters(): FrameCounters {
-  return { sequenceNumber: 0, keyframeCount: 0 };
+  return {
+    sequenceNumber: 0,
+    keyframeCount: 0,
+    lastSeq: null,
+    burstLost: 0,
+    burstRequested: false,
+    packetsLost: 0,
+    packetsReceived: 0,
+  };
 }
 
-/** Record one streamed packet: advance the sequence number and, for a keyframe,
- *  the IDR total. */
-export function noteStreamedPacket(counters: FrameCounters, seq: number, isKeyframe: boolean): void {
+/** Consecutive missing packets in one burst that justify a keyframe request.
+ *  One or two dropped delta frames heal on the next P-frame; five means the
+ *  streamer shed a real slice of the GOP (mailbox overflow) and every frame
+ *  until the next IDR is undecodable. */
+export const LOSS_BURST_PACKETS = 5;
+
+/** What one packet's gap arithmetic implies for the caller. */
+export interface PacketLossNotice {
+  /** Packets this packet revealed as missing (0 when in order or on reset). */
+  lost: number;
+  /** True exactly once per burst: the caller should kick keyframe recovery. */
+  requestKeyframe: boolean;
+}
+
+/** Record one streamed packet: advance the sequence number, count IDRs, and
+ *  account for gaps. Gaps come from `seq` (uint32 LE at header offset 2),
+ *  which restarts with every encoder run, so a backward or duplicate number
+ *  means the run changed — the baseline resets rather than a bogus gigantic
+ *  gap being counted. Mutates in place; the caller keeps it in a ref. */
+export function noteStreamedPacket(
+  counters: FrameCounters,
+  seq: number,
+  isKeyframe: boolean,
+): PacketLossNotice {
+  const notice: PacketLossNotice = { lost: 0, requestKeyframe: false };
   counters.sequenceNumber = seq;
+  counters.packetsReceived += 1;
   if (isKeyframe) counters.keyframeCount += 1;
+  const last = counters.lastSeq;
+  if (last !== null && seq > last + 1) {
+    const missing = seq - (last + 1);
+    counters.packetsLost += missing;
+    counters.burstLost += missing;
+    notice.lost = missing;
+    // Only a non-keyframe packet can leave the decoder waiting: an IDR resyncs
+    // it, so the burst ends below instead of firing a request.
+    if (!isKeyframe && counters.burstLost >= LOSS_BURST_PACKETS && !counters.burstRequested) {
+      counters.burstRequested = true;
+      notice.requestKeyframe = true;
+    }
+  }
+  // Backward/duplicate seq (seq <= last) and a simple in-order step both
+  // simply move the baseline forward.
+  counters.lastSeq = seq;
+  if (isKeyframe) {
+    // An IDR resyncs the decoder, which ends any burst in progress: whatever
+    // was lost before it no longer needs recovery, and the next gap starts a
+    // fresh burst with its own request budget.
+    counters.burstLost = 0;
+    counters.burstRequested = false;
+  }
+  return notice;
+}
+
+/** Drop the gap baseline and burst state. `stream_init`/`stream_reset` mean a
+ *  replacement encoder run whose seq restarts at 0; carrying the old baseline
+ *  across would count the entire old run as lost. Cumulative totals stay: they
+ *  describe the whole view, not one run. */
+export function resetPacketLoss(counters: FrameCounters): void {
+  counters.lastSeq = null;
+  counters.burstLost = 0;
+  counters.burstRequested = false;
+}
+
+/** Per-view cumulative totals last sampled by the 1 Hz metrics tick. The ratio
+ *  is windowed over this delta, never per frame, and never cumulative. */
+export interface PacketLossWindow {
+  lost: number;
+  received: number;
+}
+
+export function createPacketLossWindow(): PacketLossWindow {
+  return { lost: 0, received: 0 };
+}
+
+/** Publish packet-loss numbers at 1 Hz. Returns the cumulative `packetsLost`
+ *  and `packetLossRatio = lost / (lost + received)` for the packets seen since
+ *  the previous call; 0 when the window saw none, and clamped to [0, 1] against
+ *  counter resets. Mutates `win` in place. */
+export function samplePacketLoss(
+  counters: FrameCounters,
+  win: PacketLossWindow,
+): { packetsLost: number; packetLossRatio: number } {
+  const lost = Math.max(0, counters.packetsLost - win.lost);
+  const received = Math.max(0, counters.packetsReceived - win.received);
+  win.lost = counters.packetsLost;
+  win.received = counters.packetsReceived;
+  const total = lost + received;
+  return {
+    packetsLost: counters.packetsLost,
+    packetLossRatio: total > 0 ? lost / total : 0,
+  };
 }
 
 /** The metrics fields the 1 Hz tick publishes from the frame counters. */
@@ -325,6 +443,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     recentFps: 0,
     sequenceNumber: 0,
     keyframeCount: 0,
+    packetsLost: 0,
+    packetLossRatio: 0,
+    serverDropped: 0,
     wsState: WebSocket.CLOSED,
     inputBackend: '',
     inputTarget: '',
@@ -355,6 +476,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     abrLevel: 0,
     decodeErrorCount: 0,
     lastRecoveryMs: null,
+    decodeBacklogMs: 0,
+    decodeDroppedFrames: 0,
+    decodeCatchUps: 0,
     encodeScale: 0,
     staticSecs: 0,
     skippedTicks: 0,
@@ -413,6 +537,10 @@ export function useIsolaStream(defaultTargetUrl?: string) {
   // Frame-rate counters live in a ref, not React state; the 1 Hz metrics tick
   // publishes them via frameMetricsPatch. See FrameCounters above.
   const frameCountersRef = useRef<FrameCounters>(createFrameCounters());
+  // Cumulative totals the last 1 Hz tick published; the windowed loss ratio is
+  // this tick's delta, so a burst shows up for one tick instead of decaying
+  // forever in a lifetime average.
+  const lossWindowRef = useRef<PacketLossWindow>(createPacketLossWindow());
   const tabbarRef = useRef<HTMLDivElement | null>(null);
   // When set, the tab strip is hosted here instead of inside the capture
   // container. The viewer uses this in fullscreen to fold the browser chrome
@@ -1539,6 +1667,21 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       }, KEYFRAME_REQUEST_TIMEOUT_MS);
     }
 
+    // notePacket is every binary packet's entry to the frame counters. A
+    // sequence gap can only be the streamer shedding packets for this viewer
+    // (TCP), and the decoder cannot resync without an IDR, so a burst of
+    // >= LOSS_BURST_PACKETS missing packets routes into the same recovery path
+    // the decode-error and watchdog cases use: beginRecovery arms the shared
+    // watchdog, requestKeyframeNow spends the shared MAX_KEYFRAME_REQUESTS
+    // budget and reconnects once it is exhausted. The counters fire the notice
+    // once per burst, so a long gap cannot chase the budget on every packet.
+    function notePacket(seq: number, isKeyframe: boolean) {
+      const loss = noteStreamedPacket(frameCountersRef.current, seq, isKeyframe);
+      if (!loss.requestKeyframe) return;
+      beginRecovery();
+      requestKeyframeNow();
+    }
+
     const wcPathRefs = {
       lastWcConfigRef,
       canvasRef,
@@ -1557,6 +1700,38 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       pendingSegmentsRef,
       videoRef,
     };
+    function noteDecodeError(e: unknown) {
+      console.error('[isola-wc] decode error:', e);
+      decodeErrorCountRef.current++;
+      keyframeSeenRef.current = false; // out of sync until the next IDR
+      beginRecovery();
+      requestKeyframeNow();
+      setMetrics((m) => ({ ...m, decodeErrorCount: decodeErrorCountRef.current }));
+    }
+
+    // Bounded decode admission for the Annex-B path. Without it every access
+    // unit went into VideoDecoder.decode() and a burst (or a throttled tab)
+    // left the past queued in front of the live picture; the sink measures
+    // that queue and skips to the next IDR once it exceeds
+    // MAX_DECODE_BACKLOG_MS. Its stats are published by the 1 Hz tick.
+    const auSink = createWcAccessUnitSink({
+      getDecoder: () => decoderRef.current,
+      getChunkCtor: () => wcChunkCtorRef.current,
+      frameStepUs: () => frameStepUsRef.current,
+      tsUs: tsUsRef,
+      isKeyframeSeen: () => keyframeSeenRef.current,
+      setKeyframeSeen: (v: boolean) => { keyframeSeenRef.current = v; },
+      onSkipAhead: () => {
+        // Abandon what the decoder still has queued (reset leaves it
+        // unconfigured, so it must be reconfigured in the same breath) and ask
+        // for a fresh IDR so the wait is an encoder restart, not a whole GOP.
+        resetWcDecoder(decoderRef.current, lastWcConfigRef.current);
+        beginRecovery();
+        requestKeyframeNow();
+      },
+      onDecodeError: noteDecodeError,
+    });
+
     const wcPathCallbacks = {
       setFirstFrame,
       setMetrics,
@@ -1566,6 +1741,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       letterboxBg: CAPTURE_LETTERBOX_BG[themeRef.current],
       onVideoRemoved: () => { currentCaptureVideo = null; },
       onCanvasMounted: (canvas: HTMLCanvasElement) => { currentCaptureCanvas = canvas; },
+      onFramePainted: () => auSink.notePainted(),
     };
 
     function createWcDecoder(): WCDecoder | null {
@@ -1630,16 +1806,27 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         const fps = wcFramesRef.current;
         wcFramesRef.current = 0;
         const canvas = canvasRef.current;
+        // Decode-queue state as of this tick: the presentation delay the
+        // Annex-B path is carrying and how much the backlog policy threw away
+        // to keep it bounded (see MAX_DECODE_BACKLOG_MS).
+        const wcStats = auSink.stats();
         setMetrics((m) => ({
           ...m,
           recentFps: fps,
           videoWidth: canvas ? canvas.width : m.videoWidth,
           videoHeight: canvas ? canvas.height : m.videoHeight,
+          decodeBacklogMs: wcStats.backlogMs,
+          decodeDroppedFrames: wcStats.droppedFrames,
+          decodeCatchUps: wcStats.catchUps,
         }));
       }
       const lastSegmentAgeMs = lastSegmentAtRef.current > 0
         ? Math.round(now - lastSegmentAtRef.current)
         : -1;
+      // Packet loss, windowed to the packets this published tick covers (see
+      // samplePacketLoss). Sampled after the first-tick early return above so
+      // the window and the publication interval always match.
+      const packetLoss = samplePacketLoss(frameCountersRef.current, lossWindowRef.current);
 
       // ── Network quality estimation + ABR controller (1 Hz, ref state
       // only so it never re-renders). While paused (just after a stream
@@ -1677,6 +1864,8 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         // Frame-rate counters and decode-recovery state are published here, at
         // 1 Hz, instead of on every frame/segment.
         ...frameMetricsPatch(frameCountersRef.current),
+        packetsLost: packetLoss.packetsLost,
+        packetLossRatio: packetLoss.packetLossRatio,
         // MSE playout state (ref) — skipped in WebCodecs mode, where the canvas
         // block above publishes the decoded geometry instead.
         ...(wcModeRef.current ? {} : playoutMetricsPatch(playoutRef.current)),
@@ -1727,17 +1916,23 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         const msg = JSON.parse(ev.data);
         switch (msg.type) {
           case 'stream_init':
+            // A new encoder run restarts seq at 0; keeping the old baseline
+            // would report the whole previous run as lost.
+            resetPacketLoss(frameCountersRef.current);
             if (wcModeRef.current && msg.mode === 'webcodecs') {
-              // Rebuild canvas+decoder only when geometry actually changed:
-              // an ABR bitrate restart keeps codec/dimensions identical, and
-              // a rebuild would blank the canvas until the next frame.
-              // stream_reset already reset the decoder — it just waits for
-              // the fresh IDR that the new encoder emits first.
-              const cv = canvasRef.current;
-              const sameGeometry = !!cv
-                && typeof msg.width === 'number' && cv.width === msg.width
-                && typeof msg.height === 'number' && cv.height === msg.height;
-              if (!sameGeometry && !setupWebCodecs(msg)) {
+              // An ABR bitrate step is stream_reset + stream_init with the same
+              // codec and geometry; the stream_reset path already dropped and
+              // reconfigured the decoder, so there is nothing to rebuild. Only
+              // the very first init (no canvas/decoder yet) tears anything
+              // down — applyWcStreamInit resizes and reconfigures in place.
+              const firstEntry = !canvasRef.current || !decoderRef.current;
+              const ok = firstEntry ? setupWebCodecs(msg) : applyWcStreamInit(
+                msg,
+                container,
+                wcPathRefs,
+                wcPathCallbacks,
+              );
+              if (!ok) {
                 setError('WebCodecs H.264 decode unavailable in this browser');
                 setReconnecting(false);
               }
@@ -1806,6 +2001,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
             break;
           case 'stream_reset':
             console.log('[isola] stream reset:', msg.reason);
+            // The replacement run's seq starts over; the old baseline is not
+            // comparable to it.
+            resetPacketLoss(frameCountersRef.current);
             {
               // The restart itself isn't degradation: pause the estimator
               // for a beat so the encoder spin-up gap isn't read as a stall.
@@ -1815,9 +2013,13 @@ export function useIsolaStream(defaultTargetUrl?: string) {
               a.goodSecs = 0;
             }
             if (wcModeRef.current) {
-              // Encoder restarted (resize/ABR): drop decoder state, the
-              // next IDR re-initializes it. ts restarts with the new stream.
-              try { decoderRef.current?.reset(); } catch { /* ignore */ }
+              // Encoder restarted (resize/ABR): abandon its queued frames but
+              // keep the decoder object. VideoDecoder.reset() leaves the state
+              // "unconfigured" — a bare reset made every later decode() a
+              // no-op, so an ABR step froze the picture for good — so
+              // resetWcDecoder re-arms the same decoder for the next run.
+              resetWcDecoder(decoderRef.current, lastWcConfigRef.current);
+              auSink.resetForNewRun();
               keyframeSeenRef.current = false;
               tsUsRef.current = 0;
               beginRecovery(true); // full window for the replacement encoder's IDR
@@ -1898,6 +2100,10 @@ export function useIsolaStream(defaultTargetUrl?: string) {
               captureLastSentMs: typeof msg.capture_last_sent_ms === 'number' ? msg.capture_last_sent_ms : m.captureLastSentMs,
               captureSentFrames: typeof msg.capture_sent_frames === 'number' ? msg.capture_sent_frames : m.captureSentFrames,
               captureDedupFrames: typeof msg.capture_dedup_frames === 'number' ? msg.capture_dedup_frames : m.captureDedupFrames,
+              // Packet-shed counter from newer streamers. Absent on older
+              // servers, where the client's own seq-gap accounting is the only
+              // evidence of loss — keep the last value rather than zeroing it.
+              serverDropped: typeof msg.dropped === 'number' ? msg.dropped : m.serverDropped,
             }));
             if (typeof msg.bitrate_kbps === 'number') {
               targetKbpsRef.current = msg.bitrate_kbps;
@@ -1926,54 +2132,38 @@ export function useIsolaStream(defaultTargetUrl?: string) {
 
       if (bytes[0] === 0x02 && wcModeRef.current) {
         // Access unit: H.264 deltas depend on their reference chain, so
-        // decode everything in order — the decoder is far faster than the
-        // wire at these bitrates. Timestamps are synthetic CFR ticks.
-        let decoder = decoderRef.current;
-        const ChunkCtor = wcChunkCtorRef.current;
-        if (!ChunkCtor) return;
-        if (decoder && decoder.state === 'closed') {
+        // in-order delivery is mandatory — but the queue is bounded. The sink
+        // drops the backlog once it exceeds MAX_DECODE_BACKLOG_MS and resumes
+        // on the next IDR instead of replaying it. Timestamps are synthetic
+        // CFR ticks.
+        if (decoderRef.current && decoderRef.current.state === 'closed') {
           // A fatal decode error closes the VideoDecoder, and nothing else
           // rebuilt it — every packet was silently dropped from then on and
           // the picture froze for good. Re-create it from the last negotiated
           // config; deltas are ignored below until the next IDR re-syncs.
           console.warn('[isola-wc] decoder closed — rebuilding');
-          decoder = createWcDecoder();
+          createWcDecoder();
+          auSink.resetForNewRun();
         }
-        if (!decoder || decoder.state !== 'configured') return;
-        if (!keyframeSeenRef.current) {
-          if (!isKeyframe) return; // join mid-GOP: wait for an IDR
-          keyframeSeenRef.current = true;
-          tsUsRef.current = 0;
-          // Recovery complete: a usable IDR landed; record how long it took.
-          const recoveryStart = recoveryStartedAtRef.current;
-          if (recoveryStart !== null) {
-            lastRecoveryMsRef.current = Math.round(performance.now() - recoveryStart);
-            recoveryStartedAtRef.current = null;
-            recoveryRequestedRef.current = false;
-            recoveryRequestsRef.current = 0;
-            if (keyframeRequestTimerRef.current !== null) {
-              clearTimeout(keyframeRequestTimerRef.current);
-              keyframeRequestTimerRef.current = null;
+        const outcome = auSink.push(isKeyframe, bytes.subarray(10));
+        if (outcome === 'resynced' || outcome === 'decoded') {
+          if (outcome === 'resynced') {
+            // Recovery complete: a usable IDR landed; record how long it took.
+            const recoveryStart = recoveryStartedAtRef.current;
+            if (recoveryStart !== null) {
+              lastRecoveryMsRef.current = Math.round(performance.now() - recoveryStart);
+              recoveryStartedAtRef.current = null;
+              recoveryRequestedRef.current = false;
+              recoveryRequestsRef.current = 0;
+              if (keyframeRequestTimerRef.current !== null) {
+                clearTimeout(keyframeRequestTimerRef.current);
+                keyframeRequestTimerRef.current = null;
+              }
             }
           }
-        }
-        try {
-          decoder.decode(new ChunkCtor({
-            type: isKeyframe ? 'key' : 'delta',
-            timestamp: tsUsRef.current,
-            data: bytes.subarray(10),
-          }));
-          tsUsRef.current += frameStepUsRef.current;
           // Ref only — a per-frame setMetrics re-rendered the whole viewer at
           // the decode rate. The 1 Hz metrics tick publishes these.
-          noteStreamedPacket(frameCountersRef.current, seq, isKeyframe);
-        } catch (e) {
-          console.error('[isola-wc] decode error:', e);
-          decodeErrorCountRef.current++;
-          keyframeSeenRef.current = false; // out of sync until the next IDR
-          beginRecovery();
-          requestKeyframeNow();
-          setMetrics((m) => ({ ...m, decodeErrorCount: decodeErrorCountRef.current }));
+          notePacket(seq, isKeyframe);
         }
         return;
       }
@@ -1982,7 +2172,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         segmentsThisSecondRef.current++;
         appendSegment(buf.slice(10));
         // Ref only — published by the 1 Hz metrics tick, not per segment.
-        noteStreamedPacket(frameCountersRef.current, seq, isKeyframe);
+        notePacket(seq, isKeyframe);
         return;
       }
 

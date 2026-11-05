@@ -45,6 +45,9 @@ function metrics(overrides: Partial<IsolaStreamMetrics> = {}): IsolaStreamMetric
     abrLevel: 0,
     decodeErrorCount: 0,
     lastRecoveryMs: null,
+    decodeBacklogMs: 0,
+    decodeDroppedFrames: 0,
+    decodeCatchUps: 0,
     encodeScale: 1,
     staticSecs: 0,
     skippedTicks: 0,
@@ -67,6 +70,9 @@ function metrics(overrides: Partial<IsolaStreamMetrics> = {}): IsolaStreamMetric
     captureLastSentMs: 10,
     captureSentFrames: 100,
     captureDedupFrames: 5,
+    packetsLost: 0,
+    packetLossRatio: 0,
+    serverDropped: 0,
     ...overrides,
   };
 }

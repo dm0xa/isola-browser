@@ -20,7 +20,7 @@ Isola keeps the parts that matter for a **hosted Chromium**: damage-rect capture
 What that buys in practice:
 
 - **Same origin as the UI and the API** — Video is `/ws/{sessionId}` on port 8080. No extra media port, no TURN credential, no VNC password.
-- **One encoder per quality, not per viewer** — A share-link watcher attaches to the run that already exists.
+- **One encoder per quality, not per viewer** — A share-link watcher attaches to the run that already exists, and a session runs at most two runs, so N viewers on N ABR rungs cost two encoders rather than N.
 - **Decode in the browser that already has WebCodecs** — Annex-B access units go to `VideoDecoder` → canvas. MSE/fMP4 is only the fallback.
 - **Clicks land in the frame that painted them** — including cross-origin embeds (a video embed inside another page), because input is CDP on the iframe target — not a synthetic X click on a compositor.
 
@@ -43,11 +43,13 @@ viewer  ── WebCodecs (Annex-B) or MSE (fMP4)
 
 One container serves one session. `isola-streamer` keeps **one ffmpeg process per (bitrate, scale, decode mode)** and fans that bitstream out to every viewer on that run. A share-link watcher therefore does not start a second encoder.
 
+At most **two** encoder runs are live per session (`maxConcurrentRuns` in `stream_hub.go`). The ABR ladder gives one viewer four configurations, so three viewers stepping it differently used to mean three libx264 processes in a three-CPU container — three times the encode cost plus capture, compose and mux, which starves the frame pump and turns an adaptive step into a stall. Two runs is what a host and one share watcher need on different rungs; a third configuration shares a live run instead of starting a third encoder. Runs are never shared across decode modes or capture geometries: a viewer whose container format or geometry matches no live run gets its own encoder regardless of the cap, because the alternative is a picture it cannot decode.
+
 Inside the container the capture never leaves the box: Electron writes damage rectangles on `/run/isola/frame.sock` (`ISOL` magic). The streamer composites them and feeds ffmpeg. That socket is not reachable from the host or the viewer. Streamer `:5900` is published to loopback only; the relay is the only client.
 
 ### Capture (`ISOL`)
 
-The producer does not ship a full BGRA surface every tick. Each frame is a 32-byte header (`ISOL` magic, surface size and stride, dirty-rect count, and a `ts_ns` timestamp) plus the damaged rectangles and their pixels. `ts_ns` is wall-clock UTC nanoseconds (`CLOCK_REALTIME`), so a consumer can subtract its own clock to get a buffer delay; the field is carried for that reason and is not yet read by the streamer. A blinking caret is a few kilobytes; a 1440p full frame would be ~15 MB. A single rect that covers the whole surface is a full refresh and can seed the compositor from scratch.
+The producer does not ship a full BGRA surface every tick. Each frame is a 32-byte header (`ISOL` magic, surface size and stride, dirty-rect count, and a `ts_ns` timestamp) plus the damaged rectangles and their pixels. `ts_ns` is wall-clock UTC nanoseconds (`CLOCK_REALTIME`), so a consumer can subtract its own clock to get a buffer delay; the streamer parses it into the frame's timestamp, but nothing downstream uses it — the encoder is fed `-f rawvideo`, which carries no PTS, so ffmpeg synthesises CFR from the capture rate. A blinking caret is a few kilobytes; a 1440p full frame would be ~15 MB. A single rect that covers the whole surface is a full refresh and can seed the compositor from scratch. The streamer treats that socket as untrusted: the surface is capped at 8192 per side, stride must be between `width*4` and `8192*4`, the damaged area may not exceed the surface, and a frame that starts but stops arriving is dropped after 5 s (an idle producer that sends nothing at all stays connected).
 
 The encode loop skips ticks while the surface is unchanged, but never for longer than `ISOLA_STATIC_KEEPALIVE_MS` (default 2 s, `0` disables). Idle pages stay cheap without looking like a stall. On the MSE path a quiet change also gets a 40 ms follow-up frame so the fMP4 muxer can close the fragment — otherwise a single edit would sit unflushed until keepalive.
 
@@ -75,6 +77,28 @@ Control and video share that mailbox: `stream_reset` cannot overtake the last fr
 | Input | `channel=input` | JSON mouse, keys, clipboard, tabs. |
 
 They are separate so a large video write cannot stall a click. Auth and the `host=1` flag are in [API → WebSocket](api.md#websocket).
+
+### Relay lifecycle and limits
+
+The Go relay is the only hop between a viewer and a container, and it owns the
+teardown of both sockets. The rules below are enforced in
+`backend/pkg/wsproxy/duplex.go`:
+
+| Guard | Value | Why |
+| :--- | :--- | :--- |
+| Write deadline, both directions | 30 s per message | A viewer or container that stops reading must not pin a relay goroutine (and with it the other socket) forever. The streamer already applies 10 s per write. |
+| Container read deadline | 90 s between messages | A container that stops producing frames is torn down rather than holding the viewer open. |
+| Client read limit | 12 MiB per message | Input and control are small JSON; an unbounded client message is a DoS. |
+| Container read limit | 32 MiB per message | The streamer sends one message per packet, so the largest legitimate message is a single keyframe (well under 1 MiB at 1080p). 32 MiB is an order of magnitude of headroom — a tighter limit would break video, a looser one would bound nothing. |
+| Container control (TEXT) limit | 1 MiB per message | Control/status JSON does not scale with the picture, so it is bounded separately and tightly even though video cannot be. |
+| Client read deadline | none | An idle viewer legitimately sends nothing for minutes. Liveness is the 30 s ping, whose control write has its own 10 s deadline. |
+
+Closing is symmetric: whichever of the three goroutines exits first (viewer
+gone, container gone, keepalive write failed) closes **both** sockets and the
+`done` channel exactly once, so `wg.Wait` cannot return with a socket still
+open and a dead viewer cannot leave a container subscription alive. Teardown is
+safe mid-frame — closing a socket under an open writer makes the in-flight
+flush return an error rather than panic.
 
 ### Analysis side channel (server → client)
 
@@ -117,6 +141,10 @@ Set `binaryType = 'arraybuffer'` on the socket. Ignore unknown markers.
 
 **WebCodecs (`0x02`).** Payload is one H.264 access unit in Annex-B (`avc1.6400LL` / High profile in current builds). SPS/PPS ride in-band before each IDR. Feed `EncodedVideoChunk` with `type: 'key'` when flag bit 0 is set. Draw onto a canvas.
 
+`VideoDecoder.decode()` is fire-and-forget, so the queue is the presentation delay: after a burst or a throttled tab every access unit is still decoded in order and the viewer replays the past. The bundled viewer therefore bounds that queue (250 ms of stream time, `MAX_DECODE_BACKLOG_MS`): when it is exceeded it abandons the decoder queue, asks for a keyframe, and resumes on the next IDR — the current picture — refusing deltas in between. Its state is published at 1 Hz in the viewer's metrics (`decodeBacklogMs`, `decodeDroppedFrames`, `decodeCatchUps` in `IsolaStreamMetrics`).
+
+Two lifecycle rules follow from WebCodecs itself. `VideoDecoder.reset()` leaves the decoder **unconfigured**, not "configured": a client that resets on `stream_reset` must `configure()` again or every later `decode()` throws. And `stream_reset` + `stream_init` with an unchanged codec string needs neither a new decoder nor a new canvas — the canvas is resized in place, so an ABR step costs no decoder allocation and does not blank the picture.
+
 **MSE (`0x01`).** Payload is an fMP4 fragment. The first segment after `stream_init` is an init segment; later ones are media. Use this only when WebCodecs is unavailable.
 
 **Audio (`0x03`).** Raw Opus packets (20 ms), forwarded only while the session has audio enabled (`POST /api/sessions/{id}/audio`). Decode with `AudioDecoder` into an `AudioContext`. Audio shares the video socket; it is not a third channel.
@@ -150,23 +178,51 @@ First message after attach, and again after every encoder restart:
 
 Sent immediately before a new `stream_init` when the encoder run is replaced (bitrate change, keyframe request, resize). Tear down `VideoDecoder` / `SourceBuffer` and wait for the following init.
 
+A reset always has an init behind it. The matching local control surface is `POST /resize?width=&height=` on the streamer port (the backend calls it for `POST /api/sessions/{id}/resize`); like `/navigate` it refuses any method but `POST` with `405`, so a stray `GET` — a prefetch, a link preview, an `<img>` tag — cannot re-key every viewer's encoder.
+
+### `stream_error` (server → client)
+
+The last message on the socket when the streamer could not start an encoder for this viewer at all — ffmpeg missing from the image, a process or memory limit, a container out of slots:
+
+```json
+{ "type": "stream_error", "reason": "encoder_error", "retryable": true }
+```
+
+It is **not** a `stream_reset`: no `stream_init` follows, no video will arrive on this socket, and the streamer closes it immediately with application close code `4001`. The distinction is the whole point — a client that treats every reset as "wait for the next init" waits forever, and a bare TCP close is indistinguishable from a network drop.
+
+What a client should do: stop decoding, surface an error, and reconnect the **socket** with backoff (a few attempts seconds apart, never a tight loop). `retryable: true` means the failure was the encoder, not the session, so a reconnect can succeed once transient pressure clears; if every attempt fails the session is unusable and needs replacing. Behind the relay the close code does not survive the hop — the relay copies messages, not close frames — so branch on `stream_error`, not on the close code.
+
 ### `metrics` (server → client)
 
 A periodic snapshot of capture, encode, and renderer health. The bundled debug overlay renders it; custom clients can ignore it. Useful fields for a frozen picture: `changes_per_sec`, `damaged_pct`, `capture_empty_window`, `capture_fallback`, `renderer_stalled`, `cdp_probe_fail_streak`.
+
+Three cumulative, per-viewer counters say what this socket could not use — each viewer is metered on its own, so a counter that rises points at that one viewer, never at the encoder:
+
+| Field | Meaning | What to read into it |
+| :--- | :--- | :--- |
+| `drop_overflow` | Packets shed because this viewer's mailbox was full. | The socket is not draining at the encode rate: the viewer is too slow, or the path to it is. Everything until the next IDR is undecodable for it. |
+| `drop_awaiting_key` | Packets shed because the viewer had no picture yet and they were deltas whose references it never received (the poster wait after joining, or after a resync). | Expected for the first GOP of any late join, and it stops on its own when the first IDR lands. A number that keeps climbing means no IDR is arriving — a different problem. |
+| `dropped` | `drop_overflow + drop_awaiting_key`. | The compatible total, kept so a single-number reader keeps its meaning. |
+
+A rising `dropped` with a healthy `encode_fps` means this viewer is falling behind — but check which half moved before blaming the network: `drop_awaiting_key` on a viewer that joined 100 ms ago is the poster, `drop_overflow` on a long-lived one is the socket. Older streamers omit all three, and clients must tolerate that. Fields may be added; ignore the ones you do not know.
+
+### Packet sequence and loss
+
+Each binary packet carries a per-run `seq` (`uint32` LE at header offset 2) that restarts at 0 with every encoder run. Over TCP a gap is therefore not network loss: it is the streamer shedding packets for this viewer, and everything until the next IDR is undecodable. The client counts `seq > last + 1` as missing, treats a backward/duplicate `seq` as a run change (baseline reset, nothing counted), and ignores all of it across `stream_init`/`stream_reset`. Progressive missing counts are not worth a restart — one or two dropped delta frames heal on the next P-frame — but a burst of 5 missing packets is: the viewer then sends `request_keyframe` through its normal keyframe-recovery budget (one request per burst), exactly as it does after a decode error.
 
 ### Client → server (video socket)
 
 | Message | Effect |
 | :--- | :--- |
 | `{"type":"ping","ts":…}` | Echoed as `{"type":"pong","ts":…}` for RTT. `ts` is passed through verbatim. |
-| `{"type":"set_bitrate","kbps":N}` | Move this viewer onto an encoder run at `N` kbps (clamped to `base_bitrate`). Other viewers of the old run are reset with it. |
-| `{"type":"request_keyframe"}` | Replace the current run so a late joiner or a dropped decoder gets an IDR. |
+| `{"type":"set_bitrate","kbps":N}` | Move **this** viewer onto an encoder run at `N` kbps (clamped to `base_bitrate`). Other viewers keep the run they are on; the previous run stops when its last viewer leaves it. When two runs are already live the viewer may land on a different rung than it asked for — the most expensive live run at or below `N`, else the cheapest one — and learns the real rung from the `stream_init` and metrics that follow (`bitrate_kbps`, encoded `width`/`height`), never from its own request. |
+| `{"type":"request_keyframe"}` | Replace the current run so a late joiner or a dropped decoder gets an IDR. Budgeted per connection: while the viewer still has no picture it may retry the restart three times, spaced by the hub-wide 5 s cooldown; once it has a picture it gets one forced restart per 30 s, four per connection. A refused request is ignored silently. Every viewer of that run is reset with it. |
 
-The relay forwards `ping` and `request_keyframe` even on view-only sockets. Pointer and key events belong on `channel=input` with `host=1`.
+The relay forwards `ping` and `request_keyframe` even on view-only sockets. Pointer and key events belong on `channel=input` with `host=1`. A view-only connection may forward one `request_keyframe` per 30 s — the relay drops the rest and logs them — because each request restarts the shared encoder for the session owner too. `ping` is not limited.
 
 ## Adaptive Quality
 
-The viewer measures RTT (`ping`/`pong`), inbound bytes, and decode health, then sends `set_bitrate`. The streamer does not pick the rung itself — it starts a run at the requested kbps (and may reduce encode scale with the bitrate). Capture coordinates stay at `capture_width` / `capture_height` even when the encoded surface is smaller, so clicks do not drift when ABR steps down. Resolution-aware defaults apply when the session is created without an override. See [Configuration](configuration.md) for `session.resolution` and bitrate-related env.
+The viewer measures RTT (`ping`/`pong`), inbound bytes, and decode health, then sends `set_bitrate`. The streamer does not pick the rung itself — it starts a run at the requested kbps (and may reduce encode scale with the bitrate), subject to the two-run cap above. A viewer that lands on another rung is not left guessing: the `stream_reset` + `stream_init` pair and every metrics tick carry the run it actually joined, so the controller's `targetKbps` is the real encoder target rather than the request. A viewer alone in its session always gets exactly the rung it asked for, because the run it steps off is its own and is stopped as part of the step. Capture coordinates stay at `capture_width` / `capture_height` even when the encoded surface is smaller, so clicks do not drift when ABR steps down. Resolution-aware defaults apply when the session is created without an override. See [Configuration](configuration.md) for `session.resolution` and bitrate-related env.
 
 ## Input That Matches the Picture
 
@@ -217,8 +273,9 @@ ISOLA_FPS_E2E=1 go test -run TestViewerFrameRateOnRealSite -v ./browsers/isola-s
 3. Wait for `stream_init`, configure the decoder from `codec` / `width` / `height`.
 4. Decode `0x02` (or `0x01`) packets; map clicks using `capture_width` / `capture_height`.
 5. Open `channel=input&host=1` for JSON input. Do not send input on the video socket — the streamer will accept some types there as a fallback, but they head-of-line behind video.
-6. On `stream_reset`, dispose the decoder and wait for the next `stream_init`.
+6. On `stream_reset`, dispose the decoder and wait for the next `stream_init`. If `stream_error` arrives instead, no init will follow and the socket is closing — surface it and reconnect with backoff (the section above is the contract).
 7. If the decoder errors, send `request_keyframe` rather than reconnecting the whole session.
+8. Closing the socket ends the viewer: the streamer releases the subscription whether the close handshake completed or not, and stops the encoder run once its last viewer is gone. Abandoning a socket without closing it costs a dead subscription until the server's 10 s write deadline fires, so do close it.
 
 The origin check on the upgrade requires a browser `Origin` that matches the request host (localhost origins only when the request itself is local). A non-browser client that strips `Origin` is refused — see [Security](security.md).
 

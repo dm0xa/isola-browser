@@ -6,6 +6,20 @@ export interface IsolaStreamMetrics {
   recentFps: number;
   sequenceNumber: number;
   keyframeCount: number;
+  // Packet loss off the wire's per-run uint32 sequence number (header offset
+  // 2). The socket is TCP, so a gap is not network loss: it is the streamer
+  // shedding packets for this viewer (mailbox overflow), and the picture
+  // cannot resync until a fresh IDR arrives. `packetsLost` is cumulative for
+  // the whole view (it survives stream_reset; only the gap baseline resets),
+  // and `packetLossRatio` is windowed: lost / (lost + received) over the
+  // packets counted since the previous 1 Hz tick, 0 when that window carried
+  // no packets (an idle stream is not evidence of loss).
+  packetsLost: number;
+  packetLossRatio: number;
+  // The sandbox's own packet-shed counter, when the server reports it
+  // (newer streamers send `dropped` per metrics message). 0 on older servers
+  // that never include the field.
+  serverDropped: number;
   wsState: number;
   inputBackend: string;
   // URL of the page target CDP input is bound to, and whether that is still
@@ -45,6 +59,23 @@ export interface IsolaStreamMetrics {
   abrLevel: number;
   decodeErrorCount: number;
   lastRecoveryMs: number | null;
+  // ── WebCodecs decode backpressure ──
+  // decodeBacklogMs is the presentation delay the raw-Annex-B path is carrying
+  // at the moment the tick runs: access units submitted to the VideoDecoder but
+  // not yet painted, × the frame interval — stream time, not wall time, so it
+  // is independent of how bursty the wire was. 0 when caught up (an idle page
+  // included); ~one frame interval with a single frame in flight. Above
+  // MAX_DECODE_BACKLOG_MS the client stops replaying the backlog and resumes on
+  // the next IDR (see webCodecsVideoPath.ts).
+  //
+  // decodeDroppedFrames counts every access unit the backlog policy threw
+  // away — both the ones abandoned in the decoder queue and the ones refused
+  // while waiting for the replacement IDR — and decodeCatchUps counts the
+  // skips themselves. Drops rising while catchUps stays flat would mean the
+  // resync IDR never lands.
+  decodeBacklogMs: number;
+  decodeDroppedFrames: number;
+  decodeCatchUps: number;
   encodeScale: number;
   staticSecs: number;
   skippedTicks: number;

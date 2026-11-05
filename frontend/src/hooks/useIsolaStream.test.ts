@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { abrTick, advanceArrivalWindow, copyChordStaysLocal, createArrivalWindow, mapClientToCapture, createFrameCounters, noteStreamedPacket, frameMetricsPatch, type AbrState, type AbrTick, type IsolaNetQuality } from './useIsolaStream';
+import { abrTick, advanceArrivalWindow, copyChordStaysLocal, createArrivalWindow, mapClientToCapture, createFrameCounters, noteStreamedPacket, frameMetricsPatch, LOSS_BURST_PACKETS, resetPacketLoss, createPacketLossWindow, samplePacketLoss, type AbrState, type AbrTick, type IsolaNetQuality } from './useIsolaStream';
 
 const BASE_KBPS = 13500;
 // abrLadderKbps(13500) — 100 / 70 / 45 / 30 % with a 500 kbps floor.
@@ -164,6 +164,133 @@ describe('frame counters', () => {
     const c = createFrameCounters();
     noteStreamedPacket(c, 42, true);
     expect(c.sequenceNumber).toBe(42);
+  });
+});
+
+describe('packet gap accounting', () => {
+  it('counts nothing and never asks for a keyframe on an in-order stream', () => {
+    const c = createFrameCounters();
+    const notices = [1, 2, 3, 4].map((seq) => noteStreamedPacket(c, seq, false));
+
+    expect(notices.every((n) => n.lost === 0 && !n.requestKeyframe)).toBe(true);
+    expect(c.packetsLost).toBe(0);
+    expect(c.packetsReceived).toBe(4);
+    expect(c.lastSeq).toBe(4);
+  });
+
+  it('counts one missing packet for a single gap', () => {
+    const c = createFrameCounters();
+    noteStreamedPacket(c, 1, true);
+    noteStreamedPacket(c, 2, false);
+    const notice = noteStreamedPacket(c, 4, false); // 3 never arrived
+
+    expect(notice.lost).toBe(1);
+    expect(notice.requestKeyframe).toBe(false); // below the burst threshold
+    expect(c.packetsLost).toBe(1);
+  });
+
+  it('counts every missing packet in a large gap', () => {
+    const c = createFrameCounters();
+    noteStreamedPacket(c, 10, false);
+    const notice = noteStreamedPacket(c, 40, false); // 11..39 lost
+    expect(notice.lost).toBe(29);
+    expect(c.packetsLost).toBe(29);
+  });
+
+  it('resets the baseline on a backward or duplicate seq instead of counting', () => {
+    const c = createFrameCounters();
+    noteStreamedPacket(c, 100, false);
+
+    // New encoder run: seq restarts at 0. Counting 0 <= 100 as a gap would
+    // book ~4 billion lost packets.
+    noteStreamedPacket(c, 0, true);
+    expect(c.packetsLost).toBe(0);
+    expect(c.lastSeq).toBe(0);
+
+    // Duplicate of the baseline: not a gap, not a reset to anywhere new.
+    expect(noteStreamedPacket(c, 0, false).lost).toBe(0);
+    expect(c.lastSeq).toBe(0);
+
+    // The baseline moved with the reset, so the next real gap is small.
+    expect(noteStreamedPacket(c, 2, false).lost).toBe(1); // only seq 1
+  });
+
+  it('resets the gap baseline on a new run while keeping cumulative loss', () => {
+    const c = createFrameCounters();
+    noteStreamedPacket(c, 1, true);
+    noteStreamedPacket(c, 4, false);
+    expect(c.packetsLost).toBe(2);
+
+    resetPacketLoss(c); // stream_init / stream_reset
+    noteStreamedPacket(c, 0, true);
+    noteStreamedPacket(c, 1, false);
+
+    expect(c.packetsLost).toBe(2); // whole-view total survives the run change
+    expect(c.lastSeq).toBe(1);
+    expect(c.burstLost).toBe(0);
+  });
+
+  it('neither fabricates nor erases loss when a keyframe arrives', () => {
+    const c = createFrameCounters();
+    noteStreamedPacket(c, 1, true);
+    noteStreamedPacket(c, 2, false);
+    const gap = noteStreamedPacket(c, 4, false);
+    expect(gap.lost).toBe(1);
+
+    // A keyframe is a packet like any other: it counts its own IDR and keeps
+    // the missing count intact, but it is where the burst ends.
+    const idr = noteStreamedPacket(c, 8, true);
+    expect(idr.lost).toBe(3); // 5..7
+    expect(idr.requestKeyframe).toBe(false); // an IDR just landed
+    expect(c.packetsLost).toBe(4);
+    expect(c.keyframeCount).toBe(2);
+    expect(c.burstLost).toBe(0);
+  });
+
+  it(`fires exactly one keyframe request per burst at ${LOSS_BURST_PACKETS} missing packets`, () => {
+    const c = createFrameCounters();
+    noteStreamedPacket(c, 1, true);
+    noteStreamedPacket(c, 2, false);
+    noteStreamedPacket(c, 3, false);
+
+    // 4..8 missing: five in a row reaches the threshold.
+    const first = noteStreamedPacket(c, 9, false);
+    expect(first.lost).toBe(5);
+    expect(first.requestKeyframe).toBe(true);
+
+    // The same burst continuing must not spend the budget again.
+    expect(noteStreamedPacket(c, 10, false).requestKeyframe).toBe(false);
+    expect(noteStreamedPacket(c, 25, false).requestKeyframe).toBe(false);
+    expect(c.burstLost).toBe(19); // 5 from the first gap + 14 from 11..24
+  });
+
+  it('re-arms the burst once an IDR resyncs the decoder', () => {
+    const c = createFrameCounters();
+    noteStreamedPacket(c, 1, false);
+    noteStreamedPacket(c, 8, true); // 2..7 missing + IDR: no request needed
+
+    const afterIdr = noteStreamedPacket(c, 20, false); // 9..19 missing
+    expect(afterIdr.requestKeyframe).toBe(true);
+
+    noteStreamedPacket(c, 21, true); // IDR lands, burst clears
+    const next = noteStreamedPacket(c, 30, false);
+    expect(next.requestKeyframe).toBe(true); // a later burst fires again
+  });
+
+  it('publishes a windowed loss ratio of lost / (lost + received)', () => {
+    const c = createFrameCounters();
+    const win = createPacketLossWindow();
+
+    for (let seq = 1; seq <= 10; seq++) noteStreamedPacket(c, seq, false);
+    noteStreamedPacket(c, 13, false); // 11, 12 lost
+    noteStreamedPacket(c, 14, false);
+
+    const sample = samplePacketLoss(c, win);
+    expect(sample.packetsLost).toBe(2);
+    expect(sample.packetLossRatio).toBeCloseTo(2 / 14, 10); // 2 lost, 12 received
+
+    // No packets since: an idle window is not loss evidence.
+    expect(samplePacketLoss(c, win)).toEqual({ packetsLost: 2, packetLossRatio: 0 });
   });
 });
 

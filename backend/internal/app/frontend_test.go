@@ -1,8 +1,10 @@
 package app
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -91,5 +93,51 @@ func TestServeFrontendCachePolicy(t *testing.T) {
 				t.Errorf("GET %s Cache-Control = %q, want %q", tc.path, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestNotFoundSeparatesAPIFromClientRoutes pins the SPA fallback: a client
+// route must serve the shell so a deep link survives a reload, but an unknown
+// /api path must never answer 200 with HTML — clients read that as success and
+// then fail parsing the body.
+func TestNotFoundSeparatesAPIFromClientRoutes(t *testing.T) {
+	h := notFound(newTestFrontend())
+
+	for _, path := range []string{"/api/nope", "/api", "/api/sessions/nope/extra"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s: status = %d, want 404", path, rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+			t.Fatalf("%s: content-type = %q, want application/json", path, ct)
+		}
+		if rec.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("%s: cache-control = %q, want no-store", path, rec.Header().Get("Cache-Control"))
+		}
+		var body struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: body is not JSON: %v (%q)", path, err, rec.Body.String())
+		}
+		if body.Error.Code != "not_found" {
+			t.Fatalf("%s: error code = %q, want not_found", path, body.Error.Code)
+		}
+	}
+
+	for _, path := range []string{"/session/abc", "/share/tok", "/run"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200", path, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "<html>shell</html>") {
+			t.Fatalf("%s: body = %q, want the SPA shell", path, rec.Body.String())
+		}
 	}
 }

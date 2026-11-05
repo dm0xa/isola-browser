@@ -6,6 +6,7 @@ import "encoding/binary"
 const (
 	msgTypeStreamInit      = "stream_init"
 	msgTypeStreamReset     = "stream_reset"
+	msgTypeStreamError     = "stream_error"
 	msgTypeInput           = "input"
 	msgTypeClipboardSync   = "clipboard_sync"
 	msgTypeResize          = "resize"

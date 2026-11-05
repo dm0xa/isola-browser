@@ -79,6 +79,14 @@ func setupMux(port string, wsHandler http.HandlerFunc) (net.Listener, error) {
 	mux.HandleFunc("/debug/encoder", writeDebugEncoder)
 	registerRecordRoutes(mux)
 	mux.HandleFunc("/resize", func(w http.ResponseWriter, r *http.Request) {
+		// Resizing mutates the session's geometry for every attached viewer,
+		// so it is a state change and must be a POST — same rule as
+		// /navigate. Without the check any GET (a browser prefetch, a link
+		// preview, an image tag) re-keyed every encoder.
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		widthStr := r.URL.Query().Get("width")
 		heightStr := r.URL.Query().Get("height")
 		width, errW := strconv.Atoi(widthStr)
@@ -88,9 +96,16 @@ func setupMux(port string, wsHandler http.HandlerFunc) (net.Listener, error) {
 			http.Error(w, "invalid dimensions", http.StatusBadRequest)
 			return
 		}
-		// Even dimensions only: H.264 4:2:0 cannot encode odd ones.
+		// Even dimensions only: H.264 4:2:0 cannot encode odd ones. Rounding
+		// happens before the range check because 1x1 rounds down to 0x0, and a
+		// 0 in currentWidth makes the next viewer fall back to the env default
+		// against a surface of the old size — a picture that never arrives.
 		width &^= 1
 		height &^= 1
+		if width < minSurfaceDim || height < minSurfaceDim {
+			http.Error(w, "invalid dimensions", http.StatusBadRequest)
+			return
+		}
 		currentMu.Lock()
 		currentWidth = width
 		currentHeight = height

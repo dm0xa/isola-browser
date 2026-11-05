@@ -67,18 +67,53 @@ type streamSub struct {
 	// packets that bridged the gap are gone and only an IDR can resync it.
 	awaitingKey bool
 
-	// dropped counts packets shed by this viewer, either because its mailbox
-	// was full or because it was waiting for a keyframe.
+	// dropped counts packets shed by this viewer for either of the two
+	// reasons below. It stays the published total, so an operator reading one
+	// number keeps the old meaning; the split says which of the two it is.
 	dropped atomic.Int64
+	// dropOverflow counts packets shed because the mailbox was full: this
+	// viewer's socket is not draining at the rate the encoder produces, and
+	// everything until the next IDR is undecodable for it.
+	dropOverflow atomic.Int64
+	// dropAwaitingKey counts packets shed because the viewer had no picture
+	// yet — it joined (or resynced) and these were deltas whose references it
+	// never received. This is expected for the first GOP of a late join and
+	// says nothing about the socket.
+	dropAwaitingKey atomic.Int64
 	// sentBytes counts video bytes actually handed to this viewer's socket.
 	// The client's ABR compares its arrival rate against this rather than
 	// against the bitrate target, so it must be per-viewer: two viewers of the
 	// same shared run need not receive the same bytes.
 	sentBytes atomic.Int64
+
+	// keyframeReqAt is when this viewer last forced an encoder restart, and
+	// keyframeReqs how many it has forced over the life of the connection.
+	// Together they enforce the per-viewer keyframe budget; both are guarded
+	// by the hub mutex.
+	keyframeReqAt time.Time
+	keyframeReqs  int
+	// keyframeRetries counts the restarts this viewer forced while it was
+	// still waiting for an IDR. A viewer with no picture is recovering, not
+	// farming, so those come out of a small separate allowance that resets
+	// when an IDR finally arrives.
+	keyframeRetries int
 }
 
 func newStreamSub() *streamSub {
 	return &streamSub{ch: make(chan streamEvent, mailboxSize)}
+}
+
+// noteDrop records one shed packet against its cause and the compatibility
+// total. The two causes are not interchangeable: overflow means this viewer
+// cannot keep up, awaitingKey is the poster wait every late joiner goes
+// through, and only the first is a transport problem.
+func (s *streamSub) noteDrop(overflow bool) {
+	if overflow {
+		s.dropOverflow.Add(1)
+	} else {
+		s.dropAwaitingKey.Add(1)
+	}
+	s.dropped.Add(1)
 }
 
 // push queues a video packet without blocking. A viewer that cannot keep up
@@ -89,7 +124,7 @@ func (s *streamSub) push(pkt []byte) {
 	case s.ch <- streamEvent{binary: pkt}:
 	default:
 		s.awaitingKey = true
-		s.dropped.Add(1)
+		s.noteDrop(true)
 	}
 }
 
@@ -266,10 +301,96 @@ func hubFor(bc *frameBroadcaster) *streamHub {
 	return activeHub
 }
 
+// maxConcurrentRuns caps how many ffmpeg processes one session may run at once.
+//
+// Every distinct configuration a viewer asks for used to get its own encoder,
+// and the ABR ladder gives one viewer four configurations: three viewers
+// stepping the ladder differently ran three libx264 processes in a three-CPU
+// container. Measured on the dev host at 720p/25fps with
+// scripts/ab/multi-rung.sh (interleaved runs, three reps each): one viewer
+// 0.40 core-seconds per second of video, three viewers on three rungs 0.77
+// (three encoders), and 0.57 with this cap (two). The container's cores are
+// 2-8x slower, which is where the 0.3-1.2 core-s/s per run comes from. Two of
+// those plus capture, compose and mux already spend most of a three-CPU
+// budget; three is enough to starve the frame pump, so an adaptive step
+// becomes a stall instead of a cheaper picture.
+//
+// Two is also the smallest number that changes nothing for the case that
+// matters: a host and one share watcher on different rungs each keep their own
+// encoder. A third configuration shares the nearest live run instead — see
+// reusableRunLocked — and is told so by stream_init.
+const maxConcurrentRuns = 2
+
+// reusableRunLocked picks the live run a viewer asking for want may share when
+// the session is already at maxConcurrentRuns, or nil when it can decode none
+// of them.
+//
+// Compatibility is the container format and the producer geometry: a WebCodecs
+// client cannot decode fMP4 and an MSE client cannot decode raw Annex-B, and a
+// run encodes the capture size it was started with. The bitrate and scale may
+// differ — that is the point of sharing — and the viewer is never left to
+// discover it: attach always follows with a stream_init carrying the run's real
+// bitrate_kbps and encoded width/height, and every metrics tick repeats them.
+//
+// The pick is the most expensive run at or below the requested bitrate: sharing
+// must never spend more bytes than the client's own evidence allowed, since
+// that is the loss the step was reacting to. When the request is below every
+// live run, the cheapest one wins — the closest thing to the requested rung.
+func (h *streamHub) reusableRunLocked(want runKey) *streamRun {
+	var atOrBelow, cheapest *streamRun
+	for k, r := range h.runs {
+		if r.stopping || !rungCompatible(k, want) {
+			continue
+		}
+		if cheapest == nil || k.kbps < cheapest.key.kbps {
+			cheapest = r
+		}
+		if k.kbps <= want.kbps && (atOrBelow == nil || k.kbps > atOrBelow.key.kbps) {
+			atOrBelow = r
+		}
+	}
+	if atOrBelow != nil {
+		return atOrBelow
+	}
+	return cheapest
+}
+
+// rungCompatible reports whether a viewer whose key is want can decode a run
+// keyed by have. fps, keepalive and base bitrate are properties of the session,
+// not the rung, so they cannot differ between two viewers of one session; the
+// bitrate and its scale are exactly what an ABR step changes.
+func rungCompatible(have, want runKey) bool {
+	return have.rawH264 == want.rawH264 &&
+		have.width == want.width && have.height == want.height &&
+		have.fps == want.fps &&
+		have.keepalive == want.keepalive &&
+		have.baseKbps == want.baseKbps
+}
+
+// liveRunsAfterLocked counts the encoder runs that will still be live once sub
+// has moved off the run it is on now. The cap bounds the steady state, so a
+// viewer that is the last subscriber of its run must not be counted against
+// itself: that encoder is stopped as part of the very step being decided, and
+// counting it would make a viewer that is alone in its rung unable to reach a
+// lower one until an unrelated step moved it.
+func (h *streamHub) liveRunsAfterLocked(sub *streamSub) int {
+	n := len(h.runs)
+	if old := sub.run; old != nil && old.started && !old.stopping && len(old.subs) == 1 {
+		n--
+	}
+	return n
+}
+
 // attach points sub at the run for key, starting one if nobody is streaming
 // that configuration yet. resetReason, when non-empty, prepends a stream_reset
 // so a client that is already decoding tears its pipeline down before the init
 // message that follows it.
+//
+// At maxConcurrentRuns a configuration without a run of its own joins a
+// compatible one instead, so the returned run's key need not be key: callers
+// that report or log a rung must read it off the returned run. When no live run
+// is decodable by this viewer the cap is exceeded rather than leaving it with
+// nothing.
 //
 // It returns nil only when the encoder could not be started, in which case sub
 // is left where it was.
@@ -277,6 +398,9 @@ func (h *streamHub) attach(sub *streamSub, key runKey, resetReason string) *stre
 	h.mu.Lock()
 
 	run := h.runs[key]
+	if run == nil && h.liveRunsAfterLocked(sub) >= maxConcurrentRuns {
+		run = h.reusableRunLocked(key)
+	}
 	fresh := false
 	switch {
 	case run == nil:
@@ -289,7 +413,9 @@ func (h *streamHub) attach(sub *streamSub, key runKey, resetReason string) *stre
 		fresh = true
 	case sub.run == run:
 		// Already streaming exactly this configuration: re-announcing it
-		// would cost the viewer its decoder for nothing.
+		// would cost the viewer its decoder for nothing. This is also how a
+		// capped step that maps back onto the viewer's own run is absorbed —
+		// the viewer keeps decoding, and the client's next step re-evaluates.
 		h.mu.Unlock()
 		return run
 	}
@@ -321,8 +447,13 @@ func (h *streamHub) attach(sub *streamSub, key runKey, resetReason string) *stre
 	if fresh {
 		run.startPumps()
 	}
+	shared := run.key
 	h.mu.Unlock()
 
+	if !fresh && (shared.kbps != key.kbps || shared.scale != key.scale) {
+		log.Printf("ws: run cap %d reached, %d kbps/scale %.2f shares the %d kbps run (scale %.2f)",
+			maxConcurrentRuns, key.kbps, key.scale, shared.kbps, shared.scale)
+	}
 	// Outside the lock: the producer gate reads the hub, and stopping the
 	// orphan waits for its pumps, which take the hub mutex on the way out.
 	syncProducerCapture(false)
@@ -442,6 +573,54 @@ const keyframeRestartGrace = 4 * time.Second
 // client's recovery timer cannot thrash ffmpeg.
 const lateJoinRestartCooldown = keyframeRestartGrace + time.Second
 
+// Per-viewer keyframe budget. lateJoinRestartCooldown bounds a *storm*; it
+// does not bound the total, so before this budget one viewer could restart
+// the session's encoder — and reset every other viewer of that run — every
+// lateJoinRestartCooldown forever. A viewer may now force one restart per
+// keyframeRequestWindow and keyframeRequestsPerConn over the life of its
+// connection. The budget is per subscription, so a share watcher on the same
+// run cannot spend the host's allowance, and neither can another viewer's.
+//
+// A viewer that is still waiting for an IDR is recovering, not farming: it
+// gets keyframeRetriesPerStall consecutive restarts before the connection
+// budget and window take over. The hub-wide lateJoinRestartCooldown still
+// spaces those restarts like any other, so a hostile viewer is bounded at
+// keyframeRetriesPerStall fast restarts per stall and then one per window. The
+// allowance resets when an IDR is finally delivered.
+const (
+	keyframeRequestWindow   = 30 * time.Second
+	keyframeRequestsPerConn = 4
+	keyframeRetriesPerStall = 3
+)
+
+// keyframeBudgetAllows reports whether this viewer may force another IDR at
+// now, and why not when it may not. It does not record the request; only a
+// restart that actually happened spends the budget.
+func (s *streamSub) keyframeBudgetAllows(now time.Time) (bool, string) {
+	if s.awaitingKey && s.keyframeRetries < keyframeRetriesPerStall {
+		return true, ""
+	}
+	if s.keyframeReqs >= keyframeRequestsPerConn {
+		return false, "connection budget exhausted"
+	}
+	if !s.keyframeReqAt.IsZero() && now.Sub(s.keyframeReqAt) < keyframeRequestWindow {
+		return false, "per-viewer cooldown"
+	}
+	return true, ""
+}
+
+// noteKeyframeRequest records a restart this viewer forced. A retry while it
+// still has no picture comes out of the per-stall allowance instead of the
+// connection budget.
+func (s *streamSub) noteKeyframeRequest(now time.Time) {
+	s.keyframeReqAt = now
+	if s.awaitingKey {
+		s.keyframeRetries++
+		return
+	}
+	s.keyframeReqs++
+}
+
 // keyframeRestartAllowed reports whether a client request_keyframe should
 // replace the run. A run that has already emitted an IDR can be restarted
 // immediately (the viewer is stuck mid-GOP). A run that has not is still
@@ -461,7 +640,9 @@ func keyframeRestartAllowed(startedAt time.Time, keyframeAtUnixNano int64, now t
 //
 // libx264 on a live pipe cannot be signalled for a keyframe, so — exactly like
 // the ABR path — the cheapest reliable way is a fresh encoder. Every viewer of
-// that run is reset with it, because they are all decoding the same stream.
+// that run is reset with it, because they are all decoding the same stream,
+// which is why the request is budgeted per viewer: one stuck decoder must not
+// be able to restart the encoder for everybody else indefinitely.
 func (h *streamHub) requestKeyframe(sub *streamSub) {
 	h.mu.Lock()
 	run := sub.run
@@ -469,12 +650,20 @@ func (h *streamHub) requestKeyframe(sub *streamSub) {
 		h.mu.Unlock()
 		return
 	}
-	if !keyframeRestartAllowed(run.startedAt, run.keyframeAt.Load(), time.Now()) {
+	now := time.Now()
+	if ok, reason := sub.keyframeBudgetAllows(now); !ok {
+		reqs, lastAt := sub.keyframeReqs, sub.keyframeReqAt
+		h.mu.Unlock()
+		log.Printf("ws: keyframe request refused (%s): viewer used %d/%d, last request %s ago",
+			reason, reqs, keyframeRequestsPerConn, now.Sub(lastAt).Round(time.Second))
+		return
+	}
+	if !keyframeRestartAllowed(run.startedAt, run.keyframeAt.Load(), now) {
 		h.mu.Unlock()
 		log.Printf("ws: keyframe request ignored, encoder has not emitted an IDR yet")
 		return
 	}
-	if !h.lastForcedKeyframe.IsZero() && time.Since(h.lastForcedKeyframe) < lateJoinRestartCooldown {
+	if !h.lastForcedKeyframe.IsZero() && now.Sub(h.lastForcedKeyframe) < lateJoinRestartCooldown {
 		h.mu.Unlock()
 		log.Printf("ws: keyframe request ignored, restart cooldown")
 		return
@@ -487,7 +676,8 @@ func (h *streamHub) requestKeyframe(sub *streamSub) {
 		log.Printf("ws: keyframe restart at %d kbps failed", run.key.kbps)
 		return
 	}
-	h.lastForcedKeyframe = time.Now()
+	h.lastForcedKeyframe = now
+	sub.noteKeyframeRequest(now)
 	key := run.key
 	subs := make([]*streamSub, 0, len(run.subs))
 	for s := range run.subs {
@@ -738,6 +928,27 @@ func (r *streamRun) pumpFrames(wg *sync.WaitGroup) {
 	// duplicate frame right after a change, pushing the fragment out.
 	lastFedChange := false
 	enqueue := func() {
+		// CFR ceiling: never feed two frames closer together than the encode
+		// interval, whichever path called us. The ticker keeps the cadence on
+		// its own, but the damage path can feed a few milliseconds before a
+		// tick and the tick then feeds again, so the wall-clock rate follows
+		// the producer instead of the encode rate (a 51 fps producer measured
+		// 48 packets/s against a 25 fps ceiling). The mux-flush follow-up is
+		// the one allowed to run closer, because the fMP4 muxer only closes a
+		// fragment when the next frame arrives.
+		if fedOnce {
+			// A tenth of the interval of slack: a producer paced at exactly the
+			// encode rate jitters below it, and a strict comparison threw those
+			// frames away (1080p dropped from 25 to 17 fps against a realtime
+			// feeder). The slack still forbids the double feed this guards.
+			minGap := interval - interval/10
+			if lastFedChange && muxFlushFollowUpMs*time.Millisecond < minGap {
+				minGap = muxFlushFollowUpMs * time.Millisecond
+			}
+			if time.Since(lastFeedAt) < minGap {
+				return
+			}
+		}
 		// Change-driven suppression: skip this tick entirely while the surface
 		// has not changed since the last feed and the keepalive window has not
 		// elapsed. Never while a viewer is waiting for an IDR — see
@@ -859,50 +1070,60 @@ func (r *streamRun) pumpFrames(wg *sync.WaitGroup) {
 func (r *streamRun) pumpOutput(wg *sync.WaitGroup) {
 	defer wg.Done()
 
+	// Both reassemblers read ffmpeg's stdout straight into their own buffer,
+	// so each byte is copied once — into the packet the viewers receive —
+	// instead of once on the read and again on the way out. The segments they
+	// return alias those buffers and are packed here before the next read.
 	reader := newFMP4Reader()
 	splitter := &auSplitter{}
 	first := true
-	buf := make([]byte, 64*1024)
 	for {
 		select {
 		case <-r.stop:
 			return
 		default:
 		}
-		n, rerr := r.stdout.Read(buf)
-		if n > 0 {
-			if r.key.rawH264 {
-				recordRawRun() // no-op when not recording
-				for _, au := range splitter.feed(buf[:n]) {
-					if au.keyframe {
-						r.recordKeyframe(time.Now())
-					}
-					r.deliver(packAccessUnit(au.data, r.seq.Add(1), au.keyframe), au.keyframe, false)
+		if r.key.rawH264 {
+			recordRawRun() // no-op when not recording
+			aus, rerr := splitter.readFrom(r.stdout)
+			for _, au := range aus {
+				if au.keyframe {
+					r.recordKeyframe(time.Now())
 				}
-			} else {
-				for _, seg := range reader.Feed(buf[:n]) {
-					isKey := isKeyframeFragment(seg)
-					if isKey {
-						r.recordKeyframe(time.Now())
-					}
-					if rec.active || recordingActive.Load() {
-						recordSegment(seg, first) // raw fMP4 segment tee
-					}
-					r.deliver(packVideoSegment(seg, r.seq.Add(1), isKey), isKey, first)
-					first = false
-				}
+				r.deliver(packAccessUnit(au.data, r.seq.Add(1), au.keyframe), au.keyframe, false)
 			}
+			if rerr != nil {
+				r.reportOutputError(rerr)
+				return
+			}
+			continue
+		}
+		segs, rerr := reader.readSegments(r.stdout)
+		for _, seg := range segs {
+			isKey := isKeyframeFragment(seg)
+			if isKey {
+				r.recordKeyframe(time.Now())
+			}
+			if rec.active || recordingActive.Load() {
+				recordSegment(seg, first) // raw fMP4 segment tee
+			}
+			r.deliver(packVideoSegment(seg, r.seq.Add(1), isKey), isKey, first)
+			first = false
 		}
 		if rerr != nil {
-			// EOF after a stop/kill is normal; anything else is ffmpeg dying
-			// mid-session.
-			select {
-			case <-r.stop:
-			default:
-				log.Printf("ws: ffmpeg stdout read error: %v", rerr)
-			}
+			r.reportOutputError(rerr)
 			return
 		}
+	}
+}
+
+// reportOutputError logs a stdout read failure. EOF after a stop/kill is
+// normal; anything else is ffmpeg dying mid-session.
+func (r *streamRun) reportOutputError(err error) {
+	select {
+	case <-r.stop:
+	default:
+		log.Printf("ws: ffmpeg stdout read error: %v", err)
 	}
 }
 
@@ -930,8 +1151,10 @@ func (r *streamRun) deliver(pkt []byte, isKey, isInit bool) {
 		}
 		if isKey {
 			s.awaitingKey = false
+			// The stall is over: a later one gets its own retry allowance.
+			s.keyframeRetries = 0
 		} else if s.awaitingKey {
-			s.dropped.Add(1)
+			s.noteDrop(false)
 			continue
 		}
 		s.push(pkt)
