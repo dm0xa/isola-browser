@@ -6,141 +6,63 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-05
+
 ### Added
 
 - An [MCP usage guide](./docs/skills/isola-mcp-usage/SKILL.md): handshake, every tool and its arguments, recipes, REST fallback.
-- The viewer now accounts for packet gaps on the video socket: `seq` jumps
-  (TCP, so they mean the streamer shed packets) are counted as `packetsLost`
-  with a 1 Hz `packetLossRatio`, and once a burst reaches five missing packets
-  it asks for a keyframe through the existing recovery budget instead of
-  waiting on the IDR the encoder may never send. The debug metrics also show
-  the server's `dropped` counter when a newer streamer reports it.
+- The viewer counts video `seq` gaps as `packetsLost` (a 1 Hz `packetLossRatio`)
+  and asks for a keyframe after five missing packets instead of waiting for an
+  IDR that may never come. Debug metrics show the server's `dropped` counter.
 
 ### Changed
 
-- The WebCodecs viewer no longer replays a decode backlog. `VideoDecoder`
-  output is fire-and-forget, so a burst — or a tab that was throttled — left the
-  past queued ahead of the live picture with nothing to drop it. Access-unit
-  admission is now bounded at 250 ms of stream time: past that the client
-  abandons the decoder queue, asks for a keyframe, and resumes on the next IDR.
-  The delay and the drops are published at 1 Hz as `decodeBacklogMs`,
-  `decodeDroppedFrames` and `decodeCatchUps`.
-- An ABR step no longer costs the client its decoder or its canvas.
-  `stream_reset` followed by `stream_init` with an unchanged codec reuses the
-  same `VideoDecoder` — reset leaves it unconfigured, so it is reconfigured in
-  place — and resizes the existing canvas instead of appending a new one. Before
-  this, a bitrate-only step left the decoder unconfigured and every later access
-  unit was silently refused for the rest of the connection, and a scale step
-  allocated a new decoder and left the old canvas in the container.
-- A session now runs at most two encoder processes. Each distinct
-  (bitrate, scale, decode mode) used to get its own ffmpeg, and the ABR ladder
-  gives one viewer four of them, so three viewers stepping the ladder
-  differently ran three libx264 processes in a three-CPU container — the encode
-  cost alone (0.3-1.2 core-seconds per second of video each) starves the frame
-  pump and turns an adaptive step into a stall. A third configuration now joins
-  the most expensive live run at or below its requested bitrate (else the
-  cheapest one) instead of starting a third encoder; the client sees the real
-  rung in the `stream_reset`/`stream_init` pair and in metrics, so nothing is
-  silent. A viewer alone in the session, and the host + share-watcher pair, keep
-  exactly the rung they ask for, and runs are never shared across decode modes
-  or capture geometries. Measured with `scripts/ab/multi-rung.sh` at 720p/25fps
-  on the dev host, three viewers on three rungs (interleaved, 3 reps):
-  0.77 → 0.57 core-seconds per second of video, encoders 3 → 2.
-- A viewer can no longer restart the session's encoder on demand, indefinitely:
-  `request_keyframe` is now budgeted per connection — one forced restart per
-  30 seconds, four per connection — and a share-link watcher is additionally
-  limited to one forwarded request per 30 seconds by the relay. A viewer that
-  still has no picture keeps a small retry allowance (three restarts, spaced by
-  the existing 5 s cooldown) so a restart that produced no IDR cannot wedge it
-  until it reconnects. Every forced restart replaces the encoder run for
-  everyone watching it, so one stuck decoder could previously reset the host's
-  stream forever.
-- The encoder is unchanged: the quality sweep that followed this work
-  (fifteen preset/search/aq combinations, recorded next to the libx264 argv)
-  found no setting that improves quality without spending more CPU, so the
-  released `superfast` + `subme=1:me:dia` tuning ships as it was. What changed
-  around it is stability and cost, not the picture.
+- WebCodecs backlog is capped at 250 ms of stream time: past that the client
+  asks for a keyframe and resumes at the next IDR instead of replaying a stale
+  queue. Published as `decodeBacklogMs`, `decodeDroppedFrames`, `decodeCatchUps`.
+- An ABR step reconfigures `VideoDecoder` in place and resizes the existing
+  canvas, so a bitrate-only step no longer leaves the decoder unconfigured and a
+  scale step no longer orphans a canvas.
+- A session runs at most two encoders: a third rung joins the closest live run
+  at or below its bitrate, never across decode modes or capture geometries, and
+  the client sees the real rung. Three viewers on three rungs: 0.77 → 0.57
+  core-seconds per second of video.
+- `request_keyframe` is budgeted per connection — one per 30 s, four total — and
+  a share-link watcher forwards one per 30 s. A pictureless viewer keeps three
+  restarts on the existing 5 s cooldown.
+- The encoder tuning is unchanged: a fifteen-variant sweep found nothing that
+  improves the picture for less CPU than `superfast` + `subme=1:me:dia`.
 
 ### Fixed
 
-- The encode pump holds the 25 fps ceiling on both of its feed paths. The
-  damage path checked the encode interval and the ticker path did not, so a
-  producer that delivered in bursts was fed twice inside one interval and the
-  wall-clock rate followed the producer: a 51 fps producer measured 48 packets/s
-  in a soak run. The guard now sits in the one function both paths call, with a
-  tenth of the interval of slack for a producer paced exactly at the ceiling and
-  an explicit exception for the MSE fragment-flush follow-up.
-- The relay now tears down both sockets when either side dies. A viewer that
-  disconnected left the container→client goroutine parked in `NextReader` until
-  the 90 s container read deadline, holding the container websocket and its
-  encoder subscription; closing is now symmetric and happens exactly once, so
-  `wg.Wait` cannot return with a socket still open.
-- A viewer or container that stops reading can no longer pin a relay goroutine
-  forever: every relayed message is written under a 30 s deadline (the streamer
-  already had 10 s per write). Before, a suspended tab or a wedged streamer
-  blocked `io.Copy` indefinitely.
-- Container→client traffic is bounded: 32 MiB per message (one keyframe's worth
-  plus an order of magnitude of headroom, so video is unaffected) and 1 MiB for
-  TEXT control frames, which do not scale with the picture. Client messages stay
-  at 12 MiB.
-- Per-message activity tracking is debounced to one refresh per second and no
-  longer takes the proxy-wide mutex on every frame: 178-186 ns/op → 10-13 ns/op
-  in the parallel benchmark, which matters because the same lock was shared by
-  every session's relay goroutines.
-- A viewer whose socket hit the 10 s write deadline now loses its session: the
-  socket is closed, so the subscription is released and the encoder stops.
-  Before, the write goroutine exited but left the connection half-dead — the
-  session kept an encoder and a mailbox for a viewer that would never read
-  again, until the peer eventually closed. The same now holds for every other
-  write path: a failed metrics or audio write ends the session instead of being
-  ignored. On a static page the 1 Hz metrics are the only traffic, so a
-  half-open socket there used to keep the encoder alive for nobody. A viewer's
-  teardown releases its subscription exactly once whichever way the socket dies
-  (read error, write deadline, failed write), and stops the encoder run when it
-  was the last viewer.
-- An unknown `/api/...` path answers a JSON `404` (`{"error":{"code":"not_found"}}`)
-  instead of the SPA shell with HTTP 200. Client routes (`/session/:id`,
-  `/share/:token`) still serve the shell so a deep link survives a reload, but a
-  typo'd or removed API route no longer reads as success to a JSON client.
-- The streamer's `/resize` requires `POST`, like `/navigate`: any other method
-  is refused with `405` and leaves the session untouched. A `GET` — a browser
-  prefetch, a link preview, an `<img>` tag — used to re-key every attached
-  viewer's encoder.
-- A viewer that cannot get an encoder now learns why. When no encoder process
-  can be started, the streamer sends `{"type":"stream_error","reason":
-  "encoder_error","retryable":true}` and closes the socket with application
-  code `4001`, instead of a `stream_reset` that every client reads as "wait for
-  the `stream_init` that follows" — none ever did, so the viewer sat on its
-  poster until the connection died. See `docs/transport.md` for what a client
-  should do (reconnect the socket with backoff, a few attempts).
-- `POST /api/sessions/{id}/resize` rejects geometries that cannot survive the
-  even-dimension rounding (1x1 became 0x0) instead of zeroing the session's
-  geometry and leaving the next viewer waiting forever for a surface that never
-  arrives.
-- The 1 Hz `metrics` snapshot now carries `dropped`, the number of video packets
-  this viewer's socket shed, so a stalling viewer is visible instead of looking
-  like a slow encoder. The total is split into `drop_overflow` (the mailbox was
-  full — this viewer cannot keep up) and `drop_awaiting_key` (video discarded
-  while it waited for its first IDR — the poster wait every late joiner serves),
-  so an operator can tell the two apart; `dropped` stays their sum.
-- `docs/transport.md` claimed an ABR `set_bitrate` reset every other viewer of
-  the run; only the requesting viewer moves rungs, and the previous run stops
-  when its last viewer leaves. The same page also said the streamer does not
-  read the capture `ts_ns` header field; it does, nothing downstream uses it.
-- The streamer's three parsers now treat their input as hostile. A capture
-  header can no longer wrap `X+W`/`Y+H` past the surface bounds into a
-  multi-gigabyte `make()` (it panicked), claim more damaged pixels than the
-  surface holds, set an absurd stride, or reserve a full-surface payload before
-  a pixel arrives; a frame that starts and stalls is dropped after 5 s instead
-  of pinning its reader forever (waiting for a new frame stays unbounded, so an
-  idle page is unaffected). An fMP4 box is capped at 32 MiB — a measured 1080p
-  fragment is 3.1 MiB — and corrupt or truncated muxer output (a `moof` with no
-  `mdat`, a size-0 box, a 4 GiB size) resyncs to the next `ftyp`/`moof`
-  instead of buffering without bound or wedging the stream. An Annex-B stream
-  that never reaches a picture boundary is capped at 8 MiB and dropped back to
-  a NAL start code, and a reader that returns zero bytes no longer spins the
-  output pump. Valid input produces byte-identical packets: the fMP4 equality
-  corpus and the Annex-B chunking tests are unchanged.
+- The encode pump holds the 25 fps ceiling on both feed paths (the ticker path
+  now checks the encode interval too), with a tenth of the interval of slack.
+- The relay closes both sockets when either side dies and writes every message
+  under a 30 s deadline, so a disconnected viewer or wedged streamer cannot park
+  a goroutine until the 90 s read deadline.
+- Container→client messages are capped at 32 MiB and TEXT frames at 1 MiB;
+  client messages stay at 12 MiB.
+- Activity tracking refreshes at most once per second and no longer takes the
+  proxy-wide mutex per frame: 178-186 → 10-13 ns/op.
+- A viewer whose socket hits the 10 s write deadline, or whose metrics or audio
+  write fails, loses its session; the encoder stops with the last viewer and
+  teardown runs exactly once.
+- An unknown `/api/...` path returns a JSON `404` (`not_found`) instead of the
+  SPA shell; client routes still serve the shell.
+- The streamer's `/resize` requires `POST` (`405` otherwise), so a prefetch or
+  link preview can no longer re-key every viewer's encoder.
+- When no encoder can start, the streamer sends `stream_error`
+  (`reason: encoder_error`, `retryable: true`) and closes with code `4001`
+  instead of a `stream_reset` no client can follow.
+- `POST /api/sessions/{id}/resize` rejects geometries that round to 0 (1x1 became
+  0x0).
+- The 1 Hz `metrics` snapshot carries `dropped`, split into `drop_overflow` and
+  `drop_awaiting_key`.
+- `docs/transport.md` no longer claims an ABR `set_bitrate` resets other viewers,
+  or that the streamer ignores the capture `ts_ns` field.
+- The streamer's parsers treat their input as hostile: bounds-checked capture
+  headers, a 5 s stalled-frame drop, 32 MiB fMP4 boxes with resync, an 8 MiB
+  Annex-B cap, and no spin on a zero-byte read. Valid input stays byte-identical.
 - Warm-pool sessions no longer open on an unnamed `about:blank` tab.
 
 ## [1.5.4] - 2026-11-04
@@ -521,7 +443,8 @@ publishes the section matching the tag.
 Initial release: a Go control plane that boots a disposable Docker sandbox
 running offscreen Chromium.
 
-[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.5.4...HEAD
+[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/dm0xa/isola-browser/compare/v1.5.4...v1.6.0
 [1.5.4]: https://github.com/dm0xa/isola-browser/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/dm0xa/isola-browser/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/dm0xa/isola-browser/compare/v1.5.1...v1.5.2
