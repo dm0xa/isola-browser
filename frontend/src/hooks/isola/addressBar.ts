@@ -51,3 +51,24 @@ export function shouldCarryUrlEdit({ urlFocused, activeTabChanged }: {
 }): boolean {
   return urlFocused && !activeTabChanged;
 }
+
+/**
+ * Whether a tabs broadcast may leave the strip (address field, chips) as it is.
+ *
+ * Rebuilding replaces the address input, so a broadcast landing mid-edit would
+ * destroy what the user typed and drop focus to <body> (where the window-level
+ * key handlers relay keystrokes into the remote page). Only a real edit is
+ * protected: a field that still shows the value the bar rendered has nothing to
+ * lose. Skipping those broadcasts is what froze a warm-claimed session on the
+ * `about:blank` the viewer rendered before the claim navigated — the real URL
+ * and title arrived afterwards and every repaint was discarded. A host change
+ * (fullscreen) and a changed tab set must always repaint.
+ */
+export function shouldSkipTabBarRebuild({ urlFocused, urlEdited, structureChanged, hostChanged }: {
+  urlFocused: boolean;
+  urlEdited: boolean;
+  structureChanged: boolean;
+  hostChanged: boolean;
+}): boolean {
+  return urlFocused && urlEdited && !structureChanged && !hostChanged;
+}

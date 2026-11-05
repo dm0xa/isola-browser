@@ -140,6 +140,7 @@ publishes the section matching the tag.
   a NAL start code, and a reader that returns zero bytes no longer spins the
   output pump. Valid input produces byte-identical packets: the fMP4 equality
   corpus and the Annex-B chunking tests are unchanged.
+- Warm-pool sessions no longer open on an unnamed `about:blank` tab.
 
 ## [1.5.4] - 2026-11-04
 

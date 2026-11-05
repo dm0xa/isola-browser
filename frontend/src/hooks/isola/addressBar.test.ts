@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isPlaceholderUrl, seedForActiveTab, shouldCarryUrlEdit } from './addressBar';
+import { isPlaceholderUrl, seedForActiveTab, shouldCarryUrlEdit, shouldSkipTabBarRebuild } from './addressBar';
 
 describe('isPlaceholderUrl', () => {
   it('treats blank and new-tab URLs as placeholders', () => {
@@ -63,5 +63,42 @@ describe('shouldCarryUrlEdit', () => {
 
   it('has no edit to carry when the field is not focused, even across a tab change', () => {
     expect(shouldCarryUrlEdit({ urlFocused: false, activeTabChanged: true })).toBe(false);
+  });
+});
+
+describe('shouldSkipTabBarRebuild', () => {
+  it('skips a broadcast that lands while the user is editing', () => {
+    // Repainting replaces the input: the typed text and focus would be lost,
+    // and the window-level key handlers would start relaying to the remote page.
+    expect(shouldSkipTabBarRebuild({
+      urlFocused: true, urlEdited: true, structureChanged: false, hostChanged: false,
+    })).toBe(true);
+  });
+
+  it('repaints a focused field that holds no edit', () => {
+    // The bug: the viewer autofocuses the address bar while the page is still
+    // about:blank, so a warm claim's late URL/title broadcasts were all
+    // discarded and the strip stayed on an unnamed about:blank tab.
+    expect(shouldSkipTabBarRebuild({
+      urlFocused: true, urlEdited: false, structureChanged: false, hostChanged: false,
+    })).toBe(false);
+  });
+
+  it('repaints when the tab set changed, even mid-edit', () => {
+    expect(shouldSkipTabBarRebuild({
+      urlFocused: true, urlEdited: true, structureChanged: true, hostChanged: false,
+    })).toBe(false);
+  });
+
+  it('repaints when the strip moved hosts, even mid-edit', () => {
+    expect(shouldSkipTabBarRebuild({
+      urlFocused: true, urlEdited: true, structureChanged: false, hostChanged: true,
+    })).toBe(false);
+  });
+
+  it('repaints an unfocused strip regardless of edit state', () => {
+    expect(shouldSkipTabBarRebuild({
+      urlFocused: false, urlEdited: false, structureChanged: false, hostChanged: false,
+    })).toBe(false);
   });
 });

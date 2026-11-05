@@ -32,7 +32,7 @@ import {
   resetWcDecoder,
   setupWebCodecsVideoPath,
 } from './isola/webCodecsVideoPath';
-import { isPlaceholderUrl, seedForActiveTab, shouldCarryUrlEdit } from './isola/addressBar';
+import { isPlaceholderUrl, seedForActiveTab, shouldCarryUrlEdit, shouldSkipTabBarRebuild } from './isola/addressBar';
 import type { IsolaStreamMetrics } from './isola/streamMetrics';
 import {
   wcHost,
@@ -45,6 +45,15 @@ import {
 export type { IsolaQuality, IsolaNetQuality, AbrState, AbrTick, AbrResult } from './isola/abr';
 export { abrTick } from './isola/abr';
 export type { IsolaStreamMetrics } from './isola/streamMetrics';
+
+// setAddressValue writes the tab strip's address field and records the value the
+// strip rendered, so a later tabs broadcast can tell an untouched field from an
+// in-flight edit. The strip is rebuilt by replacing the input node, so the
+// rendered value has to travel with the node it describes.
+function setAddressValue(input: HTMLInputElement, value: string) {
+  input.value = value;
+  input.dataset.shownUrl = value;
+}
 
 // Browser-chrome palette for the in-container tab strip and the page
 // context menu. Both are built with imperative DOM nodes (not React), so they
@@ -746,7 +755,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     // browser-sourced URL yet) AND the user is not actively typing there now.
     if (document.activeElement === input) return;
     const v = input.value.trim();
-    if (!v || v === 'about:blank') input.value = next;
+    if (!v || v === 'about:blank') setAddressValue(input, next);
   }, [defaultTargetUrl]);
 
   const hideContextMenu = useCallback(() => {
@@ -1014,13 +1023,19 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     // field — the ✕ handler calls preventDefault).
     const prevUrl = tabbarRef.current?.querySelector<HTMLInputElement>('input');
     const urlFocused = !!prevUrl && document.activeElement === prevUrl;
+    // A broadcast may only be discarded for a field that holds a real edit.
+    // The viewer autofocuses the box while the page is still blank (so the user
+    // can type immediately), and a warm claim navigates after that focus: every
+    // later tabs broadcast would otherwise be dropped and the strip would stay
+    // on about:blank with an unnamed tab.
+    const urlEdited = urlFocused && !!prevUrl && prevUrl.value !== (prevUrl.dataset.shownUrl ?? '');
     // A host change (fullscreen toggled) must always repaint so the strip is
     // re-homed, even while the URL field is focused.
     const hostChanged = !!tabbarRef.current && tabbarRef.current.parentElement !== host;
     const prevTabs = lastTabsRef.current;
     const structureChanged = prevTabs.length !== tabs.length
       || prevTabs.some((t, i) => t.id !== tabs[i].id || t.active !== tabs[i].active);
-    if (urlFocused && !structureChanged && !hostChanged) return;
+    if (shouldSkipTabBarRebuild({ urlFocused, urlEdited, structureChanged, hostChanged })) return;
     // The field belongs to the ACTIVE tab. When that changes (a new tab, a tab
     // switch) whatever is in the box describes the tab we just left, so it must
     // not be carried over — otherwise opening a tab from the address bar leaves
@@ -1032,9 +1047,16 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       pendingNavRef.current = '';
     }
     // Carry an in-progress edit across the rebuild below (the input element is
-    // replaced, taking its value and caret with it).
-    const keepEdit = shouldCarryUrlEdit({ urlFocused, activeTabChanged }) && prevUrl
+    // replaced, taking its value and caret with it). An untouched field carries
+    // nothing: it must show the ACTIVE tab's URL from this broadcast, which is
+    // exactly the value a warm claim's late navigation supplies.
+    const keepEdit = urlEdited && shouldCarryUrlEdit({ urlFocused, activeTabChanged }) && prevUrl
       ? { value: prevUrl.value, start: prevUrl.selectionStart, end: prevUrl.selectionEnd }
+      : null;
+    // The field had focus without an edit (the viewer autofocused it): keep the
+    // caret where the user left it even though the text now comes from the tab.
+    const keepCaret = urlFocused && !urlEdited && !activeTabChanged && prevUrl
+      ? { start: prevUrl.selectionStart, end: prevUrl.selectionEnd }
       : null;
     lastTabsRef.current = tabs;
     const pal = TABBAR_PALETTE[themeRef.current];
@@ -1248,7 +1270,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     const url = document.createElement('input');
     url.type = 'text';
     url.placeholder = 'Search or enter address';
-    url.value = active ? active.url : '';
+    setAddressValue(url, active ? active.url : '');
     url.style.flex = '1';
     url.style.minWidth = '120px';
     url.style.marginLeft = '6px';
@@ -1294,9 +1316,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       // submitted visible instead of flashing back to the stale active.url
       // (still about:blank until runner sends next tabs broadcast).
       if (pendingNavRef.current) {
-        url.value = pendingNavRef.current;
+        setAddressValue(url, pendingNavRef.current);
       } else {
-        url.value = active ? active.url : '';
+        setAddressValue(url, active ? active.url : '');
       }
     });
     bar.appendChild(url);
@@ -1306,16 +1328,23 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     // open/close/switch performed from the address bar neither loses what was
     // typed nor drops focus to <body> (which would leak keystrokes remote-ward).
     if (keepEdit) {
-      url.value = keepEdit.value;
+      setAddressValue(url, keepEdit.value);
       url.focus();
       try {
         const end = keepEdit.end ?? url.value.length;
         url.setSelectionRange(keepEdit.start ?? end, end);
       } catch { /* selection unsupported on this input type */ }
     } else if (urlFocused) {
-      // The active tab changed but the field had focus: keep it there (and out of
-      // the remote page) while it shows the NEW tab's address.
+      // The field had focus when the strip was rebuilt (the active tab changed,
+      // or the untouched field just received the real page URL): keep it there
+      // (and out of the remote page) while it shows the NEW tab's address.
       url.focus();
+      if (keepCaret) {
+        try {
+          const end = keepCaret.end ?? url.value.length;
+          url.setSelectionRange(keepCaret.start ?? end, end);
+        } catch { /* selection unsupported on this input type */ }
+      }
     }
 
     // Autofocus ONCE — on the very first render of the viewer page, when
