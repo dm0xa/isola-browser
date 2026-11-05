@@ -8,6 +8,7 @@ publishes the section matching the tag.
 
 ### Added
 
+- An [MCP usage guide](./docs/skills/isola-mcp-usage/SKILL.md): handshake, every tool and its arguments, recipes, REST fallback.
 - The viewer now accounts for packet gaps on the video socket: `seq` jumps
   (TCP, so they mean the streamer shed packets) are counted as `packetsLost`
   with a 1 Hz `packetLossRatio`, and once a burst reaches five missing packets

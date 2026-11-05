@@ -16,6 +16,7 @@ This directory is the external documentation — what an operator or an API cons
 | Know why a keyframe request or ABR step restarts the encoder | [Encoder runtime control](encoder-runtime-control.md) |
 | Drive Isola from my own code | [API reference](api.md) |
 | Automate with an AI agent (MCP) or a custom client | [Automation](automation.md) |
+| Drive Isola over MCP with exact tool arguments | [MCP usage guide](skills/isola-mcp-usage/SKILL.md) |
 | Understand the isolation model | [Security](security.md) |
 | Know which outside services recon can contact | [Third parties](third-parties.md) |
 | Lock down API/MCP on a public host | [Security → API and MCP authentication](security.md#api-and-mcp-authentication) |

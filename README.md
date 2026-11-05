@@ -296,7 +296,7 @@ Off unless `ISOLA_MCP_ENABLED=true` and at least one `ISOLA_MCP_TOKEN` is ≥ 32
 
 Any MCP client works: point it at `POST /mcp` with `Authorization: Bearer <token>`.
 
-Full setup: [docs/automation.md](./docs/automation.md).
+Full setup: [docs/automation.md](./docs/automation.md). Tool-by-tool usage, recipes and the REST fallback: [docs/skills/isola-mcp-usage/SKILL.md](./docs/skills/isola-mcp-usage/SKILL.md).
 
 ---
 
@@ -305,7 +305,7 @@ Full setup: [docs/automation.md](./docs/automation.md).
 - [Getting started](./docs/getting-started.md)
 - [Configuration](./docs/configuration.md) · [`backend/config.yaml`](./backend/config.yaml) · [`.env.example`](./.env.example)
 - [Architecture](./docs/architecture.md) · [Transport](./docs/transport.md) · [Binaries](./docs/binaries.md)
-- [API](./docs/api.md) · [Automation](./docs/automation.md)
+- [API](./docs/api.md) · [Automation](./docs/automation.md) · [MCP usage](./docs/skills/isola-mcp-usage/SKILL.md)
 - [Security](./docs/security.md) · [Deployment](./docs/deployment.md)
 - [Troubleshooting](./docs/troubleshooting.md) · [docs index](./docs/README.md)
 
