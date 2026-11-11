@@ -48,6 +48,11 @@ type Orchestrator struct {
 	// single false negative (a container mid-restart, a runtime hiccup) does
 	// not finalize a live session.
 	containerMisses sync.Map // sessionID -> *atomic.Int64
+
+	// reaping serializes FinalizeIfContainerGone per session: both relay
+	// channels can fail at the same instant, and two finalizations would stop
+	// the container twice and write the terminate audit twice.
+	reaping sync.Map // sessionID -> struct{}
 }
 
 // containerMissLimit is how many consecutive probes must report a container
@@ -573,6 +578,52 @@ func (o *Orchestrator) FinalizeRunningSession(ctx context.Context, st *store.Sto
 	if err := st.Sessions.TerminateSession(ctx, sess.ID); err != nil {
 		log.Warn().Err(err).Str("session_id", sid).Msg("finalize: db terminate failed")
 	}
+}
+
+// FinalizeIfContainerGone finalizes a running session whose container the
+// runtime positively reports as stopped or absent.
+//
+// It is the relay's counterpart to the health checker. A refused dial to the
+// container's streamer port is ground truth that the endpoint is gone *now*,
+// while the health checker needs up to containerMissLimit rounds of its 15s
+// ticker to agree — and every one of those seconds is a viewer reconnecting into
+// nothing. The probe still gates the verdict: a container the runtime reports as
+// running, or a runtime that cannot answer, opens no verdict at all, so a
+// transient refusal (VM hiccup, daemon restart) cannot destroy a live sandbox.
+//
+// Returns true when this call finalized the session.
+func (o *Orchestrator) FinalizeIfContainerGone(ctx context.Context, st *store.Store, cache *store.MemCache, sessionID uuid.UUID) bool {
+	sid := sessionID.String()
+	if _, busy := o.reaping.LoadOrStore(sid, struct{}{}); busy {
+		return false
+	}
+	defer o.reaping.Delete(sid)
+
+	sess, err := st.Sessions.GetSession(ctx, sessionID)
+	if err != nil || sess == nil || sess.Status != models.SessionStatusRunning || sess.ContainerID == "" {
+		return false
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, healthProbeTimeout)
+	out, inspectErr := o.dockerCmd(probeCtx, "inspect", "--format", "{{.State.Running}}", sess.ContainerID).CombinedOutput()
+	cancel()
+
+	if inspectErr == nil && strings.TrimSpace(string(out)) == "true" {
+		// The container is up, so the streamer endpoint is what failed. That is
+		// the health checker's call, not the relay's.
+		return false
+	}
+	if inspectErr != nil && !containerAbsent(string(out)) {
+		// Inconclusive: the runtime never answered about this container.
+		return false
+	}
+
+	log.Warn().Str("session_id", sid).Str("container_id", sess.ContainerID).
+		Msg("relay dial refused and container is gone, finalizing session")
+	o.containerMisses.Delete(sid)
+	s := *sess
+	o.FinalizeRunningSession(ctx, st, cache, &s)
+	return true
 }
 
 // TerminateSession stops and removes a browser-node container.

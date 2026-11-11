@@ -33,6 +33,7 @@ import {
   setupWebCodecsVideoPath,
 } from './isola/webCodecsVideoPath';
 import { isPlaceholderUrl, seedForActiveTab, shouldCarryUrlEdit, shouldSkipTabBarRebuild } from './isola/addressBar';
+import { isSessionTerminated } from './isola/sessionLiveness';
 import type { IsolaStreamMetrics } from './isola/streamMetrics';
 import {
   wcHost,
@@ -1917,6 +1918,12 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       const v = videoRef.current;
       if (!v || v.videoWidth <= 0 || firstFrameRecordedRef.current) return;
       firstFrameRecordedRef.current = true;
+      // Proof the relay and the streamer are both healthy. This — not `onopen`
+      // — is what earns a fresh backoff window: a socket that opens and closes
+      // without a frame (a dead sandbox behind a 101, a streamer that refuses
+      // the subscriber) must keep growing the retry delay until the cap ends
+      // the loop instead of retrying twice a second forever.
+      reconnectAttemptRef.current = 0;
       setFirstFrame(true);
       void v.play().catch(() => {});
       if (connectStartedAtRef.current) {
@@ -1928,7 +1935,6 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     video.addEventListener('resize', markDecodedFrame);
 
     ws.onopen = () => {
-      reconnectAttemptRef.current = 0;
       setError(null);
       setMetrics((m) => ({ ...m, wsState: ws.readyState }));
       setConnected(true);
@@ -2251,8 +2257,8 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       reconnectTimerRef.current = setTimeout(async () => {
         reconnectTimerRef.current = null;
         // If the session is gone (deleted, expired, token rejected by a
-        // backend state reset, or revoked), retrying only hammers a
-        // 401/403/404 forever — stop and tell the user.
+        // backend state reset, revoked, or its container died), retrying only
+        // hammers the relay — stop and tell the user.
         const sid = connectParamsRef.current?.sessionId;
         if (sid) {
           try {
@@ -2261,6 +2267,15 @@ export function useIsolaStream(defaultTargetUrl?: string) {
               headers: token ? { 'X-Session-Token': token } : undefined,
             });
             if (res.status === 404 || res.status === 401 || res.status === 403) {
+              setConnected(false);
+              setReconnecting(false);
+              setError('Session is no longer available');
+              return;
+            }
+            // A dead container keeps its row (and a 200) for the rest of the
+            // TTL, so the status is the only signal that retrying is pointless.
+            const body = (await res.json().catch(() => null)) as { status?: unknown } | null;
+            if (body && isSessionTerminated(body.status)) {
               setConnected(false);
               setReconnecting(false);
               setError('Session is no longer available');

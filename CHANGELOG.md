@@ -6,6 +6,22 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Changed
+
+- A relay dial that the container refuses now finalizes the session as soon as
+  the container runtime confirms the container is gone, instead of waiting for
+  three 15 s health probes (~40 s).
+
+### Fixed
+
+- The relay dials the container before upgrading the client WebSocket, so a dead
+  sandbox fails the handshake with HTTP `502` rather than a `101` that reset the
+  viewer's reconnect backoff. A dead session is no longer retried every 500 ms
+  for the rest of its TTL.
+- The viewer resets its reconnect backoff on the first decoded frame, not on
+  socket open, and stops retrying once `GET /api/sessions/{id}` reports
+  `terminated` or `error` — those rows answer `200` until cleanup.
+
 ## [1.6.0] - 2026-11-05
 
 ### Added

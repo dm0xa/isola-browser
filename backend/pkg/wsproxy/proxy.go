@@ -257,6 +257,30 @@ func (p *Proxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !isInput && channel != "" && channel != "isola" {
+		http.Error(w, "unsupported channel", http.StatusBadRequest)
+		return
+	}
+
+	log.Info().Str("session_id", sessionID).Str("container_addr", addr).Str("channel", channel).Msg("proxying connection")
+
+	// Dial the container before upgrading the client.
+	//
+	// Upgrading first turned a dead sandbox into a live-looking socket: the
+	// browser saw 101 and onopen, the viewer resets its reconnect backoff on
+	// open, so a dead container produced a handshake loop twice a second for the
+	// rest of the session TTL. Dialing first makes that an HTTP 502 the browser
+	// reports as a failed handshake — backoff engages — and it is the earliest
+	// point at which the relay can tell the sandbox is gone.
+	containerWS, err := p.dialContainer(addr, r, isInput)
+	if err != nil {
+		log.Error().Err(err).Str("session_id", sessionID).Str("container_addr", addr).Str("channel", channel).Msg("isola: container relay dial failed")
+		p.reapGoneContainer(sessionID)
+		http.Error(w, "sandbox unavailable", http.StatusBadGateway)
+		return
+	}
+	defer containerWS.Close()
+
 	clientConn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Error().Err(err).Msg("websocket upgrade failed")
@@ -271,13 +295,6 @@ func (p *Proxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		defer p.cache.Decr(r.Context(), viewerKey)
 	}
 
-	if !isInput && channel != "" && channel != "isola" {
-		http.Error(w, "unsupported channel", http.StatusBadRequest)
-		return
-	}
-
-	log.Info().Str("session_id", sessionID).Str("container_addr", addr).Str("channel", channel).Msg("proxying connection")
-
 	var bytesIn, bytesOut int64
 	var closeOnce sync.Once
 	done := make(chan struct{})
@@ -289,32 +306,50 @@ func (p *Proxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if isInput {
-		containerWS, _, err := websocket.DefaultDialer.Dial(
-			fmt.Sprintf("ws://%s/input", addr),
-			http.Header{},
-		)
-		if err != nil {
-			log.Error().Err(err).Str("container_addr", addr).Msg("isola: failed to dial input ws")
-			return
-		}
-		defer containerWS.Close()
 		log.Info().Str("session_id", sessionID).Str("container_addr", addr).Msg("isola: input relay started")
 		proxyDuplex(clientConn, containerWS, sessionID, closeAll, done, p.trackActivity, &bytesIn, &bytesOut, p.clipboardHook, !canControl)
 	} else {
-		containerWS, _, err := websocket.DefaultDialer.Dial(
-			"ws://"+addr+"/?"+r.URL.RawQuery,
-			nil,
-		)
-		if err != nil {
-			log.Error().Err(err).Str("container_addr", addr).Msg("isola: failed to dial container ws")
-			return
-		}
-		defer containerWS.Close()
 		log.Info().Str("session_id", sessionID).Str("container_addr", addr).Msg("isola: duplex relay started")
 		proxyDuplex(clientConn, containerWS, sessionID, closeAll, done, p.trackActivity, &bytesIn, &bytesOut, p.clipboardHook, !canControl)
 	}
 
 	log.Info().Str("session_id", sessionID).Str("channel", channel).Int64("bytes_in", bytesIn).Int64("bytes_out", bytesOut).Msg("proxy connection closed")
+}
+
+// dialContainer opens the relay's upstream socket to the sandbox.
+//
+// The container dial carries the client's query string for the video channel
+// because capability negotiation (mode=webcodecs) rides the handshake.
+func (p *Proxy) dialContainer(addr string, r *http.Request, isInput bool) (*websocket.Conn, error) {
+	target := "ws://" + addr + "/?" + r.URL.RawQuery
+	if isInput {
+		target = "ws://" + addr + "/input"
+	}
+	conn, _, err := websocket.DefaultDialer.Dial(target, nil)
+	return conn, err
+}
+
+// reapGoneContainer asks the orchestrator to finalize the session once the
+// runtime confirms its container is gone.
+//
+// Runs detached from the failing request so a client that hangs up mid-reap
+// cannot abort it, and off the response path so a dead sandbox answers with a
+// prompt 502 instead of waiting on `docker stop`. The orchestrator serializes
+// calls per session, so both relay channels failing together cost one
+// finalization.
+func (p *Proxy) reapGoneContainer(sessionID string) {
+	if p.orch == nil || p.st == nil || p.cache == nil {
+		return
+	}
+	id, err := uuid.Parse(sessionID)
+	if err != nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		p.orch.FinalizeIfContainerGone(ctx, p.st, p.cache, id)
+	}()
 }
 
 // keepalivePingInterval is how often keepalivePing pings the client. It is a

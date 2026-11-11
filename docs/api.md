@@ -259,6 +259,8 @@ ws://localhost:8080/ws/<SESSION_ID>?channel=input&host=1&session_token=<TOKEN>
 
 Video and audio arrive on the `channel=isola` socket as H.264/Opus frames; input on the `channel=input` socket is Isola JSON relayed to the container and applied to the page. Binary packet layout and `stream_init` are in [Transport](transport.md). For building a custom viewer or controller, see [Session WebSocket](automation.md#session-websocket-custom-clients).
 
+The relay dials the container **before** it completes the client handshake. When the sandbox's streamer is unreachable the handshake fails with HTTP `502` and no socket is opened; when the container runtime then confirms the container is gone, the session is finalized immediately rather than on the next health-check round. Retry a failed handshake like any other disconnect (exponential backoff, never a tight loop) and stop once `GET /api/sessions/{id}` reports `terminated` or `error` — a dead session keeps answering `200` with its row until cleanup.
+
 The relay applies per-message and per-write bounds so neither side can pin it:
 12 MiB read limit on client messages, 32 MiB on container messages, 1 MiB on
 container TEXT (control) frames, a 30 s write deadline on every relayed message,

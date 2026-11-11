@@ -190,7 +190,7 @@ The last message on the socket when the streamer could not start an encoder for 
 
 It is **not** a `stream_reset`: no `stream_init` follows, no video will arrive on this socket, and the streamer closes it immediately with application close code `4001`. The distinction is the whole point — a client that treats every reset as "wait for the next init" waits forever, and a bare TCP close is indistinguishable from a network drop.
 
-What a client should do: stop decoding, surface an error, and reconnect the **socket** with backoff (a few attempts seconds apart, never a tight loop). `retryable: true` means the failure was the encoder, not the session, so a reconnect can succeed once transient pressure clears; if every attempt fails the session is unusable and needs replacing. Behind the relay the close code does not survive the hop — the relay copies messages, not close frames — so branch on `stream_error`, not on the close code.
+What a client should do: stop decoding, surface an error, and reconnect the **socket** with backoff (a few attempts seconds apart, never a tight loop). `retryable: true` means the failure was the encoder, not the session, so a reconnect can succeed once transient pressure clears; if every attempt fails the session is unusable and needs replacing. Behind the relay the close code does not survive the hop — the relay copies messages, not close frames — so branch on `stream_error`, not on the close code. A handshake that fails with HTTP `502` is the same case as a dropped socket: the container is unreachable, so apply the same backoff and stop once the session's status is no longer `running`.
 
 ### `metrics` (server → client)
 
