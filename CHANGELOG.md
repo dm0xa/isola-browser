@@ -6,28 +6,26 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-11-12
+
 ### Added
 
-- A single `isola.stack=1` label on everything isola creates — session and warm-pool
-  containers, Compose services, the `isola`/`browser-net` networks, the `isola-data`
-  volume, and the built images — so one filter (`docker ps -a --filter
-  label=isola.stack=1`) lists the whole deployment.
+- Everything isola creates — containers, Compose services, networks, the data
+  volume and the images — carries `isola.stack=1`, so
+  `docker ps -a --filter label=isola.stack=1` lists the whole deployment.
 
 ### Changed
 
-- A relay dial that the container refuses now finalizes the session as soon as
-  the container runtime confirms the container is gone, instead of waiting for
-  three 15 s health probes (~40 s).
+- A session whose container is gone is finalized as soon as the runtime confirms
+  it, instead of after three 15 s health probes.
 
 ### Fixed
 
-- The relay dials the container before upgrading the client WebSocket, so a dead
-  sandbox fails the handshake with HTTP `502` rather than a `101` that reset the
-  viewer's reconnect backoff. A dead session is no longer retried every 500 ms
-  for the rest of its TTL.
-- The viewer resets its reconnect backoff on the first decoded frame, not on
-  socket open, and stops retrying once `GET /api/sessions/{id}` reports
-  `terminated` or `error` — those rows answer `200` until cleanup.
+- A dead sandbox fails the relay handshake with `502` instead of upgrading the
+  socket and closing it, so viewers no longer reconnect every 500 ms for the rest
+  of the session's TTL.
+- The viewer resets its reconnect backoff on the first decoded frame and stops
+  retrying once the session reports `terminated` or `error`.
 
 ## [1.6.0] - 2026-11-05
 
@@ -466,7 +464,8 @@ publishes the section matching the tag.
 Initial release: a Go control plane that boots a disposable Docker sandbox
 running offscreen Chromium.
 
-[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/dm0xa/isola-browser/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/dm0xa/isola-browser/compare/v1.5.4...v1.6.0
 [1.5.4]: https://github.com/dm0xa/isola-browser/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/dm0xa/isola-browser/compare/v1.5.2...v1.5.3
