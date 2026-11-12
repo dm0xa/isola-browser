@@ -7,6 +7,8 @@ services:
     depends_on:
       - backend
       - frontend
+    labels:
+      isola.stack: "1"
     networks:
       - isola
 
@@ -77,6 +79,8 @@ services:
     mem_limit: ${ISOLA_BACKEND_MEMORY:-1g}
     memswap_limit: ${ISOLA_BACKEND_MEMORY:-1g}  # == mem_limit: no swap escape hatch
     cpus: ${ISOLA_BACKEND_CPUS:-2}
+    labels:
+      isola.stack: "1"
     networks:
       - isola
       - browser-net
@@ -95,6 +99,8 @@ services:
       - ../frontend/src:/app/src
     environment:
       - VITE_API_URL=http://localhost
+    labels:
+      isola.stack: "1"
     networks:
       - isola
 
@@ -102,10 +108,14 @@ volumes:
   # Holds sessions.json, which contains session control tokens: keep it 0700
   # (the binary enforces that) and treat the volume as secret-bearing state.
   isola-data:
+    labels:
+      isola.stack: "1"
 
 networks:
   isola:
     driver: bridge
+    labels:
+      isola.stack: "1"
   browser-net:
     # ── Security: hardened bridge for browser containers ──
     # Only the backend is attached; no direct internet ingress.
@@ -117,6 +127,8 @@ networks:
     # session creation would fail with "network browser-net not found".
     name: browser-net
     driver: bridge
+    labels:
+      isola.stack: "1"
     driver_opts:
       com.docker.network.bridge.enable_icc: "false"
       com.docker.network.bridge.enable_ip_masquerade: "true"

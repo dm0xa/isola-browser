@@ -14,6 +14,9 @@ func TestContainerLabels(t *testing.T) {
 
 	session := containerLabels("sess-123", "user-9", false)
 	joined := strings.Join(session, " ")
+	if !strings.Contains(joined, "isola.stack=1") {
+		t.Errorf("session labels missing isola.stack=1: %v", session)
+	}
 	if !strings.Contains(joined, "isola.session_id=sess-123") {
 		t.Errorf("session labels missing isola.session_id: %v", session)
 	}
@@ -26,6 +29,9 @@ func TestContainerLabels(t *testing.T) {
 
 	warm := containerLabels("warm-abc", "warm-pool", true)
 	joinedWarm := strings.Join(warm, " ")
+	if !strings.Contains(joinedWarm, "isola.stack=1") {
+		t.Errorf("warm labels missing isola.stack=1: %v", warm)
+	}
 	if !strings.Contains(joinedWarm, "isola.warm=1") {
 		t.Errorf("warm labels missing isola.warm=1: %v", warm)
 	}

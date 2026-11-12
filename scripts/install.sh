@@ -627,6 +627,7 @@ ensure_browser_network() {
     # The bridge interface name is capped at 15 characters (IFNAMSIZ - 1), so it
     # is abbreviated here; br-isola-browser would be 16 and create would fail.
     if docker network create \
+        --label isola.stack=1 \
         --driver bridge \
         --opt com.docker.network.bridge.enable_icc=false \
         --opt com.docker.network.bridge.enable_ip_masquerade=true \

@@ -22,6 +22,8 @@ services:
       - isola
     entrypoint: ["true"]
     restart: "no"
+    labels:
+      isola.stack: "1"
 
   # The single isola process: serves the embedded React UI on /, the API
   # on /api/*, and the WebSocket proxy on /ws/*. Needs /var/run/docker.sock
@@ -80,6 +82,8 @@ services:
     networks:
       - isola
       - browser-net
+    labels:
+      isola.stack: "1"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
@@ -92,10 +96,16 @@ networks:
   isola:
     name: isola
     driver: bridge
+    labels:
+      isola.stack: "1"
   browser-net:
     name: browser-net
     driver: bridge
+    labels:
+      isola.stack: "1"
 
 volumes:
   isola-data:
     name: isola-data
+    labels:
+      isola.stack: "1"

@@ -42,6 +42,8 @@ RUN chmod +x ./scripts/build.sh && \
 # ──────────────────────────────────────────────────────────────────
 FROM alpine:3.20
 
+LABEL isola.stack="1"
+
 RUN apk add --no-cache ca-certificates tzdata docker-cli wget
 
 COPY --from=backend-builder /isola /isola

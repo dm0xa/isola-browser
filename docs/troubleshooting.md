@@ -16,10 +16,16 @@ Isola logs at three layers; which one you want depends on what broke. Each layer
 The streamer logs to stderr, which Docker captures as the container's log. There's no separate log file.
 
 ```bash
+docker ps -a --filter label=isola.stack=1      # every isola container (sessions + warm pool)
 docker ps --filter label=isola.session_id      # live session containers
 docker logs -f <container-id>                  # streamer + [browser-node-electron] + Chromium
 docker ps -a --filter label=isola.warm=1       # warm-pool containers (no session id)
 ```
+
+`isola.stack=1` is stamped on containers isola creates (session and warm pool), the
+Compose services, the `isola`/`browser-net` networks, the `isola-data` volume and the
+built images, so one filter finds the whole deployment. It is metadata for operators
+only — lifecycle decisions use `isola.session_id` / `isola.warm`.
 
 Expect lines such as `isola-streamer listening on :5900`, `cdp: connected to Chromium`, `capture: browser auto-attach enabled`.
 

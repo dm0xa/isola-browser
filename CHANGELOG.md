@@ -6,6 +6,13 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Added
+
+- A single `isola.stack=1` label on everything isola creates — session and warm-pool
+  containers, Compose services, the `isola`/`browser-net` networks, the `isola-data`
+  volume, and the built images — so one filter (`docker ps -a --filter
+  label=isola.stack=1`) lists the whole deployment.
+
 ### Changed
 
 - A relay dial that the container refuses now finalizes the session as soon as

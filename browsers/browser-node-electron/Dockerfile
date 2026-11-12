@@ -59,6 +59,8 @@ RUN set -eux; \
 # node/npm/corepack/yarn plus /usr/local/include that nothing here executes.
 FROM debian:bookworm-slim
 
+LABEL isola.stack="1"
+
 # Electron runtime dependencies (Debian)
 # See: https://www.electronjs.org/docs/latest/development/build-instructions-linux
 RUN apt-get update && apt-get install -y --no-install-recommends \

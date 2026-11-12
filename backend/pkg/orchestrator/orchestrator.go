@@ -260,6 +260,12 @@ func validateBrowserFlags(flags string) error {
 	return nil
 }
 
+// stackLabel marks every container isola creates (sandbox, warm pool) so the
+// whole deployment answers one filter: `docker ps -a --filter label=isola.stack`.
+// It is metadata for operators only — no code path filters on it, and it must
+// never stand in for isola.session_id/isola.warm, which carry lifecycle meaning.
+const stackLabel = "isola.stack=1"
+
 // containerLabels returns the --label pairs for a container. Exactly one of
 // the two label sets is ever applied:
 //
@@ -270,15 +276,20 @@ func validateBrowserFlags(flags string) error {
 //     untracked session and terminate the container, including after it has
 //     been claimed and is serving a user.
 //
+// Both sets carry isola.stack=1; it is a shared marker, not part of the
+// one-of-two invariant.
+//
 // Kept as a pure function because getting it wrong is silent and destructive.
 func containerLabels(sessionID, userID string, warm bool) []string {
 	if warm {
 		return []string{
+			"--label", stackLabel,
 			"--label", "isola.warm=1",
 			"--label", "isola.warm_id=" + sessionID,
 		}
 	}
 	return []string{
+		"--label", stackLabel,
 		"--label", "isola.session_id=" + sessionID,
 		"--label", "isola.user_id=" + userID,
 	}
