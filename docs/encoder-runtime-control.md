@@ -243,9 +243,10 @@ replace that with ~4 ms and no reset — but it costs:
   already in the image — `ffmpeg` is installed from apt and drags in
   `libavcodec.so.59.37.100` (12.7 MB) and `libx264.so.164` (1.4 MB) — so the
   image delta is ~0, but the build is no longer architecture-agnostic:
-  `publish-browser-image.yml` builds `linux/amd64,linux/arm64` through buildx,
-  and cgo means compiling under emulation (or a cross toolchain) for the
-  non-native leg.
+  `publish-browser-image.yml` builds `linux/amd64,linux/arm64` through buildx
+  with native runners per architecture (`ubuntu-24.04`, `ubuntu-24.04-arm`), so
+  cgo compiles natively on both legs and the arm64 SDK packages must be
+  installable from apt on the arm64 runner.
 - **A muxer.** `startEncoder` currently delegates fMP4 fragmenting to ffmpeg
   (`-movflags frag_keyframe+empty_moov+default_base_moof -frag_duration 20000`)
   and pixel-format conversion to libavfilter. In-process means either binding

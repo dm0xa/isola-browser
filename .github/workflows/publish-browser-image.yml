@@ -19,15 +19,29 @@ permissions:
   packages: write
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  # Each architecture builds on a native runner rather than both on one x86
+  # runner under QEMU. The Electron `npm ci` stage is the bulk of the build and
+  # is architecture-specific, so the emulated arm64 leg set the pace for the
+  # whole release; on a native arm64 runner it runs at native speed. The two
+  # single-platform manifests are stitched back into one multi-arch tag by the
+  # `merge` job.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+            # Same scope ci.yml's `fps` job reads, so CI warms it.
+            cache_scope: isola-browser-image
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            cache_scope: isola-browser-image-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
-      # arm64 is built under emulation, so the Electron npm ci inside the
-      # node-builder stage runs for a foreign arch. That is the one part of this
-      # image that is not arch-independent.
-      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
@@ -37,18 +51,71 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      # Pushed by digest only: no tag can point at a half-finished multi-arch
+      # image, so `:electron` keeps serving the previous release until `merge`
+      # re-points it.
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: ./browsers
           file: ./browsers/browser-node-electron/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ghcr.io/dm0xa/isola-browser:electron
-            ghcr.io/dm0xa/isola-browser:${{ github.ref_name }}
-            ghcr.io/dm0xa/isola-browser:sha-${{ github.sha }}
-          # Shared with ci.yml's `fps` job, which builds this image to run the
-          # viewer frame-rate test.
-          cache-from: type=gha,scope=isola-browser-image
-          cache-to: type=gha,mode=max,scope=isola-browser-image
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/dm0xa/isola-browser,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create the multi-arch tags
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd "$RUNNER_TEMP/digests"
+          refs=()
+          for digest in *; do
+            refs+=("ghcr.io/dm0xa/isola-browser@sha256:${digest}")
+          done
+          docker buildx imagetools create \
+            -t ghcr.io/dm0xa/isola-browser:electron \
+            -t "ghcr.io/dm0xa/isola-browser:${TAG}" \
+            -t "ghcr.io/dm0xa/isola-browser:sha-${GITHUB_SHA}" \
+            "${refs[@]}"
+          # Prove the published tags resolve to both platforms.
+          docker buildx imagetools inspect "ghcr.io/dm0xa/isola-browser:${TAG}" | tee /tmp/manifest.txt
+          for platform in linux/amd64 linux/arm64; do
+            grep -q "$platform" /tmp/manifest.txt || {
+              echo "::error::${TAG} has no ${platform} manifest"; exit 1; }
+          done

@@ -16,16 +16,14 @@ permissions:
   contents: write
 
 jobs:
+  # One runner for all four targets. The backend is pure Go (the image builds it
+  # with CGO_ENABLED=0), so GOOS/GOARCH are the only difference between the
+  # archives and the frontend bundle only has to be built once — the previous
+  # 4-way matrix paid for four `npm ci` + `npm run build` runs to produce the
+  # same four tarballs from the same sources.
   build:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { goos: linux,  goarch: amd64 }
-          - { goos: linux,  goarch: arm64 }
-          - { goos: darwin, goarch: amd64 }
-          - { goos: darwin, goarch: arm64 }
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -35,6 +33,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26.10'
+          cache-dependency-path: backend/go.sum
 
       - uses: actions/setup-node@v7
         with:
@@ -52,36 +51,54 @@ jobs:
           mkdir -p backend/cmd/single-user/frontend-dist
           cp -R frontend/dist/. backend/cmd/single-user/frontend-dist/
 
-      - name: Build binary
+      - name: Cross-compile and package
         working-directory: backend
         env:
           CGO_ENABLED: '0'
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           COMMIT="$(git rev-parse --short HEAD)"
           BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          go build -trimpath \
-            -ldflags "-s -w \
-              -X github.com/dm0xa/isola-browser/backend/pkg/version.Version=${VERSION} \
-              -X github.com/dm0xa/isola-browser/backend/pkg/version.Commit=${COMMIT} \
-              -X github.com/dm0xa/isola-browser/backend/pkg/version.BuildTime=${BUILD_TIME}" \
-            -o ../dist/isola ./cmd/single-user
-
-      - name: Package
-        run: |
-          mkdir -p release
-          tar -czf "release/isola-${{ matrix.goos }}-${{ matrix.goarch }}-${GITHUB_REF_NAME}.tar.gz" -C dist isola
+          mkdir -p ../dist ../release
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            GOOS="${target%/*}"
+            GOARCH="${target#*/}"
+            out="../dist/${GOOS}-${GOARCH}"
+            mkdir -p "$out"
+            GOOS="$GOOS" GOARCH="$GOARCH" go build -trimpath \
+              -ldflags "-s -w \
+                -X github.com/dm0xa/isola-browser/backend/pkg/version.Version=${VERSION} \
+                -X github.com/dm0xa/isola-browser/backend/pkg/version.Commit=${COMMIT} \
+                -X github.com/dm0xa/isola-browser/backend/pkg/version.BuildTime=${BUILD_TIME}" \
+              -o "$out/isola" ./cmd/single-user
+            # The matrix used to hand each runner its target; now one runner
+            # produces all four, so assert the binary really is the platform it
+            # is about to be named after. `tar` would happily ship a mislabeled
+            # Mach-O as isola-linux-amd64.
+            for setting in GOOS GOARCH; do
+              want="${!setting}"
+              got="$(go version -m "$out/isola" | sed -n "s/^[[:space:]]*build[[:space:]]*${setting}=//p")"
+              if [ "$got" != "$want" ]; then
+                echo "::error::$target: ${setting} is '${got}', expected '${want}'"
+                exit 1
+              fi
+            done
+            # Member name stays `isola`: scripts/install.sh extracts exactly that.
+            tar -czf "../release/isola-${GOOS}-${GOARCH}-${GITHUB_REF_NAME}.tar.gz" -C "$out" isola
+          done
+          ( cd ../release && sha256sum -- *.tar.gz > checksums.txt && cat checksums.txt )
 
       - uses: actions/upload-artifact@v7
         with:
-          name: isola-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: release/*.tar.gz
+          name: release-archives
+          path: |
+            release/*.tar.gz
+            release/checksums.txt
 
   publish:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       # The release body is the CHANGELOG.md section for this tag. GitHub's own
       # generation lists merged pull requests, and this repository commits
@@ -96,11 +113,18 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Generate checksums.txt
-        working-directory: artifacts
+      - name: Check the archives and checksums agree
         run: |
-          sha256sum *.tar.gz > checksums.txt
-          cat checksums.txt
+          cd artifacts
+          ls -l
+          # install.sh matches the checksum line by basename, so the file must
+          # list every archive exactly as it is published.
+          for archive in *.tar.gz; do
+            grep -q " ${archive}\$" checksums.txt || {
+              echo "::error::${archive} is missing from checksums.txt"; exit 1; }
+            tar -tzf "$archive" | grep -qx isola || {
+              echo "::error::${archive} does not contain the isola binary"; exit 1; }
+          done
 
       - name: Publish release
         uses: softprops/action-gh-release@v3

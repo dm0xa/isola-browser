@@ -5,9 +5,69 @@ on:
     branches: [main]
   pull_request:
 
+# One run per ref. A PR that gets another commit cancels its superseded run;
+# stacked pushes to main coalesce (GitHub keeps one running + one pending per
+# group, so the newest pending run replaces the older one) without ever killing
+# a run that is already in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Decides whether the expensive jobs are relevant to this change. `test`
+  # always runs; `docker` runs when anything in the control-plane image moves,
+  # and `fps` when the sandbox image or streamer does — together they are the
+  # two multi-minute jobs. Nothing here is a required check (main carries no
+  # branch protection), so skipping a job blocks no merge.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docker: ${{ steps.scope.outputs.docker }}
+      browsers: ${{ steps.scope.outputs.browsers }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: scope
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # Unknown base (new branch, first push, unparsable event) means we
+          # cannot prove what changed, so assume everything did rather than
+          # skip coverage.
+          if [ -z "$BASE" ] || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            changed="$(git ls-files)"
+          else
+            changed="$(git diff --name-only "$BASE" "$GITHUB_SHA")"
+          fi
+          matches() { printf '%s\n' "$changed" | grep -Eq "$1"; }
+
+          # backend/Dockerfile builds the frontend and embeds it, so every
+          # input of that image belongs to this bucket.
+          if matches '^(backend/|frontend/|browsers/|deploy/|nginx/|docker-compose|\.dockerignore|\.github/workflows/ci\.yml)'; then
+            echo 'docker=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'docker=false' >> "$GITHUB_OUTPUT"
+          fi
+
+          # The fps job builds browsers/browser-node-electron and drives the
+          # streamer against it.
+          if matches '^(browsers/|\.github/workflows/ci\.yml)'; then
+            echo 'browsers=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'browsers=false' >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "--- changed files ---"
+          printf '%s\n' "$changed"
+          echo "--- docker/browsers ---"
+          cat "$GITHUB_OUTPUT"
+
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -49,7 +109,10 @@ jobs:
   # Without this job a broken backend/Dockerfile is only discovered by a user
   # running `docker compose up --build`.
   docker:
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -67,7 +130,10 @@ jobs:
           tags: isola:ci
           load: true
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Pull requests write their own scope instead of the shared one, so
+          # commit-by-commit churn cannot evict the layers a release build (and
+          # this job on main) needs.
+          cache-to: type=gha,mode=max${{ github.ref != 'refs/heads/main' && ',scope=isola-backend-pr' || '' }}
 
       # Boot it: the control plane serves /health with no Docker socket, so no
       # mount is needed. Assert only that a version is *reported* — on main
@@ -101,7 +167,10 @@ jobs:
   # metric still says "active" is invisible to the unit suites — this job is the
   # only place the two rates are measured together.
   fps:
+    needs: changes
+    if: needs.changes.outputs.browsers == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -122,7 +191,9 @@ jobs:
           tags: isola-browser:electron
           load: true
           cache-from: type=gha,scope=isola-browser-image
-          cache-to: type=gha,mode=max,scope=isola-browser-image
+          # Same reason as the `docker` job: PR churn writes its own scope so it
+          # cannot evict the shared browser-image cache the tag build imports.
+          cache-to: type=gha,mode=max,scope=isola-browser-image${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
 
       # 960x540: the assertion is the rate ratio, and the smaller surface keeps
       # raster+encode off the CI runner's two cores.

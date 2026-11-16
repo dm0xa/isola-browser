@@ -74,9 +74,10 @@ The date in the CHANGELOG heading is the day the tag is pushed.
    git push origin vX.Y.Z
    ```
 5. The `main` push starts `ci`; the tag starts `release` (four tarballs plus
-   `checksums.txt`) and `publish-browser-image` (multi-arch sandbox image, the
-   long pole at roughly ten minutes). All three must be green and the release
-   must carry all five assets before announcing:
+   `checksums.txt`, cross-compiled on one runner) and `publish-browser-image`
+   (multi-arch sandbox image: amd64 and arm64 build on native runners in
+   parallel, then a merge job stitches the tags). All three must be green and
+   the release must carry all five assets before announcing:
    ```bash
    gh run list --branch vX.Y.Z                     # release + publish-browser-image
    gh run list --workflow ci.yml --branch main --limit 1
