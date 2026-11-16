@@ -6,6 +6,9 @@ vendor/
 # (see ee/README.md). Never commit it to the community repo.
 ee/
 
+# Local agent planning scratch (private notes; the repo is public)
+.plans/
+
 # Build output
 dist/
 temp/
