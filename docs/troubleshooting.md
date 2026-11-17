@@ -97,6 +97,12 @@ Expected container-log noise that is **not** fatal: `Fontconfig error: No writab
 - A page that pins the CPU (heavy WebGL, a runaway script) can exceed the container's 3 CPU limit. That's a resource limit, not a bug.
 - If the picture is frozen but frames keep flowing, the page stopped changing — it's the page, not the transport.
 
+## A Site Says the Browser Isn't Supported
+
+The sandbox runs a current Chromium, but Electron's default user agent names the embedder (`electron-runner/1.0.0 … Electron/45.1.0`). UA-sniffing gates (bowser/UAParser-based, common on betting and banking sites) resolved that to browser "Electron" and refused to serve. Current images set the app-wide user agent to plain Chrome (`Chrome/<Chromium version>` with no Electron or app token), so `bowser.parse` reports `Chrome`.
+
+If a site still refuses, it is not looking at the UA string: check `navigator.userAgentData.brands` — the engine reports `Chromium`, never `Google Chrome` — or the site is gating on geolocation, account state, or bot signals unrelated to the browser build.
+
 ## Sessions End Sooner Than Expected
 
 - `session.default_min` (default 10) sets the starting length and `session.max_min` (default 30) the ceiling.

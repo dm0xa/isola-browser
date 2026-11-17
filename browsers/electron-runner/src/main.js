@@ -39,6 +39,7 @@ const {
 const { applyTorProxy, isTorEnabled } = require('./tor');
 const { isAllowedPageNavigation, resolveAddressBar } = require('./navigation_url');
 const { themeColours, fillPageCanvas } = require('./theme');
+const { applyUserAgent } = require('./user_agent');
 
 const START_URL = process.env.START_URL || 'https://example.com';
 const RESOLUTION = process.env.RESOLUTION || '1280x720';
@@ -1308,6 +1309,13 @@ function handleResize(newWidth, newHeight) {
 // Chromium switches live in ./chrome_flags.js: the list is load-bearing (see the
 // --disable-dev-shm-usage note there) and is asserted by test/chrome_flags.test.js.
 applyChromeFlags(app.commandLine);
+
+// Advertise plain Chrome, not Electron. Electron's default UA names the
+// embedder and UA-sniffing sites (bowser/UAParser tables) then classify the
+// browser as "Electron", which every supported-browser gate rejects — the
+// viewer shows "This browser isn't supported" on an otherwise current
+// Chromium. Set before whenReady() so no window or request can use the old one.
+console.log(`[electron] user agent: ${applyUserAgent(app)}`);
 
 app.whenReady().then(async () => {
   console.log(`[electron] starting (${w}x${h}, ${frameRate}fps, url=${START_URL})`);

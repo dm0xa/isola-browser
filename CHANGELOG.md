@@ -6,6 +6,14 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- The sandbox advertises plain Chrome in its user agent instead of Electron's
+  default, which names the embedder (`electron-runner/1.0.0 ... Electron/45.1.0`).
+  UA-sniffing sites (bowser/UAParser-based supported-browser gates) classified
+  the browser as "Electron" and answered "This browser isn't supported" on a
+  current Chromium engine.
+
 ## [1.6.2] - 2026-11-17
 
 ### Fixed
