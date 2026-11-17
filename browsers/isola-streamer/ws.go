@@ -236,6 +236,7 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 	var (
 		lastBitrateStep     time.Time
 		bitrateStepsRefused int
+		lastAbrLogKbps      int
 	)
 	setBitrate := func(kbps int) {
 		// Budget, like request_keyframe: every accepted step replaces the

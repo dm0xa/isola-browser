@@ -282,6 +282,7 @@ function logBlocked(kind, url) {
 }
 
 function connectToUds(sockPath) {
+  let udsAttempts = 0;
   return new Promise((resolve) => {
     const attempt = () => {
       const sock = net.createConnection(sockPath);

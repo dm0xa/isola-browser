@@ -40,21 +40,26 @@ func BuildSessionValidator() func(ctx context.Context, r *http.Request, userID u
 	}
 }
 
+// toSessionContext builds the plugin view of a session event.
+func toSessionContext(ev api.SessionEvent) *plugin.SessionContext {
+	return &plugin.SessionContext{
+		SessionID:   ev.SessionID,
+		UserID:      ev.UserID,
+		ContainerID: ev.ContainerID,
+		TargetURL:   ev.TargetURL,
+		BrowserType: ev.BrowserType,
+		VncPassword: ev.VncPassword,
+		Host:        ev.Host,
+		Port:        ev.Port,
+		CdpPort:     ev.CdpPort,
+	}
+}
+
 // BuildOnSessionReady returns a callback that fires all session hooks (OnCreate)
 // and audit loggers with a session.create event.
 func BuildOnSessionReady() func(ctx context.Context, ev api.SessionEvent) {
 	return func(ctx context.Context, ev api.SessionEvent) {
-		sc := &plugin.SessionContext{
-			SessionID:   ev.SessionID,
-			UserID:      ev.UserID,
-			ContainerID: ev.ContainerID,
-			TargetURL:   ev.TargetURL,
-			BrowserType: ev.BrowserType,
-			VncPassword: ev.VncPassword,
-			Host:        ev.Host,
-			Port:        ev.Port,
-			CdpPort:     ev.CdpPort,
-		}
+		sc := toSessionContext(ev)
 		for _, hook := range SessionHooks() {
 			if err := hook.OnCreate(ctx, sc); err != nil {
 				log.Warn().Err(err).Str("hook", hook.Info().Name).Msg("hook: on_create")
@@ -79,13 +84,7 @@ func BuildOnSessionReady() func(ctx context.Context, ev api.SessionEvent) {
 // and audit loggers with a session.terminate event.
 func BuildOnSessionDeleted() func(ctx context.Context, ev api.SessionEvent) {
 	return func(ctx context.Context, ev api.SessionEvent) {
-		sc := &plugin.SessionContext{
-			SessionID:   ev.SessionID,
-			UserID:      ev.UserID,
-			ContainerID: ev.ContainerID,
-			TargetURL:   ev.TargetURL,
-			BrowserType: ev.BrowserType,
-		}
+		sc := toSessionContext(ev)
 		for _, hook := range SessionHooks() {
 			if err := hook.OnTerminate(ctx, sc); err != nil {
 				log.Warn().Err(err).Str("hook", hook.Info().Name).Msg("hook: on_terminate")

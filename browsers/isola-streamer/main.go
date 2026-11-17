@@ -37,7 +37,7 @@ func main() {
 	log.Printf("mux: frame listener %s", frameSock)
 	incoming, err := listenFrames(frameSock)
 	if err != nil {
-		log.Fatalf("failed to start frame listener on %s: %v", frameSock, err)
+		log.Fatalf("frame listener %s: %v", frameSock, err)
 	}
 	globalBroadcaster = newFrameBroadcaster(incoming)
 
@@ -50,7 +50,7 @@ func main() {
 
 	l, err := setupMux(port, handleRoot)
 	if err != nil {
-		log.Fatalf("failed to start mux: %v", err)
+		log.Fatalf("mux: %v", err)
 	}
 	defer l.Close()
 

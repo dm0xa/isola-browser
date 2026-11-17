@@ -33,13 +33,12 @@ var cursorInFlight atomic.Bool
 // they also feed the renderer-health signal the UI shows.
 var (
 	cursorBackoffUntil atomic.Int64 // unix-nano
-	cursorFailLogAt    atomic.Int64 // unix-nano
+	cursorFailLogged   atomic.Bool
 )
 
 const (
 	cursorBackoffBase     = 500 * time.Millisecond
 	cursorBackoffMax      = 20 * time.Second
-	cursorFailLogInterval = 5 * time.Second
 	cursorMaxBackoffShift = 5
 )
 

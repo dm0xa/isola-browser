@@ -309,12 +309,6 @@ func (fb *frameBroadcaster) Subscribe() chan *Frame {
 	return ch
 }
 
-func (fb *frameBroadcaster) subscriberCount() int {
-	fb.mu.RLock()
-	defer fb.mu.RUnlock()
-	return len(fb.subs)
-}
-
 // Unsubscribe removes a subscriber channel and closes it.
 func (fb *frameBroadcaster) Unsubscribe(ch chan *Frame) {
 	fb.mu.Lock()

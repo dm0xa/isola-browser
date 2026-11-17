@@ -787,14 +787,9 @@ func (h *Handler) DeleteSession(w http.ResponseWriter, r *http.Request) {
 	// cancel `docker stop` and leave a live container behind a terminated row.
 	teardownCtx, cancelTeardown := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
 	defer cancelTeardown()
-	h.finalizeSession(teardownCtx, session)
+	h.orch.FinalizeRunningSession(teardownCtx, h.store, h.cache, session)
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": models.SessionStatusTerminated})
-}
-
-// finalizeSession stops the container, clears cache, fires hooks, and marks terminated.
-func (h *Handler) finalizeSession(ctx context.Context, session *models.Session) {
-	h.orch.FinalizeRunningSession(ctx, h.store, h.cache, session)
 }
 
 // OnBackgroundSessionEnd is wired into the orchestrator for expiry/idle/health termination.

@@ -652,7 +652,6 @@ func (h *streamHub) requestKeyframe(sub *streamSub) {
 	}
 	now := time.Now()
 	if ok, reason := sub.keyframeBudgetAllows(now); !ok {
-		reqs, lastAt := sub.keyframeReqs, sub.keyframeReqAt
 		h.mu.Unlock()
 		log.Printf("ws: keyframe refused (%s) %d/%d", reason, sub.keyframeReqs, keyframeRequestsPerConn)
 		return

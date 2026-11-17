@@ -357,9 +357,8 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 		"-i", "pipe:0",
 	)
 
-	encName := "libx264"
 	if hw != nil {
-		encName = hw.name
+
 		args = append(args,
 			"-vf", scaledVf(hw.vf, encW, encH, width, height),
 			"-c:v", hw.name,
@@ -448,7 +447,6 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 		tuning := libx264Quality
 		x264Params := fmt.Sprintf(tuning.params, gop, gop)
 		threads := encoderThreads()
-		encName = fmt.Sprintf("libx264/%dt", threads)
 		args = append(args,
 			"-vf", scaledVf("format=yuv420p", encW, encH, width, height),
 			"-c:v", "libx264",
