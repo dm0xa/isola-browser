@@ -460,7 +460,13 @@ if [ "${ISOLA_AUDIO:-1}" = "1" ]; then
         --load="module-null-sink sink_name=browser_out sink_properties=device.description=Browser_Output" \
         --load="module-always-sink" \
         2>/dev/null || true
-    sleep 1
+    # Wait for the daemon's socket rather than a fixed second: pulseaudio binds
+    # it in ~20ms, and the sleeps here were 1s of the session's
+    # time-to-first-frame (measured: 1 134ms in-container start→listening).
+    for _ in $(seq 1 100); do
+        [ -S "${PULSE_SOCKET}" ] && break
+        sleep 0.01
+    done
     if ! pgrep -x pulseaudio >/dev/null 2>&1; then
         echo "[browser-node-electron] WARNING: PulseAudio failed to start — audio capture disabled"
     else
@@ -494,7 +500,13 @@ else
     /usr/local/bin/isola-streamer &
 fi
 ISOLA_STREAMER_PID=$!
-sleep 1
+# electron-runner connects to the streamer's UDS immediately (and hangs if
+# nothing is listening), so wait for the socket rather than a fixed second:
+# the streamer binds it in ~10ms, and the sleep was another full second.
+for _ in $(seq 1 200); do
+    [ -S /run/isola/frame.sock ] && break
+    sleep 0.01
+done
 
 # ── Start electron-runner (offscreen browser → UDS client) ────────────
 echo "[browser-node-electron] Starting Xvfb display :99 (GTK needs display even for offscreen)"
@@ -554,12 +566,17 @@ SOCAT_PID=$!
 # ── Signal handlers ───────────────────────────────────────────────────
 cleanup() {
     echo "[browser-node-electron] Shutting down..."
-    kill ${ELECTRON_PID} 2>/dev/null || true
-    kill ${SOCAT_PID} 2>/dev/null || true
-    kill ${ISOLA_STREAMER_PID} 2>/dev/null || true
-    kill ${XVFB_PID} 2>/dev/null || true
-    kill ${AUDIO_FFMPEG_PID} 2>/dev/null || true
-    kill ${TOR_PID} 2>/dev/null || true
+    # SIGKILL, not SIGTERM: the sandbox is disposable and has nothing to flush,
+    # while a polite SIGTERM left Electron's helper processes alive long enough
+    # that every `docker stop -t 3` burned the full three-second grace and ended
+    # in SIGKILL anyway (measured on every viewer-less session end). Docker kills
+    # any process still alive when this one exits.
+    kill -9 ${ELECTRON_PID} 2>/dev/null || true
+    kill -9 ${SOCAT_PID} 2>/dev/null || true
+    kill -9 ${ISOLA_STREAMER_PID} 2>/dev/null || true
+    kill -9 ${XVFB_PID} 2>/dev/null || true
+    kill -9 ${AUDIO_FFMPEG_PID} 2>/dev/null || true
+    kill -9 ${TOR_PID} 2>/dev/null || true
     pulseaudio -k 2>/dev/null || true
     wait 2>/dev/null
     echo "[browser-node-electron] Shutdown complete"
