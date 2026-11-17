@@ -121,24 +121,32 @@ func waitForPoolSize(t *testing.T, p *WarmPool, want int, timeout time.Duration)
 	}
 }
 
-func TestWarmPoolClaimAcceptsAFittingResolution(t *testing.T) {
+func TestWarmPoolClaimRequiresExactResolution(t *testing.T) {
 	t.Parallel()
 	p, _, terminated := newTestPool(t, 1)
 
 	p.fillOne(context.Background())
 
-	// A smaller request is served by this container: the caller reshapes the
-	// display with the session resize path. Claim reports the baked box so the
-	// caller knows whether a reshape is needed.
-	info, baked := p.Claim(context.Background(), "1728x1080", "dark", 30)
+	// A claim must need no reshape. Reshaping an idle offscreen window before a
+	// viewer attaches costs seconds (Chromium applies the resize lazily), which
+	// measured worse than the cold start it was meant to save — so a smaller
+	// request cold-starts instead of claiming.
+	if info, _ := p.Claim(context.Background(), "1728x1080", "dark", 30); info != nil {
+		t.Fatalf("Claim for a smaller resolution = %+v, want nil (must not reshape)", info)
+	}
+	if len(*terminated) != 0 {
+		t.Fatalf("terminated = %v, want none (the container stays pooled)", *terminated)
+	}
+	if len(p.warm) != 1 {
+		t.Fatalf("pool = %d, want the container kept", len(p.warm))
+	}
+
+	info, baked := p.Claim(context.Background(), "1920x1080", "dark", 30)
 	if info == nil {
-		t.Fatal("Claim for a fitting resolution = nil, want the pooled container")
+		t.Fatal("Claim at the baked resolution = nil, want the pooled container")
 	}
 	if baked != "1920x1080" {
 		t.Fatalf("baked resolution = %q, want 1920x1080", baked)
-	}
-	if len(*terminated) != 0 {
-		t.Fatalf("terminated = %v, want none (claimed containers stay alive)", *terminated)
 	}
 }
 
@@ -198,6 +206,40 @@ func TestWarmPoolClaimDropsDeadContainer(t *testing.T) {
 	// The claim probe retries once, then tears the container down.
 	if len(*terminated) != 2 {
 		t.Fatalf("terminated = %v, want the dead container torn down", *terminated)
+	}
+}
+
+// Regression: the teardown paths used to call the test-only p.stop hook
+// directly. NewWarmPool never installs it, so an idle container that died in
+// production (OOM, runtime restart) panicked the whole process from the
+// reconcile or claim goroutine. A pool with no stop hook and no orchestrator
+// must prune quietly instead.
+func TestWarmPoolTeardownWithoutStopHookDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	p, _, _ := newTestPool(t, 1)
+	p.stop = nil // production shape: the hook is only installed by tests
+
+	p.prober = func(ctx context.Context, info *SessionInfo) error {
+		return errors.New("container dead")
+	}
+	if !p.fillOne(context.Background()) {
+		t.Fatal("fillOne failed")
+	}
+	p.mu.Lock()
+	victim := p.warm[0].info.ContainerID
+	p.mu.Unlock()
+
+	// Claim path: the last-mile probe fails, so the claimed container is
+	// discarded and the pool refills.
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
+		t.Fatalf("Claim of dead container = %+v, want nil", got)
+	}
+
+	// Reconcile path: two strikes prune the container the refill added.
+	p.reconcile(context.Background())
+	p.reconcile(context.Background())
+	if poolTracks(p, victim) {
+		t.Fatalf("dead container %s still tracked after reconcile", victim)
 	}
 }
 

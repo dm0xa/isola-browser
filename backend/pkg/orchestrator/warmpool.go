@@ -114,6 +114,12 @@ func (p *WarmPool) clearPending(containerID string) {
 // container is torn down (mirrors containerMissLimit for live sessions).
 const warmMissLimit = 2
 
+// warmClaimPendingTTL bounds how long a claimed container stays shielded from
+// the orphan collector without an active session. It only needs to outlast the
+// create-to-activate path (bounded by the handler's provisioning context); a
+// claim whose session never activates must not hide its container forever.
+const warmClaimPendingTTL = 2 * time.Minute
+
 // warmFillGap spaces consecutive warm fills. Empty slots are provisioned by a
 // single worker, one container at a time, so a size-N pool never boots N
 // browsers at once; the gap keeps the bursts apart on a loaded host and stops a
@@ -239,12 +245,12 @@ func (p *WarmPool) Start(ctx context.Context, interval time.Duration) {
 // the pool is disabled/empty or nothing matches — the caller falls back to a
 // cold create. The caller owns the container from the moment Claim returns.
 //
-// Theme and frame rate must match exactly: both are baked into the window and
-// the encoder. The resolution only has to fit inside the pooled box, because
-// the caller reshapes the display with the session resize path, which clamps to
-// the launch resolution. A smaller request therefore claims too, and the pixel
-// budget, encoder and /dev/shm all stay within what the container was created
-// with.
+// Theme, frame rate and resolution must all match exactly: all three are baked
+// into the window and the encoder. Reshaping an idle warm container was
+// allowed once, but resizing an offscreen window before a viewer attaches is
+// applied lazily by Chromium — measured 3.2–3.7 s to first frame, worse than
+// the 1.4 s cold start it tried to save — so a mismatched request cold-starts
+// at the size that was actually asked for.
 func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int) (*SessionInfo, string) {
 	p.mu.Lock()
 	if p.disabled {
@@ -257,12 +263,20 @@ func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int)
 		if wc.info.Theme != theme || wc.info.FPS != fps {
 			continue
 		}
-		if !resolutionFits(wc.info.Resolution, resolution) {
+		if wc.info.Resolution != resolution {
 			continue
 		}
 		claimed = wc
 		baked = wc.info.Resolution
 		p.warm = append(p.warm[:i], p.warm[i+1:]...)
+		// The container leaves the pool here but only becomes "active" when
+		// ActivateSession records it, up to a provisioning budget later. Until
+		// then the orphan collector would see an untracked warm container and
+		// stop the sandbox the user is about to stream from.
+		if p.pending == nil {
+			p.pending = map[string]bool{}
+		}
+		p.pending[wc.info.ContainerID] = true
 		break
 	}
 	p.mu.Unlock()
@@ -277,10 +291,16 @@ func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int)
 	if err := p.probeWithRetry(ctx, &claimed.info.SessionInfo); err != nil {
 		log.Warn().Err(err).Str("container_id", claimed.info.ContainerID).
 			Msg("warm pool: claim probe failed, discarding container")
-		p.stop(context.Background(), claimed.info.ContainerID)
+		p.clearPending(claimed.info.ContainerID)
+		p.terminate(context.Background(), claimed.info.ContainerID)
 		p.replenish(ctx)
 		return nil, ""
 	}
+
+	// Shield the claim from the orphan sweep until ActivateSession records it,
+	// with a deadline so a claim that never activates cannot hide it forever.
+	claimedID := claimed.info.ContainerID
+	time.AfterFunc(warmClaimPendingTTL, func() { p.clearPending(claimedID) })
 
 	// Start the replacement now, not on the next reconcile tick: a browser
 	// boot takes many seconds, so waiting means the next user pays the cold
@@ -294,29 +314,6 @@ func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int)
 		Str("requested_resolution", resolution).
 		Msg("warm pool: container claimed")
 	return &claimed.info.SessionInfo, baked
-}
-
-// resolutionFits reports whether want fits inside have on both axes. A pair that
-// cannot be parsed never fits, so a malformed request falls back to the cold
-// path instead of claiming a container it cannot be reshaped to.
-func resolutionFits(have, want string) bool {
-	hw, hh, ok := parseDims(have)
-	if !ok {
-		return false
-	}
-	ww, wh, ok := parseDims(want)
-	if !ok {
-		return false
-	}
-	return ww <= hw && wh <= hh
-}
-
-func parseDims(res string) (int, int, bool) {
-	var w, h int
-	if _, err := fmt.Sscanf(res, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
-		return 0, 0, false
-	}
-	return w, h, true
 }
 
 // NotifyNavigateDisabled lets the handler report that the running browser
@@ -512,7 +509,7 @@ func (p *WarmPool) reconcile(ctx context.Context) {
 		log.Warn().Err(err).Str("container_id", wc.info.ContainerID).Msg("warm pool: idle container died, replacing")
 		p.clearMiss(wc.info.ContainerID)
 		dead[wc.info.ContainerID] = true
-		p.stop(ctx, wc.info.ContainerID)
+		p.terminate(ctx, wc.info.ContainerID)
 	}
 
 	p.mu.Lock()
@@ -636,7 +633,7 @@ func (p *WarmPool) fillOne(ctx context.Context) bool {
 	if p.disabled || len(p.warm) >= p.size {
 		// Shrink raced with a config change or disable: give it back.
 		p.mu.Unlock()
-		p.stop(ctx, info.ContainerID)
+		p.terminate(ctx, info.ContainerID)
 		return true
 	}
 	p.warm = append(p.warm, &warmContainer{info: &warmContainerInfo{
@@ -717,6 +714,12 @@ func waitTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 func (p *WarmPool) terminate(ctx context.Context, containerID string) {
 	if p.stop != nil {
 		p.stop(ctx, containerID)
+		return
+	}
+	if p.orch == nil {
+		// A pool built without an orchestrator (unit tests) has no runtime to
+		// call; the container is the caller's fixture. Production always sets
+		// orch in NewWarmPool, so this never hides a container in the wild.
 		return
 	}
 	tctx, cancel := context.WithTimeout(ctx, 15*time.Second)
