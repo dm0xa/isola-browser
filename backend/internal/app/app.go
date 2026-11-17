@@ -123,7 +123,14 @@ func Run(opts Options) error {
 	// against ISOLA_MAX_SESSIONS (until the health checker converges, or the
 	// store reaper clears a stuck provisioning row) and answer reconnects for a
 	// session that cannot render.
-	orch.ReconcileRestoredSessions(ctx, st, cache)
+	//
+	// Bounded: this shells out to the runtime once per restored session, and an
+	// unresponsive runtime must not stop the process from ever listening —
+	// without a listener there is no /healthz to diagnose it. A timeout leaves
+	// the reconciler's conservative default in place (nothing dropped).
+	reconcileCtx, cancelReconcile := context.WithTimeout(ctx, 20*time.Second)
+	orch.ReconcileRestoredSessions(reconcileCtx, st, cache)
+	cancelReconcile()
 
 	proxy := wsproxy.New(cache, st, orch)
 
@@ -296,6 +303,14 @@ func Run(opts Options) error {
 		<-sigCh
 		log.Info().Msg("shutting down...")
 		cancel()
+		// Stop accepting work before tearing anything down. Drain keeps the
+		// listener open for up to ~45s today; a POST landing in that window
+		// passes admission, creates a container, and the process exits before
+		// activation — an untracked sandbox behind a 202 the client waits on.
+		// Shutdown first also cancels in-flight requests.
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_ = srv.Shutdown(shutdownCtx)
+		shutdownCancel()
 		// Stop warm containers before the process exits, otherwise they are
 		// left behind and the next start has to sweep them and refill from
 		// scratch. Bounded so a slow runtime cannot hang shutdown.
@@ -304,9 +319,6 @@ func Run(opts Options) error {
 			warmPool.Drain(drainCtx)
 			cancelDrain()
 		}
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer shutdownCancel()
-		_ = srv.Shutdown(shutdownCtx)
 	}()
 
 	log.Info().Str("addr", addr).Msg("server listening")

@@ -81,10 +81,6 @@ type Handler struct {
 	// process instead of on every claim.
 	warmPinWarnOnce sync.Once
 
-	// resizeDisplayFn overrides the display-resize call used after a warm claim;
-	// nil means the orchestrator's own path. Tests record the call through it.
-	resizeDisplayFn func(ctx context.Context, host string, port, width, height int) error
-
 	// Resource-graph proxy limits. Fields rather than consts so tests can
 	// shrink them; New installs the production defaults.
 	graphRenderTimeout time.Duration
@@ -377,7 +373,15 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 
-		bgCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		// The background budget must cover the container boot plus the
+		// streamer wait, and that wait is longer for a Tor session (the
+		// entrypoint refuses to launch the streamer until tor has a circuit:
+		// up to 60s, or 90s with a pinned country). A flat 60s here cancelled
+		// the exact slow circuit the larger gate exists for.
+		bgCtx, cancel := context.WithTimeout(
+			context.Background(),
+			streamReadyTimeout(req.TorEnabled, req.TorCountry)+30*time.Second,
+		)
 		defer cancel()
 		browserTheme := req.BrowserTheme
 		if browserTheme == "" {
@@ -561,8 +565,8 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 // Eligibility mirrors what the pool bakes in at container creation, because
 // container env and /etc/hosts cannot be changed after launch:
 //   - isola transport only (the pool runs the Electron image);
-//   - a resolution that fits inside the pooled box — a smaller one is claimed and
-//     the display is reshaped to it after navigation;
+//   - the resolution must match the pooled box exactly (reshaping an idle warm
+//     window is applied lazily and costs seconds, so a mismatch cold-starts);
 //   - the effective frame rate must match (the cap is baked);
 //   - default resolved theme (the window background is baked);
 //   - no Tor or explicit bandwidth override.
@@ -593,7 +597,9 @@ func (h *Handler) claimWarmContainer(
 		return nil, false
 	}
 
-	info, baked := h.warm.Claim(ctx, resolution, theme, effectiveFPS)
+	// Claim only returns a container whose resolution, theme and frame rate
+	// match the request exactly, so no reshape is needed here.
+	info, _ := h.warm.Claim(ctx, resolution, theme, effectiveFPS)
 	if info == nil {
 		return nil, false
 	}
@@ -623,22 +629,6 @@ func (h *Handler) claimWarmContainer(
 	}
 	log.Printf("create session: warm container %s claimed for session %s (user %s, target %s)",
 		info.ContainerID[:12], sessionID, userID, targetURL)
-
-	// A claim can serve a resolution smaller than the pooled box: reshape the
-	// display now, before any viewer attaches, so the session runs at the size
-	// that was asked for. Clamped inside the launch resolution by the same path
-	// POST /resize uses, so the pixel budget never grows. A failure is cosmetic
-	// (the viewer resizes when it connects) and must not cost the claim.
-	if w, height, ok := warmResizeTarget(baked, resolution); ok {
-		rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err := h.resizeDisplay(rctx, info.Host, info.Port, w, height)
-		cancel()
-		if err != nil {
-			log.Printf("create session: warm resize %s -> %s failed, keeping the pooled size: %v", baked, resolution, err)
-		} else {
-			log.Printf("create session: warm container %s resized %s -> %s", info.ContainerID[:12], baked, resolution)
-		}
-	}
 	return info, true
 }
 
@@ -657,40 +647,6 @@ func streamReadyTimeout(torEnabled bool, torCountry string) time.Duration {
 		return 90 * time.Second
 	}
 	return 60 * time.Second
-}
-
-// warmResizeTarget reports whether a claimed warm container, built at baked,
-// must be reshaped for a session that asked for requested, and to which size.
-// Claim only accepts a request that fits inside the baked box, so this compares
-// the two pairs and ignores anything it cannot parse: leaving the container at
-// its pooled size is always safe.
-func warmResizeTarget(baked, requested string) (int, int, bool) {
-	if baked == "" || requested == "" || baked == requested {
-		return 0, 0, false
-	}
-	var bw, bh, rw, rh int
-	if _, err := fmt.Sscanf(baked, "%dx%d", &bw, &bh); err != nil {
-		return 0, 0, false
-	}
-	if _, err := fmt.Sscanf(requested, "%dx%d", &rw, &rh); err != nil {
-		return 0, 0, false
-	}
-	if rw <= 0 || rh <= 0 || rw > bw || rh > bh {
-		return 0, 0, false
-	}
-	return rw, rh, true
-}
-
-// resizeDisplay reshapes a claimed container's offscreen display. Indirected
-// through a field so tests can record the call without a Docker daemon.
-func (h *Handler) resizeDisplay(ctx context.Context, host string, port, width, height int) error {
-	if h.resizeDisplayFn != nil {
-		return h.resizeDisplayFn(ctx, host, port, width, height)
-	}
-	if h.orch == nil {
-		return fmt.Errorf("no orchestrator")
-	}
-	return h.orch.ResizeSessionDisplay(ctx, host, port, width, height)
 }
 
 func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
@@ -830,8 +786,12 @@ func (h *Handler) DeleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Terminate container + clear caches + hooks (shared with background reapers)
-	h.finalizeSession(r.Context(), session)
+	// Terminate container + clear caches + hooks (shared with background reapers).
+	// Detached from the request: a client that hangs up mid-delete must not
+	// cancel `docker stop` and leave a live container behind a terminated row.
+	teardownCtx, cancelTeardown := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
+	defer cancelTeardown()
+	h.finalizeSession(teardownCtx, session)
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": models.SessionStatusTerminated})
 }
