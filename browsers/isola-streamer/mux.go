@@ -16,11 +16,8 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: checkOrigin,
 }
 
-// checkOrigin validates WebSocket Origins (VULN-17). Requests without an
-// Origin header are accepted because the backend relays viewer connections
-// with a server-side client (websocket.DefaultDialer) that sends none.
-// Browsers always send Origin, so a cross-site page is rejected unless the
-// Origin host matches the Host it is connecting to.
+// checkOrigin (VULN-17): no Origin is accepted (the backend relay sends none);
+// a browser's Origin must match the Host.
 func checkOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
@@ -79,10 +76,7 @@ func setupMux(port string, wsHandler http.HandlerFunc) (net.Listener, error) {
 	mux.HandleFunc("/debug/encoder", writeDebugEncoder)
 	registerRecordRoutes(mux)
 	mux.HandleFunc("/resize", func(w http.ResponseWriter, r *http.Request) {
-		// Resizing mutates the session's geometry for every attached viewer,
-		// so it is a state change and must be a POST — same rule as
-		// /navigate. Without the check any GET (a browser prefetch, a link
-		// preview, an image tag) re-keyed every encoder.
+		// Resizing is a state change for every viewer: POST only, or a prefetch re-keys every encoder.
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -96,10 +90,8 @@ func setupMux(port string, wsHandler http.HandlerFunc) (net.Listener, error) {
 			http.Error(w, "invalid dimensions", http.StatusBadRequest)
 			return
 		}
-		// Even dimensions only: H.264 4:2:0 cannot encode odd ones. Rounding
-		// happens before the range check because 1x1 rounds down to 0x0, and a
-		// 0 in currentWidth makes the next viewer fall back to the env default
-		// against a surface of the old size — a picture that never arrives.
+		// Even dimensions only (yuv420p); round before the range check or 1x1 becomes 0x0
+		// and the next viewer falls back to the env default against a stale surface.
 		width &^= 1
 		height &^= 1
 		if width < minSurfaceDim || height < minSurfaceDim {
@@ -132,11 +124,8 @@ func setupMux(port string, wsHandler http.HandlerFunc) (net.Listener, error) {
 	return l, nil
 }
 
-// navigateHandler drives the active tab to a new URL through the runner's
-// ctrl socket (same path as viewer address-bar navigation). Warm-pool
-// containers boot on about:blank and are pointed at the session's target URL
-// here at claim time. Trust boundary is identical to /audio and /resize: the
-// port is reachable only from the backend proxy or the host loopback.
+// navigateHandler: drive the active tab via the runner's ctrl socket (also the
+// warm-claim navigation). Same trust boundary as /audio and /resize.
 func navigateHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

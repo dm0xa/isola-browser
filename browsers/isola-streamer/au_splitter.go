@@ -2,30 +2,12 @@ package main
 
 import "io"
 
-// maxAUStreamBytes bounds how much encoded data may accumulate without a
-// picture boundary. A 1080p IDR is well under a megabyte at the rates this
-// streamer runs; past this much unterminated data the stream is corrupt or
-// hostile and the buffered bytes are dropped rather than growing without
-// bound.
+// maxAUStreamBytes: past this much unterminated data the stream is corrupt; drop it.
 const maxAUStreamBytes = 8 << 20
 
-// auSplitter reassembles an Annex-B H.264 byte stream (as produced by
-// ffmpeg -f h264) into complete access units. An access unit boundary sits
-// immediately before the second VCL NAL (type 1-5) of a run: non-VCL NALs
-// (SPS/PPS/SEI) that arrive between two pictures belong to the *following*
-// picture, so the emitted AU always carries its parameter sets with it —
-// exactly what a WebCodecs VideoDecoder consuming Annex-B expects.
-//
-// The splitter owns a pipeBuffer instead of copying each AU out of an
-// append-and-compact slice: the old shape copied every AU once for the
-// splitter and again for its wire header, and re-scanned the whole buffered
-// prefix per AU (findBoundary always started at offset 0). Emitted AUs now
-// alias the buffer and the scan resumes at the byte after the previous AU, so
-// splitting is linear in the bytes read.
-//
-// Emitted AUs are valid until the next feed call. The pump packs each one into
-// a viewer packet (the single remaining copy) immediately, and reserves the
-// header itself, so nothing outlives the bytes it points at.
+// auSplitter reassembles Annex-B into access units; the boundary sits before the
+// second VCL NAL, so parameter sets ride with the following picture. Emitted AUs
+// alias the pipe buffer (linear scan, no per-AU copy) and are valid until the next feed.
 type auSplitter struct {
 	q pipeBuffer
 }
@@ -70,13 +52,8 @@ func (s *auSplitter) split() []auPacket {
 	}
 }
 
-// trimOversized drops buffered bytes when no access-unit boundary was found in
-// them and they exceed maxAUStreamBytes. The retained suffix starts at the last
-// NAL start code in the window (or nothing at all), so a NAL is never spliced
-// onto a fragment of itself: whatever is kept begins on a NAL boundary, and the
-// splitter still never emits a partial AU. A stream this far along without a
-// second picture is not decodable video, so dropping it is the only bounded
-// choice.
+// trimOversized: keep a suffix starting at the last NAL start code — never splice a
+// NAL onto a fragment of itself. Undecodable by definition; dropping is the only bounded choice.
 func (s *auSplitter) trimOversized() {
 	buf := s.q.pending()
 	if len(buf) <= maxAUStreamBytes {
@@ -93,12 +70,7 @@ func (s *auSplitter) trimOversized() {
 	s.q.consume(len(buf))
 }
 
-// resync drops any prefix that cannot be part of an access unit. A well-formed
-// stream begins on a start code and subsequent split points are start codes, so
-// this is a three-byte check in the normal case; after a corrupt read or a
-// dropped oversized window it stops the garbage from riding into the first
-// emitted AU. The last three bytes are kept because a start code can straddle
-// two reads.
+// resync: drop any non-start-code prefix; keep the last three bytes (a start code can straddle reads).
 func (s *auSplitter) resync() {
 	buf := s.q.pending()
 	if len(buf) < 3 {
@@ -128,16 +100,9 @@ func (s *auSplitter) resync() {
 	}
 }
 
-// findBoundary returns the offset at which the next access unit starts,
-// relative to the pending window, and whether the AU before it carries an IDR.
-// With x264 zerolatency (sliced threads) a picture arrives as several slice
-// NALs, so "first VCL NAL" is not enough: a new AU begins at a VCL NAL whose
-// first_mb_in_slice == 0. first_mb_in_slice is the first ue(v) field of the
-// slice header — it is 0 exactly when the first payload bit after the NAL
-// header is 1, i.e. (buf[nal+1] & 0x80) != 0.
-//
-// The IDR flag is folded into this single pass: every NAL seen before the
-// boundary belongs to the AU, so a type-5 NAL there makes it a keyframe.
+// findBoundary: with zerolatency a picture is several slice NALs, so an AU begins
+// at a VCL NAL with first_mb_in_slice == 0 — i.e. (buf[nal+1] & 0x80) != 0. The
+// IDR flag folds into the same pass.
 func (s *auSplitter) findBoundary() (int, bool, bool) {
 	buf := s.q.pending()
 	firstVCL := -1

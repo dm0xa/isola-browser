@@ -213,13 +213,8 @@ function tsvRow(cells: Array<string | number | boolean | undefined | null>): str
   return cells.map(tsvCell).join('\t');
 }
 
-// Domain shown for a browser tab in the per-tab filter. Internal pages and
-// empty/placeholder URLs carry no domain, so the caller falls back to the
-// hosts seen in that tab's captured requests.
-// Host the resource graph should hang off: the page open in the selected tab,
-// or the active tab when the panel is showing every tab. Placeholder URLs
-// (about:blank, new tab) are not a page, so the caller falls back to the
-// first captured document.
+// Host the graph hangs off: the selected tab's page (placeholder URLs fall back
+// to the first captured document / that tab's captured hosts).
 export function graphOriginHost(tabs: BrowserTab[] | undefined, tabFilter: number | ''): string {
   const list = tabs ?? [];
   const chosen = tabFilter === ''
@@ -252,12 +247,8 @@ export interface TabOption {
   title: string;
 }
 
-// Builds the per-tab filter options, named by domain. Sources are merged so a
-// tab shows up even when none of its traffic was captured (the streamer's CDP
-// client attaches to the active target only, so a freshly opened tab can
-// briefly produce nothing): the browser tab strip first, then any tab id seen
-// in captured events. Tabs sharing a domain are numbered so the options stay
-// distinct ("example.com (1)", "example.com (2)").
+// Per-tab filter options, named by domain; the tab strip merges with captured
+// tab ids (a fresh tab has no traffic yet); same-domain tabs are numbered.
 export function buildTabOptions(
   tabs: BrowserTab[] | undefined,
   entries: NetEntry[],
@@ -272,10 +263,8 @@ export function buildTabOptions(
   for (const c of consoleEntries) if (typeof c.tb === 'number') observed.add(c.tb);
   for (const id of observed) if (!domainById.has(id)) domainById.set(id, '');
 
-  // Placeholder URLs (about:blank, new-tab pages) carry no domain: fall back to
-  // the host seen most often in that tab's captured requests. Only a real
-  // hostname counts — analyze() labels blob:/data: URLs with the URL itself so
-  // the graph can name them, and that is not a domain a tab can be called.
+  // Placeholder URLs: fall back to the tab's most-seen captured host — a real
+  // hostname only (blob:/data: labels are not domains).
   const hostCounts = new Map<number, Map<string, number>>();
   for (const e of entries) {
     if (typeof e.tb !== 'number' || domainById.get(e.tb)) continue;
@@ -512,10 +501,8 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
     [consoleEntries, tabFilter],
   );
 
-  // analyze() parses the URL and runs the flag regexes. The snapshot is
-  // republished on every capture burst, so without this cache a page load
-  // re-analysed the whole 1000-row window tens of times per second. Keyed by
-  // URL because a request is republished as its status/size/hash arrive.
+  // analyze() cache keyed by URL: the snapshot is republished per capture burst,
+  // and a request is republished as its status/size/hash arrive.
   const analyzeCacheRef = useRef(new Map<string, AnalyzedURL>());
   const analyzed = useMemo(() => {
     const cache = analyzeCacheRef.current;
@@ -544,10 +531,8 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
     });
   }, [analyzed, filter, onlyFlagged, methodFilter, statusFilter, typeFilter]);
 
-  // The graph honours the panel's text / flagged / method / status filters but
-  // keeps its own resource-type facet: the legend in the graph toolbar is the
-  // authoritative type filter there, and applying both would make one of the
-  // two chip rows silently invisible.
+  // The graph keeps its own resource-type facet (its legend is authoritative);
+  // applying the panel's too would make one chip row silently invisible.
   const graphEntries = useMemo(() => {
     const q = filter.trim().toLowerCase();
     return analyzed
@@ -631,10 +616,8 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
     [analyzed],
   );
 
-  // A single request streams several updates (request → response → finished)
-  // that share the same id and url, so id+url is not a unique row identity.
-  // Rows are keyed by position instead; `openId` recovers the request id of the
-  // open row so its siblings can be highlighted without expanding them.
+  // id+url is not a unique row identity (one request streams several updates);
+  // rows are keyed by position, `openId` recovers the open row's request id.
   const openId = useMemo(() => {
     if (!openKey) return null;
     const i = Number.parseInt(openKey.slice(openKey.lastIndexOf('#') + 1), 10);

@@ -9,13 +9,9 @@ import (
 	"time"
 )
 
-// Tab control: the electron runner owns the actual tabs and listens on a
-// Unix control socket (/run/isola/ctrl.sock). Viewers send tab commands
-// (tab_new/tab_switch/tab_close/get_tabs) through their input WS, this
-// relays them to the runner, and "tabs" state broadcasts flow back out to
-// every connected viewer so the client can render a tab strip.
-// When the active tab changes we point the CDP input client at the new
-// page target (matched by URL prefix) and force a reconnect.
+// Tab control: viewers send tab commands over the input WS, this relays them to
+// the runner's ctrl UDS, and "tabs" broadcasts flow back out. On an active-tab
+// change the CDP input client re-points at the new page target.
 
 // unknownTab is the id capture events carry until the runner reports its tab
 // strip. It is never a real tab id (those are positive and monotonic), so it
@@ -40,10 +36,7 @@ type tabInfo struct {
 	Active bool   `json:"active"`
 }
 
-// currentTabID returns the id of the currently active tab. Network/console
-// entries are attributed to it at event time: the CDP client attaches to
-// exactly one page target (the active tab), so every captured event belongs
-// to whatever tab was active when it arrived.
+// currentTabID: capture events are attributed to whichever tab was active when they arrived.
 func currentTabID() int {
 	tabMu.Lock()
 	defer tabMu.Unlock()
@@ -64,15 +57,8 @@ func activeTabURL() string {
 	return ""
 }
 
-// tabForTarget maps a CDP page target to the runner tab that owns it.
-//
-// Capture is per target (see cdp_capture.go), but the panel filters by tab, so
-// every target needs a tab id. Matching is by URL — exact first, then
-// prefix, with the title as a tiebreak. When two tabs are indistinguishable
-// (same URL and title, e.g. the same page opened twice) the active tab wins,
-// which is exactly what the pre-auto-attach code did with every event.
-// Targets that match nothing also fall back to the active tab, so the common
-// single-tab case never regresses to "unattributed".
+// tabForTarget: match a CDP target to a runner tab by URL (exact, then prefix, title
+// tiebreak). Indistinguishable or unmatched targets fall back to the active tab.
 func tabForTarget(targetURL, targetTitle string) int {
 	tabMu.Lock()
 	tabs := runnerTabs
@@ -244,18 +230,9 @@ func applyTabsState(tabsOut []tabInfo) {
 	broadcastTabs(msg)
 }
 
-// reassignUnknownTab rewrites traffic captured before the runner reported its
-// tab strip onto the tab that is now active, and re-publishes the corrected
-// entries.
-//
-// activeTabID starts at -1, so the START_URL load — usually the largest burst
-// of a session — is captured before any tab id exists. The panel merges the tab
-// strip with the ids it sees in entries, so that -1 bucket rendered as a second,
-// phantom tab named after its busiest host ("1 tab in the browser, 2 in the
-// panel"). Folding it into the active tab is the same best-effort choice
-// tabForTarget makes for a target it cannot match. Re-publishing is safe: the
-// viewer merges entries by id, so a row is corrected in place rather than
-// duplicated.
+// reassignUnknownTab: the START_URL load is captured before any tab id exists
+// (activeTabID starts at -1); fold that bucket into the active tab. Re-publish
+// merges by entry id, so rows are corrected, not duplicated.
 func reassignUnknownTab(tab int) {
 	if tab <= 0 {
 		return
@@ -318,10 +295,8 @@ func forwardTabCommand(data []byte) {
 	}
 }
 
-// writeCtrlCommand sends one JSON-lines command to the runner's ctrl socket.
-// It reports whether the socket was connected: a command written while the
-// runner is down is lost, so callers whose state must converge re-send it when
-// the socket comes up (see startTabCtrl).
+// writeCtrlCommand: reports whether the socket was connected — convergence-critical
+// callers re-send on reconnect (see startTabCtrl).
 func writeCtrlCommand(cmd map[string]any) bool {
 	out, err := json.Marshal(cmd)
 	if err != nil {
@@ -387,19 +362,13 @@ func startTabCtrl() {
 					break
 				}
 				if ev.Ev == "renderer_stall" {
-					// The runner replaced a wedged renderer (or frames came back).
-					// Relay to viewers so the UI can show it, and log it here: this
-					// is the only place the stall is explained rather than merely
-					// observed as "fps 1".
+					// The only place a renderer stall is explained rather than observed as "fps 1".
 					log.Printf("renderer: runner reported stalled=%v ms=%d recoveries=%d", ev.Stalled, ev.Ms, ev.Recoveries)
 					noteRunnerStall(ev.Stalled, ev.Ms, ev.Recoveries)
 					continue
 				}
 				if ev.Ev == "capture_stats" {
-					// Capture-path health: the runner counts empty paint images and
-					// whether it had to fall back to screenshot-driven frames. Kept
-					// as metrics only — the runner already tells viewers when the
-					// fallback engages.
+					// Capture-path health; metrics only — the runner tells viewers when fallback engages.
 					noteCaptureStats(captureHealthReport{
 						EmptyTotal:     ev.EmptyTotal,
 						EmptyWindow:    ev.EmptyWindow,

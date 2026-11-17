@@ -9,11 +9,8 @@ import (
 	"strings"
 )
 
-// Resource graph, server side: the same summary-first model the viewer draws
-// client-side (frontend/src/components/ResourceGraph.tsx), rendered here so an
-// API or MCP caller can ask for a PNG without a browser. Node kinds, group ids,
-// class names and layout constants are deliberately kept in step with the
-// frontend — a change on one side is a change on both.
+// Resource graph, server side: the same model as ResourceGraph.tsx, rendered
+// to PNG. Kinds, ids and layout constants stay in step with the frontend.
 
 type resClass string
 
@@ -283,10 +280,8 @@ func buildGraphModel(entries []netDumpEntry, pinnedOrigin string, types []resCla
 		addEdge(hid, rid, true)
 	}
 
-	// Pages, in the order the capture first saw them. An entry's OriginHost is
-	// the tab's main-frame document host at capture time; navigation replaces
-	// the page, so this is visit order. A streamer that predates OriginHost
-	// sends nothing, and the capture then has one page: the origin.
+	// Pages in visit order (OriginHost = main-frame document host). A streamer
+	// that predates OriginHost yields one page: the origin.
 	pages := []string{}
 	pageSeen := map[string]bool{}
 	pageSeq := map[string]int{}
@@ -348,12 +343,8 @@ func buildGraphModel(entries []netDumpEntry, pinnedOrigin string, types []resCla
 		}
 	}
 
-	// Which page asked for each host, in capture order. Guessing a trigger
-	// chain from capture order instead stitched separate navigations into one
-	// fake chain: a page opened before the current one — or the search engine
-	// that led to it — appeared to be loaded by the current page, and the
-	// hosts formed cycles no honest layering could untangle. The streamer
-	// already knows the page, so use it.
+	// Which page asked for each host — from OriginHost, never inferred from
+	// capture order, which stitched separate navigations into fake cyclic chains.
 	pagesByHost := map[string][]string{}
 	for _, idx := range included {
 		page := strings.TrimSpace(entries[idx].OriginHost)
@@ -460,16 +451,10 @@ func expandModel(m graphModel, mode expandMode) graphModel {
 	return expandInto(m, out, hostOpen, mode == expandAll)
 }
 
-// goGroupPreview is the number of resource rows an expanded type group lists
-// before it collapses the rest into one "more" row. It mirrors GROUP_PREVIEW in
-// frontend/src/components/ResourceGraph.tsx: the PNG is a summary, and an
-// uncapped group made the canvas (and the render) grow with the capture.
+// goGroupPreview mirrors GROUP_PREVIEW in ResourceGraph.tsx; uncapped groups grew the render.
 const goGroupPreview = 12
 
-// expandInto adds type groups for the open hosts and, when `resources` is set,
-// up to goGroupPreview of their resources plus a "more" row. Edges follow the
-// same shape the viewer builds: host→group and group→resource, never
-// host→resource.
+// expandInto: host→group and group→resource edges, never host→resource.
 func expandInto(m graphModel, out graphModel, hostOpen map[string]bool, resources bool) graphModel {
 	type hostResources struct {
 		byClass map[resClass][]graphNode
@@ -662,12 +647,8 @@ type graphLayout struct {
 	TotalH  float64
 }
 
-// computeDepths is the graph's vocabulary, one band per kind: entry, pages,
-// hosts, types, files. It is deliberately not edge distance — an expanded
-// page's type groups and the other hosts it loaded are both children of the
-// page, and letting them share a column made the groups read as children of
-// whichever host sat next to them. Fixed bands also keep the graph steady while
-// the capture grows: a new third-party host never pushes the type rows sideways.
+// computeDepths: one band per kind, not edge distance — an expanded page's groups
+// and hosts are both its children, and fixed bands keep the layout steady as the capture grows.
 func computeDepths(nodes []graphNode) map[string]int {
 	hasGroups := false
 	for _, n := range nodes {

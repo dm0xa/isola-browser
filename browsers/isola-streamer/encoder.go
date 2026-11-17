@@ -12,10 +12,7 @@ import (
 	"sync"
 )
 
-// H.264 profile used for every encode path. High profile (CABAC + 8x8
-// transform) is supported by every modern hardware/software decoder and is
-// ~15% more efficient than baseline at the same bitrate — the main quality
-// lever on text-heavy pages.
+// H.264 High profile: CABAC + 8x8 transform, ~15% cheaper than baseline — the main quality lever on text.
 const (
 	h264Profile    = "high"
 	h264ProfileHex = "6400" // avc1.<PP><CC> — High profile, no constraint flags
@@ -58,11 +55,7 @@ func h264LevelFFmpeg(width, height int) string {
 	}
 }
 
-// bitrateKbpsForResolution scales target bitrate with pixel area
-// (6 Mbps @ 720p, linear — bits-per-pixel preserving, so a 3456px-wide capture
-// keeps 720p's per-pixel quality instead of being flattened by a fixed cap).
-// 60 Mbps is a guard against a malformed resolution only; the container's
-// ISOLA_MAX_PIXELS budget keeps real values far below it.
+// bitrateKbpsForResolution: linear in pixel area, 6 Mbps @ 720p; 60 Mbps guards malformed input only.
 func bitrateKbpsForResolution(width, height int) int {
 	pixels := width * height
 	base := 1280 * 720
@@ -90,10 +83,7 @@ func effectiveEncodeFps(width, height, targetFps int, fpsCap int) int {
 	return cap
 }
 
-// encodeDimensions applies the active ABR scale to the capture size. At scale
-// 1 it returns the capture dimensions unchanged; below 1 it returns even
-// dimensions valid for yuv420p (capture coordinates still map through the
-// capture size, not the encoded one).
+// encodeDimensions: ABR scale applied to the capture size; yuv420p-even. Input stays at capture size.
 func encodeDimensions(width, height int, scale float64) (int, int) {
 	if scale >= 1 {
 		return width, height
@@ -157,12 +147,7 @@ func probeHWEncoder() *hwEncoder {
 	if _, statErr := os.Stat("/dev/dri/renderD128"); statErr == nil {
 		hasDRI = true
 	}
-	// Ordered by preference. -encoders only reports what the ffmpeg *build*
-	// supports, which is not the same as what this host can actually run: a
-	// stock Debian ffmpeg lists h264_nvenc even with no Nvidia driver, and
-	// picking it made every encode fail with "Cannot load libcuda.so.1". Each
-	// candidate is therefore smoke-tested with a real one-frame encode before
-	// it is trusted.
+	// -encoders lists what the build supports, not the host: each candidate is smoke-tested with a real one-frame encode.
 	var candidates []*hwEncoder
 	if hasDRI && strings.Contains(encoders, "h264_qsv") {
 		candidates = append(candidates, &hwEncoder{
@@ -213,23 +198,9 @@ func probeEncoderUsable(e *hwEncoder) bool {
 	return true
 }
 
-// maxEncoderThreads caps the libx264 worker pool for one session.
-//
-// x264 sizes its pool from the number of *online* CPUs, which inside a
-// `--cpus 3` container is the host count, not the quota the container may
-// actually consume — a 64-core host would start 64 workers per session. The
-// quota (encoderThreads) is the right bound; this constant only covers the case
-// where no quota is set at all (a test run outside a container), so a
-// quota-less process on a many-core host cannot spawn one worker per host core.
-//
-// It is deliberately not smaller than the quota. Measured inside `--cpus 3`
-// (150-frame encode, 720p and 1080p, with and without competing load), total
-// encode CPU is flat across thread counts — 0.20 and 0.42 core-seconds per
-// second of video for every pool from 1 to 32 threads — so a tighter bound
-// saves nothing. Only wall-clock latency moves: 0.57s vs 0.76s at 720p and
-// 1.14s vs 1.59s at 1080p for 5 vs 2 threads. A smaller pool is therefore a
-// pure latency regression, which matters when the encoder is behind after an
-// IDR, a tab switch, or an ABR restart.
+// maxEncoderThreads caps x264 workers when no cgroup quota exists. Measured: total
+// encode CPU is flat across pools (0.20-0.42 core-s/s at 720p/1080p), only latency
+// moves (0.57s vs 0.76s for 5 vs 2 threads) — so the bound is never below the quota.
 const maxEncoderThreads = 8
 
 // encoderThreads is the thread count handed to libx264: the container's real
@@ -245,10 +216,7 @@ func encoderThreads() int {
 	return n
 }
 
-// containerCPUs reports how many CPUs this process may actually use, read from
-// the cgroup the container was started with. It returns the host CPU count when
-// no quota is set (cgroup "max", a v1 quota of -1, or no cgroup files at all —
-// e.g. running the streamer outside a container in a test).
+// containerCPUs: cgroup quota, or the host count when no quota is set (tests outside a container).
 func containerCPUs() int {
 	// cgroup v2: "<quota> <period>", or "max <period>" when unlimited.
 	if b, err := os.ReadFile("/sys/fs/cgroup/cpu.max"); err == nil {
@@ -273,14 +241,7 @@ func containerCPUs() int {
 	return runtime.NumCPU()
 }
 
-// libx264Tuning is the quality half of the libx264 argv: the tune, the preset
-// and the x264 parameter string the encoder is launched with.
-//
-// It is a variable rather than a literal solely so the offline quality bench
-// (encoder_quality_bench_test.go, gated on ISOLA_QUALITY_BENCH=1) can encode
-// the same corpus through this exact argv assembly for each candidate preset;
-// the server never writes it. params is a format string taking the GOP twice
-// (keyint, min-keyint) so the 2s GOP stays tied to the encoder fps.
+// libx264Tuning: a var so ISOLA_QUALITY_BENCH can replay the same argv; params takes the GOP twice.
 type libx264Tuning struct {
 	tune   string
 	preset string
@@ -293,13 +254,8 @@ var libx264Quality = libx264Tuning{
 	params: "bframes=0:ref=2:rc-lookahead=0:scenecut=0:keyint=%d:min-keyint=%d:aq-mode=2:subme=1:me=dia:force-cfr=1",
 }
 
-// startEncoder launches ffmpeg as a subprocess, consuming raw BGRA frames on
-// stdin and producing fragmented MP4 (fMP4) on stdout — or raw Annex-B H.264
-// when rawH264 is set (WebCodecs clients decode access units directly, no
-// container demuxing or MSE buffering).
-// A hardware encoder is used when the host exposes one, otherwise libx264.
-// scale is the active ABR encode scale: below 1 the frame is resized by the
-// filter chain, and the raw input stays at the capture size.
+// startEncoder: raw BGRA on stdin → fMP4 (or raw Annex-B when rawH264) on stdout.
+// Hardware encoder when available, else libx264. scale < 1 resizes in the filter chain.
 func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bool) (*exec.Cmd, io.WriteCloser, io.Reader, string, int, int, int, error) {
 	encodeFps := effectiveEncodeFps(width, height, fps, fpsCapFor(rawH264))
 	encW, encH := encodeDimensions(width, height, scale)
@@ -310,15 +266,8 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 	}
 	codec := codecStringForLevel(encW, encH)
 
-	// 2s GOP: every keyframe costs a full IDR, so a longer interval means
-	// fewer quality dips and a lower average bitrate for the same picture.
-	//
-	// It is a bandwidth lever, not a CPU one: measured at 720p over 10s of
-	// both motion and static content, 25 vs 50 vs 250 frames between IDRs all
-	// cost 0.33/0.33/0.33 core-seconds per second of video. Viewers of a run
-	// now share one encoder, so a late joiner waits for the next IDR — this
-	// interval is the worst case for that wait, and it is bounded by
-	// stream_init's first IDR plus the client's request_keyframe escape hatch.
+	// 2s GOP: fewer IDRs = lower average bitrate; CPU is flat across intervals
+	// (0.33 core-s/s at 720p for 25/50/250). Late joiners use request_keyframe.
 	gop := 2 * encodeFps
 	if gop < 15 {
 		gop = 15
@@ -327,22 +276,14 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 		gop = 120
 	}
 
-	// 1s VBV. Capped VBR means static content costs almost nothing while
-	// bursts stay bounded, so an idle page no longer burns the full target
-	// rate on CBR filler. The cap is what the client's ABR ladder is sized
-	// against.
+	// 1s VBV, capped VBR: static content costs almost nothing; the cap sizes the client's ABR ladder.
 	bufsizeKbps := bitrateKbps
 
 	hw := detectHWEncoder()
 
 	args := []string{
 		"-hide_banner", "-loglevel", "warning",
-		// Probing bounds only — deliberately not -fflags nobuffer. nobuffer
-		// makes ffmpeg discard the frame it consumes while probing: measured
-		// on a 250-frame clip it emitted 249 frames whose first picture was
-		// capture frame 1, so every encoder start (session start, ABR step,
-		// keyframe request) began one frame late and one frame stale. It buys
-		// nothing here: the input's format, size and rate are all explicit.
+		// No -fflags nobuffer: it drops the probe frame, starting every encode one frame late and stale.
 		"-probesize", "32",
 		"-analyzeduration", "0",
 	}
@@ -376,74 +317,14 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 			"-bufsize", fmt.Sprintf("%dk", bufsizeKbps),
 		)
 	} else {
-		// superfast + subme=1:me=dia: the cheapest setting that keeps High
-		// profile, and deliberately not the quality maximum. The corpus is a
-		// deterministic 100-frame 25fps
-		// clip of dense small (5x7) antialiased text over a textured photo
-		// strip plus an animated 480x320 panel, scrolled; each row is encoded
-		// through this exact argv, decoded, and scored against the source with
-		// ffmpeg ssim/psnr. Three runs per row, median; host 10 CPUs / 8
-		// encoder threads. core-seconds per second of video / achieved kbps /
-		// mean SSIM:
-		//
-		//   720p  @6Mbps target
-		//     superfast dia  aq2            0.228 /  6573 / 0.9512
-		//     veryfast  dia  aq2            0.244 /  6544 / 0.9552
-		//     superfast dia  ref1           0.224 /  6577 / 0.9506
-		//     superfast dia  ref1 aq0       0.230 /  6547 / 0.9553
-		//     superfast hex3 aq2            0.294 /  6505 / 0.9635
-		//     veryfast  hex2 aq2            0.303 /  6466 / 0.9646
-		//     veryfast  hex3 aq2            0.322 /  6429 / 0.9643
-		//     fast      hex3 aq2            0.440 /  6360 / 0.9684
-		//     medium    hex3 aq2            0.463 /  6380 / 0.9686
-		//   1080p @13.5Mbps target
-		//     superfast dia  aq2            0.468 / 13106 / 0.9777
-		//     veryfast  dia  aq2            0.495 / 12868 / 0.9785
-		//     veryfast  hex2 aq2            0.593 / 13318 / 0.9846
-		//     superfast dia  ref1           0.448 / 13121 / 0.9773
-		//     superfast dia  ref1 aq0       0.466 / 13759 / 0.9831
-		//     superfast hex3 aq2            0.685 / 13411 / 0.9839
-		//     veryfast  hex3 ref1           0.680 / 13336 / 0.9847
-		//     veryfast  hex3 aq2            0.744 / 13307 / 0.9847
-		//     faster    hex3 aq2            1.113 / 13103 / 0.9860
-		//     medium    hex3 aq2            1.182 / 13016 / 0.9862
-		//     fast      hex3 aq2            1.136 / 13012 / 0.9862
-		//
-		// The finer presets are a real quality win under motion — hex alone is
-		// +0.013 SSIM at 720p — but every step costs CPU on a host whose limit
-		// is cores, not bits: veryfast+hex2 measured +33% at 720p and +24% at
-		// 1080p end to end, and +13-19% on a live session, for a quality
-		// difference that is invisible on a static page (0.0002 SSIM) and only
-		// shows while the content moves. The product constraint is a lighter
-		// session, so the shipped value stays on the cheapest tier; the rows
-		// above are the menu if that trade is ever revisited.
-		//
-		// Nothing in this table ships: picture quality is a fixed product
-		// requirement, and every row above trades it against CPU one way or
-		// the other. The argv stays exactly as it was before the sweep so a
-		// session encodes what it always did. The rows are here so the next
-		// person deciding that trade starts from measurements instead of a
-		// guess — including the aq-mode=0 row, which is better on text at the
-		// same CPU and is a picture decision, not a CPU one.
-		//
-		// Thread count is not a lever: total CPU is flat across pools (see
-		// maxEncoderThreads), and because zerolatency slices each frame, a
-		// 3-thread container does slightly better than the 8 threads measured
-		// here — these SSIM numbers are conservative.
-		//
-		// aq-mode=3 (dark-scene bias) is neutral at 720p (0.9681 vs 0.9684 at
-		// fast hex) and loses at 1080p (0.9853 vs 0.9862 for more CPU) because
-		// both this corpus and real browser pages are light. -preset ultrafast
-		// was rejected despite being cheaper: it drops to Constrained
-		// Baseline, which would invalidate the avc1.6400LL codec string and
-		// cost ~24% bytes. cabac=0 was also rejected (~10% bytes for ~4%
-		// CPU). zerolatency keeps B-frames and lookahead off for end-to-end
-		// latency, and bframes=0/rc-lookahead=0/force-cfr=1 stay pinned.
-		//
-		// No nal-hrd=cbr: over a WebSocket the transport never needs padding,
-		// and filler NALs would make an idle page cost the full target rate.
-		// -maxrate/-bufsize still bound the VBV, so a static page emits almost
-		// nothing while motion can still use the whole budget.
+		// superfast + dia: cheapest tier that keeps High profile. Full preset sweep
+		// (ssim/psnr over a 100-frame text corpus, three reps, median):
+		//   superfast dia aq2  0.228 core-s/s, SSIM 0.9512 @720p
+		//   veryfast hex2 aq2  0.303, SSIM 0.9646 — +33% end-to-end CPU for +0.013 SSIM
+		//   medium hex3 aq2    0.463, SSIM 0.9686
+		// aq-mode=0 is better on text at the same CPU; thread count is not a lever
+		// (see maxEncoderThreads). ultrafast/cabac=0 rejected (Baseline, ~24% bytes);
+		// no nal-hrd=cbr — filler NALs would cost an idle page the full target rate.
 		tuning := libx264Quality
 		x264Params := fmt.Sprintf(tuning.params, gop, gop)
 		threads := encoderThreads()
@@ -471,15 +352,9 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 		// already repeats headers per IDR on this path.
 		args = append(args, "-f", "h264", "pipe:1")
 	} else {
-		// Fragment sizing is subtle: frag_duration is measured in STREAM
-		// time (dts deltas), not wall time. On a quiet page the pump feeds
-		// one frame per keepalive window, so a 100ms+ fragment only closes
-		// after several more feeds — a single change sat in the muxer for
-		// 4-6s of wall time before MSE viewers saw it. 20ms is under one
-		// frame interval (40ms at 25fps), so every fed frame closes the
-		// previous fragment immediately; the pump's 40ms change-follow-up
-		// feed is what pushes a lone change out within ~100ms of wall time.
-		// Container overhead at these bitrates is negligible.
+		// frag_duration counts stream time: on a quiet page a 100ms fragment took
+		// 4-6s wall time to close. 20ms is under one frame interval, so every feed
+		// closes the previous fragment immediately.
 		args = append(args, "-f", "mp4",
 			"-movflags", "frag_keyframe+empty_moov+default_base_moof",
 			"-frag_duration", "20000",
@@ -529,13 +404,8 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 	return cmd, stdin, stdout, codec, encW, encH, encodeFps, nil
 }
 
-// fpsCapFor selects the CFR ceiling per client mode.
-//
-// 25fps, not 30: encode cost is linear in frame count, and on a CPU-only host
-// the difference between 25 and 30 is ~17% of a session's encoder budget for a
-// cadence the eye cannot resolve on text and UI. The fed rate is still bounded
-// by real change events — a static page is suppressed long before this cap.
-// Both client modes share the ceiling.
+// fpsCapFor: 25fps shared by both modes — ~17% of the encoder budget vs 30 for an
+// invisible cadence gain; real change events still bound the fed rate.
 func fpsCapFor(rawH264 bool) int {
 	return 25
 }

@@ -72,13 +72,9 @@ export default function ViewerPage() {
   // phases from here. For direct deep links the flow is inactive and the
   // page-local overlay below handles connecting.
   const launch = useLaunchProgress();
-  // Network monitor (isola): entries stream in as 'isola-net' DOM events
-  // from the transport hook. Capped so long sessions don't grow unbounded.
-  //
-  // The container always streams network events for isola sessions (env is
-  // set at creation time) so the panel can be toggled on later and still
-  // show the full traffic history — we keep the DOM listeners attached
-  // regardless of panel state and only toggle *visibility* here.
+  // Network entries stream in as 'isola-net' DOM events; listeners stay attached
+  // regardless of panel visibility (env was set at creation) so a late-opened
+  // panel still shows the full history. Capped for long sessions.
   const [netEntries, setNetEntries] = useState<NetEntry[]>([]);
   const [netPanel, setNetPanel] = useState<PanelLayout | 'off'>('off');
   const netEntriesRef = useRef<NetEntry[]>([]);
@@ -261,14 +257,9 @@ export default function ViewerPage() {
     isolaRef.current.setTabBarHost(isFullscreen ? tabBarSlotRef.current : null);
   }, [isFullscreen]);
 
-  // ── Match the sandbox viewport to the capture box ──────────────────────
-  // The capture draws with object-fit: contain, so a box whose aspect ratio
-  // differs from the sandbox's — fullscreen always does, and so does a window
-  // drag — is letterboxed. Ask the backend to reshape the sandbox instead, so
-  // the page reflows like a real maximised browser. Debounced, because every
-  // accepted resize replaces the encoder, and skipped while the network panel
-  // is docked: its insets shrink the capture element without changing the
-  // user's window.
+  // Match the sandbox viewport to the contain-fitted box: ask the backend to
+  // reshape the sandbox (encoder-replacing, so debounced; skipped while the
+  // panel is docked — its insets don't change the user's window).
   const resizeBudgetRef = useRef('');
   // The geometry the sandbox is believed to have, so a measurement that would
   // not change it (a few pixels of drag, or the launch size itself) costs
@@ -560,12 +551,9 @@ export default function ViewerPage() {
     };
   }, [status, isConnected, isReconnecting, streamError, resetTransport, isUnlimited, remainingSec, sessionStatus, expiresAt]);
 
-  // timer: false — the sandbox ends the moment the owner leaves the page
-  // (tab/window close, reload, hard navigation). fetch with keepalive lets
-  // the DELETE survive the unload where XHR/regular fetch would be cancelled.
-  // Share viewers have no session token and never send this; the backend
-  // rejects non-owner calls anyway. SPA navigation (End button, redirects)
-  // does not fire pagehide, and the End button clears the token first.
+  // timer: false — the sandbox ends when the owner leaves the page; keepalive
+  // fetch survives the unload. Share viewers never send this; the End button
+  // clears the token first (SPA navigation does not fire pagehide).
   useEffect(() => {
     if (!id || viewOnly || isTimerEnabled()) return;
     const sendClose = () => {
@@ -801,20 +789,13 @@ export default function ViewerPage() {
     !isReconnecting;
   const blankCover = isConnected && !isFirstFrame && !streamError;
   const showError = !!errorText && !isReconnecting;
-  // Native CSS cursor is shaped by the streamer's cursor broadcast.
-  // A wedged page renderer reads as an ordinary low fps, so it needs its own
-  // signal. Two sources: the runner's verdict after it replaced a renderer
-  // (authoritative, arrives ~8s into a stall), and this viewer's own CDP probe
-  // failures (the streamer's cursor-shape probes stop being answered — the
-  // earlier warning, ~3s).
+  // Two stall signals: the runner's post-replacement verdict (~8s) and this
+  // viewer's CDP probe failures (~3s, the cursor probes stop answering).
   const rendererStalledSec = Math.round((isola.metrics.rendererStalledMs || 0) / 1000);
   const rendererStallVisible = isola.metrics.rendererStalled
     || (isola.metrics.cdpProbeFailStreak >= 3 && isola.metrics.cdpProbeFailAgoMs >= 0 && isola.metrics.cdpProbeFailAgoMs < 15000);
-  // The second freeze shape: renderer healthy, compositor handing back empty
-  // paint images. Shown while empties are still arriving, or while the sandbox
-  // has fallen back to screenshot-driven frames. A total that stops growing is
-  // a recovered window — including one the runner forgot to age out — so the
-  // badge clears instead of staying up for the rest of the session.
+  // Second freeze shape: empty paint images with a healthy renderer. A total
+  // that stops growing = recovered, so the badge clears rather than lingers.
   const captureEmptyTotal = isola.metrics.captureEmptyFrames;
   const [captureEmptiesFresh, setCaptureEmptiesFresh] = useState(false);
   const captureEmptyTotalRef = useRef(0);

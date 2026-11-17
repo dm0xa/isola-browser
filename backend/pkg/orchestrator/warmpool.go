@@ -17,27 +17,10 @@ import (
 	"github.com/dm0xa/isola-browser/backend/pkg/config"
 )
 
-// WarmPool keeps a small set of pre-started isola (Electron) containers so a
-// user's POST /api/sessions can skip the container boot and jump straight into
-// a live stream. Measured on a 4 GiB Podman VM: ~0.2-0.5 s to "running" on a
-// claim versus ~2 s cold.
-//
-// Design notes:
-//   - Warm containers carry the "isola.warm=1" label and NO isola.session_id
-//     label, so the orphan sweep (which filters on isola.session_id) never
-//     sees them. The pool is their sole lifecycle owner. Sessions served from
-//     a claim are tracked in the DB by container ID, which is what the
-//     health checker and reapers use.
-//   - No DB row exists for a warm container, so no expiry clock ticks while
-//     it idles. The session timer starts only when a claim is activated —
-//     i.e. when the user actually enters.
-//   - A claimed container keeps its creation-time env (streamer bitrate, FPS
-//     cap, theme). To keep claimed sessions byte-identical to cold ones, Claim
-//     refuses any request whose normalized parameters differ from what the
-//     pool bakes in; those fall back to the cold path in the handler.
-//   - Everything degrades gracefully: a failed warm create is logged and
-//     retried on the next reconcile tick; a failed claim discards the
-//     container and the handler falls back to a cold create.
+// WarmPool keeps pre-started Electron containers: a claim reaches "running" in
+// ~0.2-0.5 s vs ~2 s cold (4 GiB Podman VM). Warm containers carry isola.warm=1
+// and no session label (the sweep never sees them); no DB row ticks while idle;
+// Claim only accepts exact parameter matches; every failure falls back to cold.
 type WarmPool struct {
 	orch       *Orchestrator
 	size       int
@@ -90,10 +73,7 @@ type WarmPool struct {
 	fillsWG    sync.WaitGroup
 }
 
-// markPending records a container that exists on the host but is not yet in
-// the pool (its fill is still waiting for the stream). Drain stops these too:
-// otherwise a shutdown that lands mid-fill leaves a container behind until the
-// next start's leftover sweep.
+// markPending: exists on the host but not yet in the pool; Drain stops these too.
 func (p *WarmPool) markPending(containerID string) {
 	p.mu.Lock()
 	if p.pending == nil {
@@ -114,16 +94,10 @@ func (p *WarmPool) clearPending(containerID string) {
 // container is torn down (mirrors containerMissLimit for live sessions).
 const warmMissLimit = 2
 
-// warmClaimPendingTTL bounds how long a claimed container stays shielded from
-// the orphan collector without an active session. It only needs to outlast the
-// create-to-activate path (bounded by the handler's provisioning context); a
-// claim whose session never activates must not hide its container forever.
+// warmClaimPendingTTL: shields a claimed container until activation; must not hide a never-activated claim forever.
 const warmClaimPendingTTL = 2 * time.Minute
 
-// warmFillGap spaces consecutive warm fills. Empty slots are provisioned by a
-// single worker, one container at a time, so a size-N pool never boots N
-// browsers at once; the gap keeps the bursts apart on a loaded host and stops a
-// fast failure from turning the worker into a retry loop.
+// warmFillGap: one fill worker, spaced bursts; stops a fast failure becoming a retry loop.
 const warmFillGap = 2 * time.Second
 
 // noteMiss increments the consecutive probe-failure count for a container.
@@ -240,17 +214,8 @@ func (p *WarmPool) Start(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// Claim pops a warm container that can serve the request. It returns the
-// container and the resolution the container was built at, or (nil, "") when
-// the pool is disabled/empty or nothing matches — the caller falls back to a
-// cold create. The caller owns the container from the moment Claim returns.
-//
-// Theme, frame rate and resolution must all match exactly: all three are baked
-// into the window and the encoder. Reshaping an idle warm container was
-// allowed once, but resizing an offscreen window before a viewer attaches is
-// applied lazily by Chromium — measured 3.2–3.7 s to first frame, worse than
-// the 1.4 s cold start it tried to save — so a mismatched request cold-starts
-// at the size that was actually asked for.
+// Claim pops a matching warm container (nil = cold fallback). Resolution/theme/fps
+// must match exactly — a lazy reshape measured 3.2-3.7 s to first frame, worse than cold.
 func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int) (*SessionInfo, string) {
 	p.mu.Lock()
 	if p.disabled {
@@ -269,10 +234,8 @@ func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int)
 		claimed = wc
 		baked = wc.info.Resolution
 		p.warm = append(p.warm[:i], p.warm[i+1:]...)
-		// The container leaves the pool here but only becomes "active" when
-		// ActivateSession records it, up to a provisioning budget later. Until
-		// then the orphan collector would see an untracked warm container and
-		// stop the sandbox the user is about to stream from.
+		// Between Claim and ActivateSession the orphan collector would stop an
+		// untracked warm container; pending shields it.
 		if p.pending == nil {
 			p.pending = map[string]bool{}
 		}
@@ -376,11 +339,7 @@ func navigateRequestURL(host string, port int, targetURL string) string {
 // /navigate endpoint (pre-warm-pool image).
 var ErrNavigateUnsupported = errors.New("streamer does not expose /navigate")
 
-// checkNavigate confirms the image serves the /navigate endpoint, retrying
-// transient failures (503) while the runner's ctrl socket is still being
-// established — the streamer answers healthz before the runner dials in.
-// A 404 (old image) is returned immediately: retrying cannot help, and the
-// pool must stop serving before a user is handed a stuck container.
+// checkNavigate: 503s retry (runner ctrl still dialing); 404 (old image) fails immediately.
 func (p *WarmPool) checkNavigate(ctx context.Context, info *SessionInfo) error {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
@@ -399,11 +358,7 @@ func (p *WarmPool) checkNavigate(ctx context.Context, info *SessionInfo) error {
 	}
 }
 
-// containerIDMatches reports whether two container IDs name the same
-// container, accepting a truncated form on either side. `docker ps --format
-// '{{.ID}}'` returns the 12-character prefix while a create reports the full
-// ID, so comparing them for equality made every pooled container look
-// untracked and the sweep killed the pool it exists to protect.
+// containerIDMatches: accepts a truncated ID — `docker ps` prints 12 chars, creates print 64.
 func containerIDMatches(a, b string) bool {
 	if a == "" || b == "" {
 		return false
@@ -421,17 +376,9 @@ func containerIDIn(set map[string]bool, id string) bool {
 	return false
 }
 
-// collectOrphans removes warm-labeled containers the pool does not own and no
-// active session references. It covers three cases the pool cannot otherwise
-// see:
-//   - containers left by a previous backend process;
-//   - containers a busy runtime materialized *after* a failed create's client
-//     gave up (observed ~30 s late on a loaded host);
-//   - containers left by a fill that failed for any other reason.
-//
-// Skipped while a fill is in flight: between the runtime creating a container
-// and CreateSession returning it, the container is legitimately untracked, and
-// killing it there would just make the fill fail and start over.
+// collectOrphans removes warm-labeled containers the pool does not own: from a
+// previous process, a late-materialized failed create, or any failed fill.
+// Skipped while a fill is in flight.
 func (p *WarmPool) collectOrphans(ctx context.Context) {
 	p.mu.Lock()
 	if p.disabled || p.filling > 0 || p.sweepLister == nil {
@@ -471,10 +418,7 @@ func (p *WarmPool) collectOrphans(ctx context.Context) {
 	}
 }
 
-// reconcile tops the pool back up to its configured size, dropping
-// containers that died while idle. Dead entries are pruned from the live
-// list (by identity, under the lock) BEFORE filling, so concurrent claims
-// and fills can never resurrect a dead container or evict a fresh one.
+// reconcile: prune dead entries by identity BEFORE filling, so a claim never resurrects one.
 func (p *WarmPool) reconcile(ctx context.Context) {
 	p.mu.Lock()
 	if p.disabled {
@@ -526,12 +470,7 @@ func (p *WarmPool) reconcile(ctx context.Context) {
 	p.replenish(ctx).Wait()
 }
 
-// replenish starts the fill worker when the pool has empty slots. One worker
-// owns every fill and provisions the slots one at a time, so a size-N pool
-// never boots N browsers at once — on a small host that burst is the spike the
-// pool exists to avoid. Returns a WaitGroup the caller may wait on (reconcile
-// does, so passes never overlap); Claim ignores it so a user's request never
-// waits on a browser boot.
+// replenish: one fill worker provisions slots one at a time — a size-N pool never boots N at once.
 func (p *WarmPool) replenish(ctx context.Context) *sync.WaitGroup {
 	wg := &sync.WaitGroup{}
 
@@ -649,10 +588,7 @@ func (p *WarmPool) fillOne(ctx context.Context) bool {
 	return true
 }
 
-// Drain stops every warm container, bounded by ctx, and stops the pool from
-// serving or filling. Safe to call more than once and concurrently with
-// Start/Claim: whichever call takes the list stops those containers, and
-// in-flight fills give their container back (see fillOne).
+// Drain stops every warm container, bounded by ctx; safe concurrently with Start/Claim.
 func (p *WarmPool) Drain(ctx context.Context) {
 	p.mu.Lock()
 	warm := p.warm
@@ -666,10 +602,7 @@ func (p *WarmPool) Drain(ctx context.Context) {
 	fillCancel := p.fillCancel
 	p.mu.Unlock()
 
-	// Abort boots in flight, then wait for those fills to finish their own
-	// cleanup (they terminate the container they created). Without this, a
-	// shutdown landing mid-boot leaves a container behind: the daemon has
-	// already created it, but no fill has published it to the pool yet.
+	// Abort boots in flight and wait for their own cleanup, or a mid-boot shutdown leaves a container.
 	if fillCancel != nil {
 		fillCancel()
 		if !waitTimeout(&p.fillsWG, 15*time.Second) {
@@ -729,10 +662,7 @@ func (p *WarmPool) terminate(ctx context.Context, containerID string) {
 	}
 }
 
-// provisionWarm starts one Electron container with pool-fixed parameters,
-// waits until its stream answers, and resolves its addresses exactly like
-// CreateSession does. A container that never becomes ready is torn down here
-// so a half-booted browser cannot linger as an untracked container.
+// provisionWarm: start, wait for the stream, resolve addresses; a never-ready container is torn down here.
 func (p *WarmPool) provisionWarm(ctx context.Context, params WarmPoolParams) (*SessionInfo, error) {
 	info, err := p.orch.CreateSession(ctx, CreateSessionParams{
 		SessionID:    params.SessionID,
@@ -757,10 +687,7 @@ func (p *WarmPool) provisionWarm(ctx context.Context, params WarmPoolParams) (*S
 		warmLabel: true,
 	})
 	if err != nil {
-		// A failed create can still have created the container (the CLI may die
-		// or be aborted after the daemon accepted the request), and it carries
-		// the warm label so the orphan sweep ignores it. Remove it by its
-		// deterministic name.
+		// A failed create may still have created the (warm-labeled) container; remove it by name.
 		p.removeFailedContainer("isola-" + params.SessionID[:12])
 		return nil, err
 	}
@@ -779,12 +706,8 @@ func (p *WarmPool) provisionWarm(ctx context.Context, params WarmPoolParams) (*S
 	return info, nil
 }
 
-// removeFailedContainer cleans up after a failed create, retrying over a
-// bounded window: a busy daemon can materialize the container *after* the
-// client has already given up (observed ~30 s late on a loaded 4 GiB VM), and
-// the container carries the warm label, so nothing else will collect it before
-// the next start's leftover sweep. Names are derived from a unique warm id, so
-// a retry can never hit a different fill's container.
+// removeFailedContainer: retry over a bounded window — a busy daemon can materialize
+// the container ~30 s after the client gave up, and the warm label hides it from the sweep.
 func (p *WarmPool) removeFailedContainer(name string) {
 	go func() {
 		for _, wait := range []time.Duration{0, 5 * time.Second, 10 * time.Second} {
@@ -820,14 +743,8 @@ func (p *WarmPool) probeWithRetry(ctx context.Context, info *SessionInfo) error 
 	return err
 }
 
-// probeWarm reports whether a warm container is still usable: it asks the
-// container's own stream endpoint, which stops answering the moment the
-// container is gone (Podman tears the published port down with it).
-//
-// Deliberately HTTP-only. `docker inspect <64-hex-id>` is unreliable against
-// Podman's compat API — it answers an image-normalization error for the hex
-// id rather than the container state (see runtimeUnreachable) — and a false
-// negative here costs a real container.
+// probeWarm: ask the stream endpoint itself. `docker inspect <64-hex-id>` is
+// unreliable on Podman's compat API; a false negative here costs a real container.
 func (p *WarmPool) probeWarm(ctx context.Context, info *SessionInfo) error {
 	ready, err := p.orch.waitForIsolaReady(info.Host, info.Port)
 	if err != nil {

@@ -8,14 +8,8 @@ import (
 	"time"
 )
 
-// frameBroadcaster owns the session's composed surface and fans damage
-// updates out to the connected viewer sessions.
-//
-// The producer transmits damage only, so a viewer cannot rebuild the image
-// from updates alone — it needs one complete surface to start from. Keeping
-// the composed image here means a viewer that joins mid-session, or whose
-// encoder has just restarted, is served a full frame on its next tick instead
-// of waiting for the producer to repaint the whole viewport.
+// frameBroadcaster owns the composed surface: damage-only updates cannot rebuild
+// an image, so a joining/restarting viewer gets a full frame on its next tick.
 type frameBroadcaster struct {
 	mu       sync.RWMutex
 	subs     map[chan *Frame]struct{}
@@ -44,18 +38,8 @@ type frameBroadcaster struct {
 	latest *Frame
 }
 
-// damageCounters aggregates the geometry of the updates applied to the
-// composed surface.
-//
-// DamagedPx is the area the producer reported (summed over rects) and BBoxPx is
-// the single bounding box those rects occupy — a region encoder that ships one
-// rectangle per update pays the latter, one that ships each rect pays the
-// former. SurfacePx is the full surface area the current full-frame encoder
-// pays on every fed tick, so DamagedPx/SurfacePx is the fraction of the frame a
-// region-based design would actually have to encode.
-//
-// Counters are cumulative and monotonic; a consumer that samples them at each
-// fed tick can difference them to get exact per-frame numbers.
+// damageCounters: cumulative and monotonic — DamagedPx (per-rect area) vs BBoxPx
+// (single rect), SurfacePx = what a full-frame encoder pays per tick. Difference per tick for exact rates.
 type damageCounters struct {
 	Updates    uint64
 	FullFrames uint64
@@ -121,10 +105,7 @@ func (fb *frameBroadcaster) composeLocked(f *Frame) {
 	}
 }
 
-// record folds one update's geometry into the cumulative damage counters.
-// Only updates that actually changed a pixel are recorded: a frame the
-// composer skipped never reaches an encoder, so counting it would dilute the
-// measured damage fraction with frames that cost nothing.
+// record counts only pixel-changing updates; skipped frames never reach an encoder.
 func (dc *damageCounters) record(f *Frame) {
 	if len(f.Dirty) == 0 {
 		return
@@ -163,16 +144,8 @@ func (fb *frameBroadcaster) DamageCounters() damageCounters {
 	return fb.damage
 }
 
-// damageRates is the per-second view of the cumulative damage counters: how
-// many updates actually changed pixels, how many of those covered the whole
-// surface, and how much of the surface one changed update touched on average.
-//
-// The cumulative counters alone cannot answer the question a frozen-picture
-// report asks — "is this picture changing right now?" — because a session that
-// has been static for a minute and one that went static a second ago have the
-// same totals. The rates can: ChangesPerSec near zero while the viewer decodes
-// 20 fps means the encoder is being fed duplicate frames, which is the shape of
-// a frozen picture that every other metric calls healthy.
+// damageRates: the per-second view. ChangesPerSec near zero while the viewer
+// decodes 20 fps is the shape of a frozen picture every other metric calls healthy.
 type damageRates struct {
 	ChangesPerSec int64
 	FullPerSec    int64
@@ -230,10 +203,7 @@ func applyRects(dst []byte, stride uint32, f *Frame) bool {
 		rowBytes := int(r.W) * 4
 		src := off
 		dstRow := int(r.Y)*int(stride) + int(r.X)*4
-		// A full-width rect is one contiguous run in both buffers, which is
-		// exactly what a full repaint sends. The per-row loop below pays 720
-		// bytes.Equal + 720 copy calls for it (162 µs vs 72 µs measured on
-		// 1280x720); a single pair over the run is 2x faster.
+		// A full-width rect is one contiguous run: 2x faster than the per-row loop (72 vs 162 µs at 720p).
 		if r.X == 0 && rowBytes == int(stride) {
 			n := rowBytes * int(r.H)
 			if !bytes.Equal(dst[dstRow:dstRow+n], f.Payload[src:src+n]) {

@@ -11,10 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// isolaEnvPrefix is prepended to every isola-owned environment variable. A
-// variable resolves as ISOLA_<NAME> first, then falls back to the legacy
-// unprefixed <NAME>, so existing deployments, compose files and installers keep
-// working while they migrate to the prefixed names.
+// isolaEnvPrefix: ISOLA_<NAME> first, then the legacy unprefixed <NAME>.
 const isolaEnvPrefix = "ISOLA_"
 
 // getenv resolves an isola environment variable, preferring the ISOLA_-prefixed
@@ -41,13 +38,7 @@ func (c *Config) SessionImage() string {
 	return DefaultBrowserImage
 }
 
-// Origins splits a configured origin value into a normalized, de-duplicated
-// list of browser origins. Entries may be separated by commas or whitespace.
-// Each is reduced to scheme://host (a trailing slash or path is dropped) so it
-// matches the Origin header a browser actually sends; entries that are not a
-// valid absolute origin, or the wildcard "*" (invalid alongside credentials),
-// are dropped. The result is nil when nothing usable remains — CORSOrigins
-// guards that case.
+// Origins: normalized scheme://host list, comma/space separated; invalid or "*" entries dropped.
 func Origins(raw string) []string {
 	parts := strings.FieldsFunc(raw, func(r rune) bool {
 		return r == ',' || r == ' ' || r == '\n' || r == '\r' || r == '\t'
@@ -74,10 +65,7 @@ func Origins(raw string) []string {
 	return out
 }
 
-// NormalizeOrigin reduces a value to its scheme://host form, or "" when it is
-// not a valid absolute origin. It lets a configured origin be compared against
-// the Origin/Referer headers a request carries, which never include a trailing
-// slash or path.
+// NormalizeOrigin: reduce to scheme://host, "" when not a valid absolute origin.
 func NormalizeOrigin(raw string) string {
 	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
 	if raw == "" {
@@ -98,10 +86,7 @@ const unusableCORSOrigin = "https://cors.invalid"
 // higher; this only rejects absurd input before it reaches a container.
 const maxTorExitCountries = 10
 
-// NetworkLogMaxEntriesDefault is the network capture window used when none is
-// configured. The streamer (browsers/isola-streamer/netlog.go) keeps the same
-// default independently, so the two modules stay in agreement without an
-// import between them.
+// NetworkLogMaxEntriesDefault: mirrored independently in isola-streamer/netlog.go.
 const NetworkLogMaxEntriesDefault = 1000
 
 // NetworkLogMaxEntriesMax bounds a configured window. Entries are metadata
@@ -109,11 +94,7 @@ const NetworkLogMaxEntriesDefault = 1000
 // long-lived session pin arbitrarily much memory.
 const NetworkLogMaxEntriesMax = 10000
 
-// NormalizeTorCountry validates and canonicalizes a Tor exit-country selection:
-// a comma-separated list of ISO 3166-1 alpha-2 codes ("se" or "se,no"). The
-// result is lowercased and de-duplicated so the container env and the `tor`
-// command line always agree. An empty result means "no pinning" (any exit is
-// allowed), and blank entries are ignored.
+// NormalizeTorCountry: lowercase, de-duplicated ISO alpha-2 list; empty = any exit.
 func NormalizeTorCountry(raw string) (string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", nil
@@ -144,11 +125,7 @@ func NormalizeTorCountry(raw string) (string, error) {
 	return strings.Join(codes, ","), nil
 }
 
-// CORSOrigins returns the browser origins allowed to make cross-origin requests.
-// It never returns an empty list: an unset or unusable CORS_ORIGIN yields a
-// single non-matching origin so cross-origin access is denied. This matters
-// because go-chi/cors treats an empty AllowedOrigins as "allow every origin",
-// which with AllowCredentials would be unsafe.
+// CORSOrigins never returns empty: chi-cors would read that as allow-all with credentials.
 func (c *Config) CORSOrigins() []string {
 	if c == nil {
 		return []string{unusableCORSOrigin}
@@ -174,23 +151,14 @@ type OptionEntry struct {
 // Config holds all configuration for the backend service.
 type Config struct {
 	Port string `yaml:"-"`
-	// DatabaseURL and RedisURL are optional external store connections
-	// (PostgreSQL + Redis). This build keeps sessions in memory and never reads
-	// them directly; they are retained on the shared struct for downstream builds
-	// that need a persistent store.
+	// Optional external stores; this build keeps sessions in memory.
 	DatabaseURL string `yaml:"-"`
 	RedisURL    string `yaml:"-"`
 	DockerHost  string `yaml:"-"`
-	// DNS resolution for browser containers. Mode "plain" passes DNSServers
-	// straight to `docker run --dns` (IPs). "tls"/"https" start a local
-	// forwarder on the browser-net and point containers at it; entries there may
-	// be IPs, hostnames, or full tls:// / https:// URLs.
+	// plain: IPs to --dns. tls/https: local forwarder on browser-net; entries may be IPs, hostnames or URLs.
 	DNSServers []string `yaml:"-"`
 	DNSMode    string   `yaml:"-"` // plain | tls | https
-	// TorExitCountry pins Tor exit nodes to one or more countries (a
-	// comma-separated list of ISO 3166-1 alpha-2 codes) for sessions created with
-	// tor_enabled. Empty (default) allows any exit. A per-session tor_country
-	// overrides it; see NormalizeTorCountry for the canonical form.
+	// Tor exit pin (ISO alpha-2 list); empty = any exit. See NormalizeTorCountry.
 	TorExitCountry    string `yaml:"-"`
 	CORSOrigin        string `yaml:"-"`
 	JWTSecret         string `yaml:"-"`
@@ -199,20 +167,11 @@ type Config struct {
 	SessionExtendMin  int    `yaml:"-"` // minutes added per extend action
 	SessionTimer      bool   `yaml:"-"` // when false: sessions are unlimited and close when the owner leaves the page
 	InactivityMin     int    `yaml:"-"` // minutes of inactivity before auto-termination
-	// MaxSessions caps concurrently active anonymous sessions (provisioning +
-	// running) across the whole instance. 0 (default) = unlimited. Container RAM
-	// is the real cost, so size it against ISOLA_SESSION_MEMORY_MB and the
-	// host's memory.
+	// MaxSessions caps provisioning+running sessions; 0 = unlimited. Container RAM is the cost.
 	MaxSessions int `yaml:"-"`
-	// NetworkLogMaxEntries is how many CDP network requests one session keeps
-	// in its capture window. The streamer drops the oldest entries past this
-	// count, the viewer trims its buffers to the same number, and MCP
-	// get_network sees the same window. Metadata only; no bodies or headers.
+	// NetworkLogMaxEntries: capture window shared by the streamer, viewer and MCP. Metadata only.
 	NetworkLogMaxEntries int `yaml:"-"`
-	// IntelEnabled gates the on-demand recon endpoint (/intel) and the MCP
-	// tools built on it. Recon sends requests from the sandbox to the target
-	// and to no one else, so the whole surface can be turned off to keep a
-	// deployment purely passive without changing the capture.
+	// IntelEnabled gates /intel and its MCP tools, for purely passive deployments.
 	IntelEnabled bool `yaml:"-"`
 	// IntelCAPEM is an operator-supplied CA bundle (PEM) added to the sandbox's
 	// trust store for recon. Needed on TLS-inspecting networks; verification
@@ -251,10 +210,7 @@ type Config struct {
 	// no child processes. Env only: ISOLA_MODULES_DIR.
 	ModulesDir string `yaml:"-"`
 
-	// Extension fields. These code paths never read or set them — they exist so
-	// a persistent config store can round-trip module and licensing state on the
-	// same struct. Deliberately absent from YAML/env parsing and from the public
-	// /api/config response, so they leave no trace at runtime.
+	// Extension fields: round-trip storage only; absent from YAML/env and /api/config.
 	InstalledModules         map[string]string `json:"installed_modules,omitempty"`
 	LicenseServerURL         string            `json:"license_server_url,omitempty"`
 	NetworkMonitoringEnabled bool              `json:"network_monitoring_enabled,omitempty"`
@@ -276,12 +232,8 @@ func (c *Config) BrowserFlagsFor(browserType string) string {
 	return ""
 }
 
-// ClampResolution fits a "WxH" launch resolution inside the configured
-// maximum box, preserving the aspect ratio. The viewer maps remote
-// coordinates 1:1, so a distorted framebuffer would break every click;
-// scaling down is the only safe way to bound the capture size.
-//
-// Anything unparsable or within the cap is returned unchanged.
+// ClampResolution fits "WxH" inside the max box, aspect preserved (the viewer maps
+// coordinates 1:1); unparsable input is returned unchanged.
 func (c *Config) ClampResolution(resolution string) string {
 	maxW, maxH := 0, 0
 	if _, err := fmt.Sscanf(c.ResolutionMax, "%dx%d", &maxW, &maxH); err != nil || maxW <= 0 || maxH <= 0 {
@@ -458,11 +410,8 @@ func LoadFrom(path string) (*Config, error) {
 	// Recon is available unless an operator disables it: nothing leaves the
 	// sandbox until a caller names a host.
 	cfg.Intel.Enabled = true
-	// Hard cap for launch resolutions. Bigger framebuffers are what kill the
-	// sandbox: a BGRA frame is w*h*4 bytes, and on a 2 GB host (Podman VM,
-	// small CI box) a 3456x2234 capture (30 MB/frame) OOM-kills the container
-	// within seconds of the first viewer connecting. Requests above the cap
-	// are scaled down, aspect ratio preserved.
+	// Hard cap for launch resolutions: a BGRA frame is w*h*4 bytes; a 3456x2234
+	// capture OOM-kills a 2 GB container within seconds of the first viewer.
 	cfg.Session.MaxResolution = "1920x1080"
 	// Warm pool is opt-in: idle containers cost real RAM (2 GB limit each),
 	// so operators turn it on deliberately.

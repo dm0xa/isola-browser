@@ -32,11 +32,7 @@ import (
 	"github.com/dm0xa/isola-browser/backend/pkg/version"
 )
 
-// ---------------------------------------------------------------------------
-// Extension points — general code is module-unaware.
-// Main.go populates these from the plugin registry at startup; handler code
-// never imports plugin or registry packages.
-// ---------------------------------------------------------------------------
+// Extension points — main.go populates these from the plugin registry; handler code is module-unaware.
 
 // SessionEvent carries metadata for lifecycle callbacks.
 type SessionEvent struct {
@@ -323,10 +319,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Compute durations — expiry starts when browser is actually running.
-	// With the timer disabled, duration 0 means unlimited: ActivateSession
-	// leaves expires_at NULL and every cache TTL below skips expiry — the
-	// session ends when the owner closes the page or clicks End.
+	// Expiry starts when running; duration 0 with the timer disabled means unlimited.
 	sessionDuration := h.sessionDuration()
 
 	// Create session in DB (expiry set later when container is ready)
@@ -372,11 +365,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 
-		// The background budget must cover the container boot plus the
-		// streamer wait, and that wait is longer for a Tor session (the
-		// entrypoint refuses to launch the streamer until tor has a circuit:
-		// up to 60s, or 90s with a pinned country). A flat 60s here cancelled
-		// the exact slow circuit the larger gate exists for.
+		// Tor sessions wait on a circuit first (up to 60s, 90s pinned): budget must cover it.
 		bgCtx, cancel := context.WithTimeout(
 			context.Background(),
 			streamReadyTimeout(req.TorEnabled, req.TorCountry)+30*time.Second,
@@ -420,10 +409,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 				}(),
 				TorEnabled: req.TorEnabled,
 				TorCountry: req.TorCountry,
-				// For isola transport: always capture network/console/cookie CDP
-				// events at creation time so the viewer can toggle the panel on
-				// later and still see the full traffic history (container env can't
-				// be changed after launch).
+				// Capture CDP events at creation so the panel can toggle on later (env can't change after launch).
 				NetworkMonitor: true,
 				// Capture window: the streamer drops the oldest entries past this
 				// count and the viewer trims to the same number. Baked in at launch
@@ -471,10 +457,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Store in cache for WS proxy BEFORE marking running.
-		// This prevents a race: frontend polls DB → sees "running" → connects WS
-		// → proxy looks up cache → key missing → 404 → disconnect.
-		// Port 5900: isola-streamer HTTP/WebSocket (video + control).
+		// Cache before "running": the frontend connects WS on seeing running.
 		key := fmt.Sprintf("session:%s", session.ID.String())
 		streamAddr := net.JoinHostPort(info.Host, fmt.Sprintf("%d", info.Port))
 		h.cache.Set(bgCtx, key, streamAddr, sessionDuration)
@@ -493,10 +476,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		transportKey := fmt.Sprintf("session:%s:transport", session.ID.String())
 		h.cache.Set(bgCtx, transportKey, streamMode, sessionDuration)
 
-		// Unlimited sessions (timer: false or default_min = 0): the control
-		// token must live as long as the session — not just the 10-minute
-		// provisioning window. FinalizeRunningSession deletes it when the
-		// session ends.
+		// Unlimited sessions: the control token lives as long as the session.
 		if sessionDuration <= 0 {
 			h.cache.Persist(bgCtx, controlTokenKey(session.ID.String()))
 		} else {
@@ -555,27 +535,10 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// claimWarmContainer serves a session from the warm pool when the request
-// is eligible and a matching container is available.
-//
-// Eligibility mirrors what the pool bakes in at container creation, because
-// container env and /etc/hosts cannot be changed after launch:
-//   - isola transport only (the pool runs the Electron image);
-//   - the resolution must match the pooled box exactly (reshaping an idle warm
-//     window is applied lazily and costs seconds, so a mismatch cold-starts);
-//   - the effective frame rate must match (the cap is baked);
-//   - default resolved theme (the window background is baked);
-//   - no Tor or explicit bandwidth override.
-//
-// DNS pinning: the cold path passes the validated IP via --add-host, which a
-// running container cannot gain. Warm claims therefore rely on the browser
-// container's own egress firewall (it drops every RFC1918/loopback
-// destination), which is the primary SSRF control; the pin is a second layer.
-// The first such claim logs a warning so operators see the downgrade.
-//
-// On success the browser is navigated to the session's target URL and the
-// container info is returned ready to activate. The second return value
-// reports whether the claim succeeded; false means "fall back to cold".
+// claimWarmContainer serves a session from the warm pool when the request is
+// eligible (exact resolution/fps/theme match, no Tor/bandwidth override — env is
+// baked). Warm claims lose the --add-host DNS pin; the container egress
+// firewall remains the primary SSRF control. false = fall back to cold.
 func (h *Handler) claimWarmContainer(
 	ctx context.Context,
 	sessionID, targetURL, resolution, theme, userID string,
@@ -628,12 +591,7 @@ func (h *Handler) claimWarmContainer(
 	return info, true
 }
 
-// streamReadyTimeout budgets the wait for isola-streamer after `docker run`
-// returns. A Tor session is gated earlier: entrypoint.sh refuses to launch the
-// streamer until tor has a circuit, waiting up to 30s (60s when an exit country
-// is pinned, since fewer candidate exits make the build slower). A flat 30s
-// here therefore races that gate and fails closed on any slow circuit, so the
-// gate's own budget is added to the streamer's start budget.
+// streamReadyTimeout adds the Tor circuit gate's budget (30s/60s pinned) to the streamer wait.
 func streamReadyTimeout(torEnabled bool, torCountry string) time.Duration {
 	const streamerStart = 30 * time.Second
 	if !torEnabled {
@@ -720,11 +678,8 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else if session.UserID == uuid.Nil && session.Status == models.SessionStatusRunning && requestHasToken {
-		// Recover a control token that is genuinely gone (the cache entry
-		// expired while the session is still running). If a token still exists
-		// the caller simply failed to present it, and returning the live token
-		// would let anyone who knows the session id take over the session —
-		// "knowing a session id is never sufficient" (docs/security.md).
+		// Recover only a genuinely expired token; returning a live one would let
+		// anyone knowing the session id take over the session.
 		existing, getErr := h.getControlToken(r.Context(), session.ID.String())
 		if getErr != nil {
 			respondError(w, http.StatusInternalServerError, "internal_error")
@@ -883,10 +838,7 @@ func (h *Handler) ExtendSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ClampResizeRequest clamps a requested (width, height) to the session's
-// launch resolution, returning the effective values plus a "clamped" flag.
-//
-// Exposed so it can be unit-tested independently of HTTP plumbing.
+// ClampResizeRequest clamps a resize request to the session's launch resolution.
 func ClampResizeRequest(reqWidth, reqHeight int, sessionResolution string) (int, int, bool, error) {
 	if reqWidth < 64 || reqHeight < 64 {
 		return 0, 0, false, fmt.Errorf("width and height must be at least 64")
@@ -961,10 +913,7 @@ func (h *Handler) ResizeSession(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
-	// defaultGraphRenderTimeout bounds one graph render end to end. It stays
-	// below the 60 s API-group timeout that internal/app installs, so the
-	// handler reports 504 graph_render_timeout instead of the request being cut
-	// off by the middleware.
+	// Below the API-group 60s timeout so the handler reports 504, not the middleware's cutoff.
 	defaultGraphRenderTimeout = 45 * time.Second
 	// defaultMaxGraphBytes caps one PNG. A real capture renders a few MB; the
 	// cap turns a runaway render into 502 instead of buffering without bound.
@@ -1006,24 +955,15 @@ func (h *Handler) releaseGraphSlot(id uuid.UUID) {
 	}
 }
 
-// GetResourceGraph handles GET /api/sessions/{id}/graph.png.
-//
-// The graph is rendered by the streamer, which holds the network log, and this
-// handler only proxies it: the control plane never has the captured requests.
-// Options are validated here (see pkg/graphopts) and forwarded as a canonical
-// query, so the renderer never sees an unchecked value. The response is
-// buffered before the status line is written: a mid-transfer failure must not
-// look like a complete PNG.
+// GetResourceGraph proxies the streamer's render; options are validated here
+// and the body buffered before the status line so a mid-transfer failure is not a full PNG.
 func (h *Handler) GetResourceGraph(w http.ResponseWriter, r *http.Request) {
 	session, ok := h.resolveSession(w, r)
 	if !ok {
 		return
 	}
 
-	// A session that is still starting exists and the caller proved ownership,
-	// so the documented answer is 409, not 404. A finished session answers 404
-	// before ownership is checked: finalization deletes its control token, so
-	// asking for it would only turn a clean 404 into a misleading 403.
+	// A starting session answers 409 (not 404); a finished one 404 before ownership.
 	switch session.Status {
 	case models.SessionStatusRunning:
 		if !h.authorizeOwner(w, r, session) {
@@ -1128,10 +1068,7 @@ func (h *Handler) GetResourceGraph(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
 	setSensitiveNoStore(w)
-	// A large capture can outlast the server's 15 s write deadline. Extend it
-	// for this route only: the render is already bounded by graphRenderTimeout
-	// and the body is complete, so a bounded extra window delivers the image
-	// whole without leaving the connection open indefinitely.
+	// Extend the write deadline for this route only: the render is already bounded.
 	writeDeadline := time.Now().Add(h.graphRenderTimeout + 30*time.Second)
 	if err := http.NewResponseController(w).SetWriteDeadline(writeDeadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		log.Printf("resource graph: extend write deadline: %v", err)
@@ -1428,11 +1365,8 @@ func (h *Handler) GetShare(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// extractSessionToken reads the control token from the X-Session-Token header.
-// Query-string tokens are deliberately NOT accepted for HTTP API calls: URLs
-// leak through proxy access logs, browser history and Referer headers. (The
-// WebSocket handshake is the one exception — browsers cannot set custom
-// headers on WebSocket() — and is handled separately in the ws proxy.)
+// extractSessionToken: header only — query tokens leak through logs/history/Referer
+// (the WS handshake is the one exception, handled in the ws proxy).
 func extractSessionToken(r *http.Request) string {
 	return strings.TrimSpace(r.Header.Get("X-Session-Token"))
 }
@@ -1827,10 +1761,7 @@ func setSensitiveNoStore(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 }
 
-// maxJSONBodyBytes caps the bodies the API decodes. The largest legitimate
-// payload — a session-create request carrying a URL and browser flags — is a
-// few KiB, so this is generous while keeping an unauthenticated caller from
-// making the control plane buffer an unbounded body.
+// maxJSONBodyBytes: generous vs the few-KiB create payload, bounds unauthenticated buffering.
 const maxJSONBodyBytes = 64 << 10
 
 // errBodyTooLarge marks a decode that hit maxJSONBodyBytes, so callers can tell
@@ -1959,10 +1890,7 @@ func (h *Handler) authorizedForSessionCreate(r *http.Request) error {
 	if len(h.cfg.APITokens) == 0 {
 		return nil
 	}
-	// In-process callers that authenticated by other means (the MCP server
-	// verifies mcp.token on /mcp before invoking the handler) are not subject
-	// to the REST bearer gate. The marker lives in the request context and is
-	// never populated from an HTTP header, so network clients are unaffected.
+	// In-process callers (MCP) bypass the REST bearer gate via a context marker, never an HTTP header.
 	if internal, _ := r.Context().Value(internalCreateKey{}).(bool); internal {
 		return nil
 	}

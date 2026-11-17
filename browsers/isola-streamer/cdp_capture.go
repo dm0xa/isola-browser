@@ -16,21 +16,9 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Multi-target CDP capture.
-//
-// The input client (cdp.go) attaches to exactly one page target — the active
-// tab — because input has to land where the user is looking. While capture
-// rode on that connection it could only ever see the active tab: a freshly
-// opened or background tab produced no network entries at all, so it never
-// appeared in the panel's per-tab filter.
-//
-// This client attaches to the browser endpoint instead and uses
-// Target.setAutoAttach (flatten), so Chromium hands us a session for every
-// page target, including targets created later. Capture therefore covers every
-// tab, and each event arrives with the sessionId it came from, so attribution
-// is per tab instead of "whatever happens to be active".
-//
-// It never dispatches input and never touches the input client's connection.
+// Multi-target CDP capture: attaches to the browser endpoint with
+// Target.setAutoAttach (flatten), so every page target — including later tabs —
+// gets a session and per-tab attribution. Input stays on its own single-target client.
 
 type captureTarget struct {
 	sessionID string
@@ -47,20 +35,11 @@ type captureClient struct {
 	conn    *websocket.Conn
 	nextID  int
 	targets map[string]*captureTarget // sessionId → attached page target
-	// pending maps in-flight command ids to their method names so a browser
-	// side rejection ({"id":N,"error":...}) can be logged with the command
-	// that failed. Without it a rejected Network.enable is indistinguishable
-	// from silence — capture just never produces anything.
+	// Command id → method name, so a browser-side rejection is logged with the command that failed.
 	pending map[int]string
-	// callbacks holds one-shot result handlers for commands whose reply the
-	// caller needs (Network.getResponseBody, for body hashing). Response bodies
-	// are not carried on any CDP event, so they must be asked for per request
-	// id; the read loop hands the reply back through here.
+	// One-shot result handlers (e.g. Network.getResponseBody — bodies are per-request asks).
 	callbacks map[int]func(json.RawMessage)
-	// reloadPending: reload the first real (non-about:blank) page target once,
-	// so the START_URL navigation happens under capture. Chromium can start
-	// loading before DevTools accepts connections, which used to leave the
-	// first page load out of the capture entirely.
+	// Reload the first real page once so the START_URL navigation lands under capture.
 	reloadPending bool
 }
 
@@ -177,12 +156,8 @@ func (c *captureClient) readPump() {
 		}
 		switch env.Method {
 		case "Target.attachedToTarget":
-			// The new session id lives in params for attach/detach — the event
-			// originates at the browser endpoint, so the envelope's top-level
-			// sessionId is empty. Reading it from the envelope instead stores
-			// every target under "" and every domain command (Network.enable,
-			// Page.reload) is then rejected browser-side with "wasn't found",
-			// silently disabling all capture.
+			// The session id is in params here — the envelope's top-level one is empty,
+			// and reading it there silently disables all capture.
 			c.onAttached(env.Params)
 		case "Target.detachedFromTarget":
 			c.onDetached(env.Params)
@@ -307,11 +282,8 @@ func (c *captureClient) dispatch(method, sessionID string, params json.RawMessag
 	routeCaptureEvent(method, params, t.targetID, sessionID, tab)
 }
 
-// routeCaptureEvent fans one CDP event to every tap that owns it. ExtraInfo is
-// both a Network.* event and the cookie source, so these are independent ifs
-// rather than a switch — a Network. prefix must not starve the cookie tap.
-// sessionID is passed through because a tap may need to command the same
-// target (the network tap fetches response bodies to hash them).
+// routeCaptureEvent: ExtraInfo is both a Network.* event and the cookie source, so
+// independent ifs, not a switch. sessionID passes through so a tap can command the target.
 func routeCaptureEvent(method string, params json.RawMessage, targetID, sessionID string, tab int) {
 	if isNetEventType(method) {
 		netMonitorTap(targetID, sessionID, method, params, tab)
@@ -332,10 +304,7 @@ func (c *captureClient) sendSession(method string, params map[string]interface{}
 	return c.sendSessionCallback(method, params, sessionID, nil)
 }
 
-// sendSessionCallback is sendSession plus a one-shot handler for the command's
-// result. The capture read loop invokes it with the raw `result` payload (nil
-// when the browser rejected the command), then forgets it — the reply must be
-// consumed exactly once or not at all.
+// sendSessionCallback: sendSession plus a one-shot result handler, consumed exactly once.
 func (c *captureClient) sendSessionCallback(method string, params map[string]interface{}, sessionID string, cb func(json.RawMessage)) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -361,11 +330,8 @@ func (c *captureClient) sendSessionCallback(method string, params map[string]int
 	return c.conn.WriteJSON(msg)
 }
 
-// requestResponseBody asks Chromium for one request's response body and hands
-// the decoded bytes to cb (nil when the body is unavailable — evicted from
-// cache, a redirect hop, a rejected command, or a non-text body whose base64
-// failed to decode). Used to hash loaded files; the request must still be in
-// the browser's response cache, which it is right after Network.loadingFinished.
+// requestResponseBody: fetch one response body for hashing; must be called while the
+// request is still in the browser's response cache (right after loadingFinished).
 func (c *captureClient) requestResponseBody(sessionID, requestID string, cb func([]byte)) error {
 	return c.sendSessionCallback(
 		"Network.getResponseBody",

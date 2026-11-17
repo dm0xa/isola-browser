@@ -13,17 +13,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// bitrateStepMinInterval is the shortest gap between two accepted set_bitrate
-// steps for one viewer. Each accepted step replaces an encoder run, so without
-// it a client could spawn ffmpeg hundreds of times per second; the ABR
-// controller itself steps at most once per 8 s.
+// bitrateStepMinInterval: each accepted step replaces an encoder run; the ABR itself steps at most every 8 s.
 const bitrateStepMinInterval = 1 * time.Second
 
-// closeCodeEncoderError is the WebSocket close code a viewer socket ends with
-// when the streamer cannot start an encoder for it (range 4000-4999 is
-// application-private). The relay copies messages rather than close frames, so
-// a browser behind it sees an ordinary close; the stream_error JSON written
-// just before this frame is the signal both paths can act on.
+// closeCodeEncoderError (4000-4999 is app-private): the relay copies messages, not close frames —
+// the stream_error JSON written before this frame is the real signal.
 const closeCodeEncoderError = 4001
 
 func parseIntEnv(key string, defaultVal int) int {
@@ -35,10 +29,7 @@ func parseIntEnv(key string, defaultVal int) int {
 	return defaultVal
 }
 
-// parseIntEnvAllowZero is parseIntEnv but accepts an explicit non-negative
-// integer, including 0. A value of 0 is meaningful for
-// ISOLA_STATIC_KEEPALIVE_MS, where it disables change-driven suppression and
-// restores the unconditional CFR encode loop.
+// parseIntEnvAllowZero: 0 is meaningful for ISOLA_STATIC_KEEPALIVE_MS (disables change suppression).
 func parseIntEnvAllowZero(key string, defaultVal int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
@@ -48,11 +39,7 @@ func parseIntEnvAllowZero(key string, defaultVal int) int {
 	return defaultVal
 }
 
-// handleViewerWS is the main session loop for one viewer WebSocket connection.
-// It attaches the viewer to the session's shared encoder — one ffmpeg per
-// distinct (bitrate, scale, mode) configuration, fanned out to every viewer
-// using it — relays incoming JSON input events to CDP, and answers the client's
-// ABR control messages (ping/pong RTT probes, set_bitrate, request_keyframe).
+// handleViewerWS: attach to the session's shared encoder, relay input to CDP, answer ABR control messages.
 func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -61,11 +48,7 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Capability negotiation via URL query (?mode=webcodecs), set by the
-	// backend proxy from the client's handshake request. Negotiating on the
-	// handshake (instead of a first WS message) avoids a read-deadline race:
-	// a timed-out gorilla Read poisons the connection and would kill the
-	// session for any client that doesn't announce itself.
+	// Negotiation rides the handshake (?mode=webcodecs): a first-message read deadline would poison the socket.
 	webcodecs := r.URL.Query().Get("mode") == "webcodecs"
 	if webcodecs {
 		log.Printf("ws: webcodecs, annex-b")
@@ -128,14 +111,9 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		return conn.WriteJSON(v)
 	}
-	// abort ends this viewer's session for good: it stops the writers waiting
-	// on done and closes the socket, which is what unblocks the read loop and
-	// runs its deferred hub.release. Every write path uses it, because a write
-	// that fails is the only evidence of a socket that will never drain again
-	// — and a read loop left parked in ReadMessage keeps the subscription and
-	// the encoder alive for a viewer that cannot receive a byte. The video
-	// path has frames to fail on; on a static page metrics are the only
-	// traffic, so they must be able to end the session too.
+	// abort: a failed write is the only evidence of a socket that will never
+	// drain; without it a parked read loop keeps the subscription alive.
+	// Metrics are the only traffic on a static page, so they must be able to end it too.
 	abort := func(why string, err error) {
 		log.Printf("ws: %s: %v", why, err)
 		closeDone()
@@ -165,10 +143,7 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 		keepalive: staticKeepaliveMS,
 	}
 
-	// Drain the mailbox: the hub only ever enqueues, so a viewer that stops
-	// reading (or whose socket wedges) can never block the shared encoder.
-	// Control messages and video share this one queue, which is what keeps
-	// stream_reset/stream_init ordered against the video they replace.
+	// One queue for control + video keeps stream_reset/stream_init ordered; a slow viewer never blocks the encoder.
 	go func() {
 		for {
 			select {
@@ -196,13 +171,8 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 	// the init segment, if the run already has one) before the pumps can
 	// deliver anything.
 	if hub.attach(sub, key, "") == nil {
-		// No encoder could be started, so no run exists and none will follow on
-		// this socket. A bare stream_reset would be a lie — every real reset is
-		// followed by stream_init, and a client waiting for one waits forever —
-		// and an abrupt TCP close is indistinguishable from a network drop. Say
-		// what happened on the wire, then close with an application close code
-		// so the failure is explicit and bounded: the socket is gone when this
-		// handler returns, and it says why before it goes.
+		// No run exists and none will follow: say so on the wire (a bare
+		// stream_reset would strand a waiting client), then close with the app close code.
 		if err := writeText(map[string]any{
 			"type":      msgTypeStreamError,
 			"reason":    "encoder_error",
@@ -219,32 +189,18 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer hub.release(sub)
 
-	// setBitrate re-points the viewer at the rung the ABR controller asked
-	// for. libx264 CBR cannot re-target its bitrate live, so — exactly like
-	// any other encoder restart — the client recovers from stream_reset +
-	// stream_init.
-	//
-	// The viewer may land on a different rung than it asked for: when the
-	// session is at maxConcurrentRuns, attach joins a compatible run instead
-	// of starting a third encoder (stream_hub.go). The rung actually landed on
-	// is whatever the returned run carries — the client reads it back from the
-	// stream_init and metrics that follow, never from its own request.
-	// set_bitrate budget: one accepted step per interval. The ABR controller
-	// steps at most once per 8 s (abr.ts ABR_MIN_INTERVAL_MS); a second is
-	// generous for a manual quality change and still kills a flood. Only the
-	// read loop calls setBitrate, so plain locals need no lock.
+	// setBitrate: every accepted step is an encoder restart; at maxConcurrentRuns
+	// the viewer may land on a different rung — read it back from stream_init,
+	// never from the request. Budget: one accepted step per interval, plain locals
+	// (only the read loop calls this).
 	var (
 		lastBitrateStep     time.Time
 		bitrateStepsRefused int
 		lastAbrLogKbps      int
 	)
 	setBitrate := func(kbps int) {
-		// Budget, like request_keyframe: every accepted step replaces the
-		// encoder run (and resets every viewer of it), and the ABR controller
-		// only ever steps 8 s apart. A client that ignores that is either
-		// broken or hostile — 40 messages used to mean 40 ffmpeg spawns in
-		// 142 ms. Refused steps are silent, as with keyframes, so a flooder
-		// cannot tell how long to wait.
+		// Refused steps are silent, so a flooder cannot tell how long to wait
+		// (40 messages used to mean 40 ffmpeg spawns in 142 ms).
 		now := time.Now()
 		if !lastBitrateStep.IsZero() && now.Sub(lastBitrateStep) < bitrateStepMinInterval {
 			bitrateStepsRefused++
@@ -365,20 +321,13 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 					"encode_scale":    run.key.scale,
 					"static_secs":     staticSecs,
 					"skipped_ticks":   run.skippedTicks.Load(),
-					// dropped is this viewer's total shed packets, per viewer so
-					// a rising counter points at the one socket that cannot keep
-					// up rather than at the encoder. The two causes are split:
-					// drop_overflow is a socket that is not draining,
-					// drop_awaiting_key is the poster wait every late joiner
-					// serves before its first IDR and says nothing about the
-					// transport.
+					// Per-viewer shed packets: drop_overflow = socket not draining;
+					// drop_awaiting_key = the normal late-join poster wait.
 					"dropped":           sub.dropped.Load(),
 					"drop_overflow":     sub.dropOverflow.Load(),
 					"drop_awaiting_key": sub.dropAwaitingKey.Load(),
-					// Did the picture actually change? skipped_ticks and a decoded
-					// fps both stay high while the encoder is fed duplicate frames,
-					// so changes_per_sec near zero with a healthy fps is the
-					// signature of a frozen picture the other numbers cannot see.
+					// changes_per_sec near zero with a healthy decoded fps = a frozen
+					// picture the other numbers cannot see.
 					"changes_per_sec":       rates.ChangesPerSec,
 					"full_frames_per_sec":   rates.FullPerSec,
 					"damaged_pct":           rates.DamagedPct,
@@ -396,10 +345,8 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 					"capture_fallback":      capHealth.FallbackActive,
 					"capture_last_paint_ms": capHealth.LastPaintMS,
 					"capture_last_frame_ms": capHealth.LastFrameMS,
-					// Wire accounting. capture_last_paint_ms is cleared by the 100ms
-					// keepalive nudge whatever the page is doing, so on its own it
-					// cannot tell a live picture from a repainted frozen one.
-					// dedup_frames growing while sent_frames stalls is that state.
+					// The 100ms keepalive clears capture_last_paint_ms whatever the page does;
+					// dedup growing while sent stalls is the frozen state.
 					"capture_last_sent_ms": capHealth.LastSentMS,
 					"capture_sent_frames":  capHealth.SentTotal,
 					"capture_dedup_frames": capHealth.DedupTotal,

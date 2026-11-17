@@ -23,11 +23,8 @@ import (
 	"time"
 )
 
-// Recon: on-demand intelligence about the hosts a session observed. Every check
-// is a single bounded GET from inside the sandbox (so it egresses exactly like
-// the browser, including Tor when the session is routed through it), cached for
-// the session and never triggered automatically. Passive DNS enrichment and the
-// active probes share one endpoint because MCP exposes both.
+// Recon: bounded single GETs from inside the sandbox (egressing like the browser,
+// Tor included), session-cached, never automatic. Passive DNS and active probes share /intel.
 
 const (
 	intelMaxBodyBytes = 2 << 20 // 2 MiB per response
@@ -75,11 +72,7 @@ const (
 	torDNSAddr  = "127.0.0.1:5353"
 )
 
-// intelRootCAs adds an operator-supplied CA to the system pool. TLS-inspecting
-// networks (a corporate proxy terminating connections) present a chain the
-// image does not trust; without this every probe fails with "certificate
-// signed by unknown authority". Verification is never disabled — the operator
-// installs the CA instead.
+// intelRootCAs: an operator CA for TLS-inspecting proxies; verification is never disabled.
 func intelRootCAs() *x509.CertPool {
 	pem := strings.TrimSpace(os.Getenv("INTEL_CA_PEM"))
 	if pem == "" {
@@ -96,10 +89,7 @@ func intelRootCAs() *x509.CertPool {
 	return pool
 }
 
-// newIntelTransport builds the transport for recon requests. In a Tor session
-// it dials through the Tor SOCKS proxy: the container firewall drops direct
-// exits, and a proxied dialect gives the proxy the hostname so name resolution
-// happens inside the circuit too.
+// newIntelTransport: Tor sessions dial via the SOCKS proxy so name resolution happens inside the circuit.
 func newIntelTransport(tor bool) *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	if tor {
@@ -150,10 +140,7 @@ var (
 	}
 )
 
-// intelHTTPClient is shared and bounded: one timeout for the whole check, a
-// hard redirect count, and no cross-registrable-domain hops. That last rule is
-// for *target* probes — a robots.txt fetch must not silently become a request
-// to an unrelated third party.
+// intelHTTPClient: bounded; no cross-registrable-domain hops, so a target probe never leaks to a third party.
 var intelHTTPClient = &http.Client{
 	Timeout:   intelProbeTimeout,
 	Transport: newIntelTransport(isTorSession()),
@@ -261,12 +248,7 @@ func storeProbe(key string, r *probeResult) {
 	intelCacheMu.Unlock()
 }
 
-// intelHandler serves GET /intel.
-//
-//	host=<hostname>        the site to inspect (required for probes)
-//	ips=<a,b,c>            enrich these IPs instead of resolving host
-//	checks=<robots,...>    which active checks to run (default three same-origin)
-//	mode=dns|probe|all     explicit mode; otherwise inferred
+// intelHandler: GET /intel — host=<target>, ips=<enrich these>, checks=<robots,...>, mode=dns|probe|all.
 func intelHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -24,14 +24,8 @@ const (
 	minSurfaceDim = 16
 )
 
-// Frame is one damage update from the producer. Dirty lists the rectangles
-// that changed and Payload carries exactly those pixels — row-major within
-// each rect, concatenated in Dirty order.
-//
-// The producer transmits damage only, so a caret blink costs a few KB instead
-// of a full surface (14.7 MB at 1440p). A frame whose single rect covers the
-// whole surface is a full refresh and can seed a surface from scratch; see
-// IsFull.
+// Frame: one damage update. Dirty lists the changed rects, Payload carries
+// exactly those pixels. A whole-surface rect is a full refresh (see IsFull).
 type Frame struct {
 	Width, Height, Stride uint32
 	Timestamp             time.Time
@@ -42,11 +36,7 @@ type Frame struct {
 // Rect is a dirty rectangle within the frame.
 type Rect struct{ X, Y, W, H uint32 }
 
-// payloadBytes returns the wire size of the pixel payload for a set of rects.
-//
-// The sum is computed in uint64 because the rect fields are untrusted: W*H*4
-// for two uint32 fields overflows int on a 32-bit build, and a header is
-// allowed to reach this function with values a 64-bit int cannot hold.
+// payloadBytes: uint64 because rect fields are untrusted and W*H*4 overflows 32-bit int.
 func payloadBytes(rects []Rect) uint64 {
 	var n uint64
 	for _, r := range rects {
@@ -63,28 +53,16 @@ func (f *Frame) IsFull() bool {
 		f.Dirty[0].W == f.Width && f.Dirty[0].H == f.Height
 }
 
-// frameReadTimeout bounds the rest of an in-progress frame once its first byte
-// has arrived. Waiting for the first byte of a new frame is deliberately
-// unbounded: an idle page (and every page while no viewer is attached) sends no
-// damage for minutes, and that must not read as a dead producer. Once a frame
-// has started, though, all of its bytes are on their way over a local socket,
-// so a stall means a broken producer — drop it instead of pinning this reader
-// goroutine and its buffers forever.
+// frameReadTimeout bounds only an in-progress frame: waiting for a first byte is
+// unbounded (an idle page sends nothing for minutes); once started, a stall = broken producer.
 const frameReadTimeout = 5 * time.Second
 
 // frameReadChunk is the allocation granularity for a pixel payload. Ordinary
 // damage updates fit in one chunk; a full-surface refresh is read in doublings.
 const frameReadChunk = 64 << 10
 
-// frameReadBuffer recycles pixel payload buffers for one producer connection.
-// A full-surface frame at 720p is 3.5 MB and at 1440p 14.7 MB; allocating one
-// per frame made the reader allocator- and GC-bound (measured 522 µs and
-// 7.8 MB per full frame versus 72 µs and 0 B into a reused buffer).
-//
-// Three slots, not one: the reader goroutine runs ahead of the broadcaster by
-// up to one queued frame plus the one being composed, so a slot is only reused
-// by frame N+3, by which time frame N has been composed (composition happens
-// synchronously in the broadcaster loop before N+2 can be delivered).
+// frameReadBuffer: recycled payload slots — measured 72 µs / 0 B per full frame vs
+// 522 µs / 7.8 MB allocating. Three slots: the reader runs two frames ahead of composition.
 type frameReadBuffer struct {
 	slots [3][]byte
 	seq   uint64
@@ -104,10 +82,7 @@ func readFrame(conn net.Conn) (*Frame, error) {
 	return readFrameWithin(conn, frameReadTimeout)
 }
 
-// readFrameWithin is readFrame with an explicit in-progress timeout. The
-// timeout is a parameter rather than a package variable because a variable
-// shared with a still-running listener goroutine is a data race the moment a
-// test shortens it.
+// readFrameWithin: the timeout is a parameter — a shared variable is a data race in tests that shorten it.
 func readFrameWithin(conn net.Conn, rest time.Duration) (*Frame, error) {
 	return readFrameWith(conn, rest, nil)
 }
@@ -166,13 +141,8 @@ func readFrameWith(conn net.Conn, rest time.Duration, rb *frameReadBuffer) (*Fra
 			W: binary.LittleEndian.Uint32(dirtyBuf[off+8:]),
 			H: binary.LittleEndian.Uint32(dirtyBuf[off+12:]),
 		}
-		// Reject out-of-bounds damage outright: the payload length is derived
-		// from the rects, so a bogus rect would desynchronise the stream.
-		//
-		// The comparisons are written as subtraction because X+W is a uint32
-		// addition: 0xFFFFFFFE+2 wraps to 0 and would pass a naive check,
-		// after which the payload size derived from the rect wrapped int64
-		// and panicked in make().
+		// Reject out-of-bounds damage: X+W is uint32 addition, so 0xFFFFFFFE+2 wraps to
+		// 0 and passes a naive check — hence the subtraction form.
 		if r.W == 0 || r.H == 0 || r.W > f.Width || r.H > f.Height ||
 			r.X > f.Width-r.W || r.Y > f.Height-r.H {
 			return nil, fmt.Errorf("dirty rect %d out of bounds: %dx%d+%d+%d in %dx%d",
@@ -197,11 +167,8 @@ func readFrameWith(conn net.Conn, rest time.Duration, rb *frameReadBuffer) (*Fra
 	return f, nil
 }
 
-// readPayloadInto reads exactly n pixel bytes into the connection's recycled
-// slot when one is supplied, otherwise into a fresh buffer. Growth stays
-// incremental: n comes from an untrusted header, so reserving the declared
-// surface up front (256 MiB at the 8192 maximum) would let a header-only frame
-// reserve memory before a single pixel shows up.
+// readPayloadInto: recycled slot when supplied; growth stays incremental because
+// n comes from an untrusted header (the 8192-max surface is 256 MiB).
 func readPayloadInto(conn net.Conn, rb *frameReadBuffer, n int) ([]byte, error) {
 	slot := -1
 	buf := make([]byte, 0, min(n, frameReadChunk))

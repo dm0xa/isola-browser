@@ -13,12 +13,9 @@ import (
 	"time"
 )
 
-// Network monitor: taps CDP Network.* events (via the CDP client's event
-// tap), aggregates per-request metadata, and streams compact entries to
-// connected viewers. Metadata is all that is broadcast — no bodies, cookies or
-// headers reach the panel. The one exception is a transient body read: to give
-// a loaded file a content hash, the tap asks Chromium for the body right after
-// the request finishes, hashes it, and keeps only the digest (never the body).
+// Network monitor: per-request metadata from CDP Network.* events, streamed to
+// viewers. No bodies/cookies/headers broadcast — the one exception is a transient
+// body read to hash a loaded file; only the digest is kept.
 
 const (
 	// netBodyHashMaxBytes caps what we read back to hash, using the encoded
@@ -41,10 +38,8 @@ type netRedirect struct {
 	To     string `json:"to"`
 }
 
-// netTLS summarises the certificate a document was served with. SecurityState
-// is CDP's verdict on the connection, not our inference: Chromium reports
-// "insecure" for a chain it accepted only because certificate errors were
-// ignored.
+// netTLS: SecurityState is Chromium's verdict, not ours (it reports "insecure"
+// for a chain accepted only because errors were ignored).
 type netTLS struct {
 	Protocol      string   `json:"protocol,omitempty"`
 	Cipher        string   `json:"cipher,omitempty"`
@@ -138,12 +133,7 @@ var (
 	netMaxVal  int
 )
 
-// netMaxEntries reports how many network entries the capture keeps. The
-// orchestrator passes NET_LOG_MAX_ENTRIES per container from
-// session.network_log_max_entries (ISOLA_NETWORK_LOG_MAX_ENTRIES on the
-// backend). An unset or invalid value keeps the default so a session never
-// starts with an unbounded or zero window. The container environment is fixed
-// at process start, so the value is read once instead of on every event.
+// netMaxEntries: read once at process start (env is fixed); unset/invalid keeps the default.
 func netMaxEntries() int {
 	netMaxOnce.Do(func() { netMaxVal = readNetMaxEntries() })
 	return netMaxVal
@@ -211,10 +201,8 @@ func netMonitorTap(scope, sessionID, method string, params json.RawMessage, tab 
 				hashNetBody(hashJob)
 			}()
 		default:
-			// Every hash worker is busy. Parking one goroutine per finished
-			// request on the semaphore held the row's publish back for as long as
-			// the queue took (500 resources at 4 jobs/s ≈ 2 minutes), with the
-			// entry pinned meanwhile. Drop the hash instead: the row still ships.
+			// All hash workers busy: parking a goroutine per request stalled publishes for
+			// minutes (500 resources ≈ 2 min); drop the hash, ship the row.
 			go publishEntryWithoutHash(hashJob)
 		}
 	}
@@ -241,10 +229,7 @@ type netEvent struct {
 		Status int    `json:"status"`
 	} `json:"redirectResponse"`
 	Response struct {
-		// URL rides responseReceived. A request first seen at response time
-		// (the monitor attached mid-navigation) has no requestWillBeSent to
-		// name it, and an unnamed entry is an unusable row: blank URL in the
-		// panel and a nameless host in the resource graph.
+		// URL rides responseReceived — a request first seen at response time has no requestWillBeSent.
 		URL               string            `json:"url"`
 		Status            int               `json:"status"`
 		MimeType          string            `json:"mimeType"`
@@ -281,10 +266,8 @@ type netEvent struct {
 	WallTime          float64           `json:"wallTime"`
 }
 
-// applyNetEvent folds one CDP event into the per-request state. Callers hold
-// netMu. It returns the entry to publish now (nil when nothing should be sent
-// yet) and, for a finished request worth hashing, the job that fetches and
-// hashes the body before publishing.
+// applyNetEvent folds one CDP event in (callers hold netMu); returns the entry to
+// publish and the hash job for a finished request worth hashing.
 func applyNetEvent(key, uiID, method string, p *netEvent, tab int, sessionID string) (*netRequest, *netHashJob, bool) {
 	switch method {
 	case "Network.requestWillBeSent":
@@ -330,12 +313,8 @@ func applyNetEvent(key, uiID, method string, p *netEvent, tab int, sessionID str
 	case "Network.responseReceived":
 		r := netRequests[key]
 		if r == nil {
-			// Attached after requestWillBeSent (e.g. mid-navigation
-			// reconnect) — attribute to whatever tab the target belongs to.
-			// It must enter the rolling window here: a response that never
-			// produces loadingFinished/loadingFailed (streaming, SSE, a
-			// closed tab) would otherwise stay outside netOrder forever and
-			// escape the capture window.
+			// Attached mid-navigation: attribute to the target's tab. It must enter the
+			// window here or a never-finishing response (SSE, closed tab) escapes it.
 			r = &netRequest{id: uiID, cdpID: p.RequestId, tab: tab, startedAt: captureTime(p.WallTime)}
 			netRequests[key] = r
 			rememberOrder(key)
@@ -388,11 +367,7 @@ func applyNetEvent(key, uiID, method string, p *netEvent, tab int, sessionID str
 		}
 		return r, nil, false
 	case "Network.responseReceivedExtraInfo":
-		// Set-Cookie rides here too, but cookies have their own tap; this case
-		// exists for the raw header block (headersText) and for responses whose
-		// header map carried nothing usable. It never *creates* a row: the cookie
-		// tap must not leave blank entries in the panel, and requestWillBeSent
-		// always precedes a real response.
+		// Raw header block only; never creates a row (requestWillBeSent always precedes).
 		r := netRequests[key]
 		if r == nil {
 			return nil, nil, false
@@ -448,10 +423,7 @@ func scopeOf(key string) string {
 	return scope
 }
 
-// isMainFrameDocument reports whether this Document request belongs to the
-// target's main frame. The first document frame seen for a fresh target is the
-// main frame; anything else is an iframe. When CDP omits frameId, assume main
-// so classification keeps working rather than silently freezing the origin.
+// isMainFrameDocument: the first document frame per target is the main frame; a missing frameID assumes main.
 func isMainFrameDocument(scope, frameID string) bool {
 	if frameID == "" {
 		return true
@@ -497,10 +469,7 @@ func clipStrings(in []string, max int) []string {
 	return out
 }
 
-// hashableType reports whether a loaded file is a kind worth hashing: the
-// static/text resources a user identifies by content (js, css, html, images,
-// fonts) plus API payloads. Streams and media are excluded — they are large,
-// often chunked, and a body read is least likely to succeed for them.
+// hashableType: content users identify by hash (js/css/html/images/fonts/API); streams and media excluded.
 func hashableType(typ string) bool {
 	switch typ {
 	case "Document", "Script", "Stylesheet", "Font", "Image", "XHR", "Fetch", "Manifest", "TextTrack", "Prefetch", "Other":
@@ -537,10 +506,8 @@ func hashNetBody(job *netHashJob) {
 		sum := sha1.Sum(body)
 		job.r.sha1 = hex.EncodeToString(sum[:])
 	}
-	// Only publish if this is still the live entry — a reconnect or buffer
-	// eviction may have dropped it while the body was in flight. Build the
-	// message under the lock; a listener callback (a viewer WS write) must
-	// never run while netMu is held, or one slow viewer stalls capture.
+	// Publish only if still live; build the message under the lock — a viewer
+	// WS write must never run while netMu is held.
 	var msg map[string]any
 	if netRequests[job.key] == job.r {
 		msg = netWireMessage(job.r)

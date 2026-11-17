@@ -1,8 +1,5 @@
-// Package app wires and runs the isola backend HTTP server.
-//
-// Both entry points share this bootstrap and differ only in the options they
-// pass: cmd/server has no embedded UI and no session persistence, cmd/single-user
-// embeds the SPA and persists session routing state across restarts.
+// Package app: shared bootstrap for both entry points — cmd/single-user adds the
+// embedded UI and session persistence on top of cmd/server.
 package app
 
 import (
@@ -118,16 +115,9 @@ func Run(opts Options) error {
 		log.Error().Err(err).Msg("DNS forwarder unavailable; sessions use plaintext resolvers")
 	}
 
-	// A snapshot can predate this process. Drop restored sessions the runtime no
-	// longer backs before serving traffic: otherwise they hold admission slots
-	// against ISOLA_MAX_SESSIONS (until the health checker converges, or the
-	// store reaper clears a stuck provisioning row) and answer reconnects for a
-	// session that cannot render.
-	//
-	// Bounded: this shells out to the runtime once per restored session, and an
-	// unresponsive runtime must not stop the process from ever listening —
-	// without a listener there is no /healthz to diagnose it. A timeout leaves
-	// the reconciler's conservative default in place (nothing dropped).
+	// Drop restored sessions the runtime no longer backs before serving traffic
+	// (they hold admission slots). Bounded: an unresponsive runtime must not
+	// prevent listening — a timeout leaves the reconciler's default (nothing dropped).
 	reconcileCtx, cancelReconcile := context.WithTimeout(ctx, 20*time.Second)
 	orch.ReconcileRestoredSessions(reconcileCtx, st, cache)
 	cancelReconcile()
@@ -141,12 +131,9 @@ func Run(opts Options) error {
 	// carries the control token in its query string, which must not be logged.
 	r.Use(isomw.RedactingLogger)
 	r.Use(middleware.Recoverer)
-	// CORS_ORIGIN may list several origins (comma/whitespace separated); go-chi/cors
-	// does not split it, so expand it here. X-Session-Token must be allowed or a
-	// cross-origin session GET/PATCH fails its preflight.
-	// CORSOrigins never returns an empty list: an unusable CORS_ORIGIN yields a
-	// non-matching origin so cross-origin access is denied, not opened. Warn so
-	// the misconfiguration is visible at startup.
+	// go-chi/cors does not split a multi-origin CORS_ORIGIN; X-Session-Token must
+	// be allowed for cross-origin preflights. Origins never returns empty — warn
+	// when that means the config was unusable.
 	if len(config.Origins(cfg.CORSOrigin)) == 0 {
 		log.Warn().Str("cors_origin", cfg.CORSOrigin).
 			Msg("CORS_ORIGIN has no usable origin — cross-origin requests will be denied")
@@ -266,10 +253,8 @@ func Run(opts Options) error {
 		r.Get("/assets/*", frontend.ServeHTTP)
 		r.Get("/fonts/*", frontend.ServeHTTP)
 		r.Get("/favicon.svg", frontend.ServeHTTP)
-		// Install surface: the manifest and its icons are fetched by Chromium
-		// with the page. Without these routes the SPA fallback would answer
-		// with index.html, and a manifest or icon served as HTML fails the
-		// installability check without an obvious error.
+		// Without these routes the SPA fallback would answer manifest/icon requests
+		// with HTML and fail the installability check.
 		r.Get("/manifest.webmanifest", frontend.ServeHTTP)
 		r.Get("/icons/*", frontend.ServeHTTP)
 		r.Get("/index.html", frontend.ServeHTTP)
@@ -303,11 +288,8 @@ func Run(opts Options) error {
 		<-sigCh
 		log.Info().Msg("shutting down...")
 		cancel()
-		// Stop accepting work before tearing anything down. Drain keeps the
-		// listener open for up to ~45s today; a POST landing in that window
-		// passes admission, creates a container, and the process exits before
-		// activation — an untracked sandbox behind a 202 the client waits on.
-		// Shutdown first also cancels in-flight requests.
+		// Stop admission before tearing down: a POST accepted during drain would
+		// create a container the process never activates.
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		_ = srv.Shutdown(shutdownCtx)
 		shutdownCancel()
@@ -328,19 +310,8 @@ func Run(opts Options) error {
 	return nil
 }
 
-// serveFrontend serves the embedded SPA with a cache policy the browser can act
-// on. http.FileServer over an embed.FS sends no validators (no Last-Modified, no
-// ETag) and no Cache-Control, so a browser has no way to know the app shell
-// changed and can keep running the previous bundle — a frontend fix then never
-// reaches the user. Vite content-hashes everything under /assets, so those are
-// safe to pin; the shell must be revalidated.
-// notFound serves the SPA for client routes and a JSON 404 for the API.
-//
-// The SPA fallback used to answer every unmatched path with index.html, so a
-// typo'd or removed API route returned HTTP 200 and a page of HTML to a client
-// that expects JSON — a silent failure that reads as success. Client routes
-// (/session/:id, /share/:token, ...) still get the shell, which is what makes
-// a deep link survive a reload.
+// notFound: SPA shell for client routes; JSON 404 for unmatched API paths — the
+// old blanket index.html fallback turned a typo'd API route into a silent 200.
 func notFound(frontend http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" {
@@ -361,6 +332,8 @@ func respondJSONError(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
+// serveFrontend: FileServer over embed.FS sends no validators — pin hashed
+// /assets forever, revalidate the shell.
 func serveFrontend(fsys fs.FS) http.Handler {
 	// Go's built-in mime table has no .webmanifest entry, so http.FileServer
 	// would sniff the body and serve the manifest as text/plain. Register the

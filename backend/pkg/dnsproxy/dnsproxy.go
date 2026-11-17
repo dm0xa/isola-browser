@@ -1,18 +1,6 @@
-// Package dnsproxy implements a small DNS forwarding server. Browser
-// containers point their resolver at it (via `docker run --dns`), it accepts
-// ordinary plaintext DNS, and forwards each query to an upstream resolver over
-// DNS-over-TLS (RFC 7858) or DNS-over-HTTPS (RFC 8484).
-//
-// Rationale: `docker run --dns` can only configure a plaintext resolver, so
-// encrypted DNS has to be terminated by a forwarder reachable on port 53. The
-// browser sandbox keeps the same egress it always had (port 53 to the backend
-// only); the DoT/DoH connection is made by the trusted backend, not by the
-// sandbox.
-//
-// The implementation is deliberately dependency-free (standard library only)
-// and protocol-thin: it treats a query as an opaque DNS message, so EDNS0
-// buffer sizes and options sent by the client are honoured end-to-end by the
-// upstream.
+// Package dnsproxy: a stdlib-only DNS forwarder. Browser containers send it
+// plaintext DNS (--dns); it forwards over DoT (RFC 7858) or DoH (RFC 8484).
+// Queries stay opaque, so client EDNS0 is honoured end-to-end.
 package dnsproxy
 
 import (
@@ -81,16 +69,8 @@ func (u Upstream) String() string {
 	return string(u.proto) + "://" + u.address
 }
 
-// ParseUpstream parses a configured endpoint. Accepted forms:
-//
-//	"1.1.1.1"                      -> plain, port 53
-//	"plain://1.1.1.1:5353"         -> plain, explicit port
-//	"tls://1.1.1.1"                -> DoT, port 853
-//	"tls://dns.google"             -> DoT with SNI dns.google, port 853
-//	"https://dns.google/dns-query" -> DoH at the given URL
-//
-// When raw has no scheme, mode selects the protocol. A scheme in raw always
-// wins, so an operator can mix protocols from a single list.
+// ParseUpstream: bare host → mode's protocol; an explicit scheme always wins, so
+// one list can mix plain/tls/https endpoints.
 func ParseUpstream(raw string, mode Protocol) (Upstream, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -327,11 +307,8 @@ func New(listenAddrs []string, upstreams []Upstream) *Server {
 	return &Server{listenAddrs: listenAddrs, upstreams: upstreams, timeout: DefaultTimeout}
 }
 
-// NewServerForMode builds a forwarding server for an encryption mode ("tls" or
-// "https"). Each entry in servers is a DoT/DoH endpoint: an IP or hostname is
-// turned into tls://<server>:853 (or https://<server>/dns-query), while a full
-// tls:// or https:// URL is used as-is. It is an error to call this for plain
-// mode or with no usable upstreams.
+// NewServerForMode: bare hosts become tls://host:853 (or DoH); full URLs used as-is.
+// Error for plain mode or no usable upstreams.
 func NewServerForMode(mode string, servers, listenAddrs []string) (*Server, error) {
 	proto := Protocol(strings.ToLower(strings.TrimSpace(mode)))
 	if proto != ProtoTLS && proto != ProtoHTTPS {
@@ -351,10 +328,7 @@ func NewServerForMode(mode string, servers, listenAddrs []string) (*Server, erro
 	return New(listenAddrs, upstreams), nil
 }
 
-// Listen binds the configured addresses on both UDP and TCP and returns the
-// addresses actually bound (which resolves a "host:0" request to the real
-// port). Binding happens up front so a port conflict is reported
-// synchronously.
+// Listen binds UDP+TCP up front and returns the real addresses ("host:0" resolves).
 func (s *Server) Listen() ([]string, error) {
 	bound := make([]string, 0, len(s.listenAddrs))
 	for _, addr := range s.listenAddrs {

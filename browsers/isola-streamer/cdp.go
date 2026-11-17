@@ -41,10 +41,7 @@ type CDPClient struct {
 	// preferredURL (when set) makes connect() attach to the page target
 	// matching this URL prefix — the active tab in multi-tab mode.
 	preferredURL string
-	// preferredSetAt records when preferredURL was last set. For a short
-	// window after a tab switch, connect() retries instead of falling back
-	// to the first page target (which could be the WRONG tab when the
-	// tab's URL prefix went stale due to a redirect).
+	// preferredSetAt: for a short window after a tab switch, connect() retries rather than fall back to a wrong tab.
 	preferredSetAt time.Time
 
 	wakeCh chan struct{}
@@ -55,22 +52,15 @@ type CDPClient struct {
 	nextID    int
 	pending   map[int]chan cdpResponse
 
-	// attachedURL is the URL of the page target input is currently bound to,
-	// recorded at attach time. Streaming video does not follow this binding
-	// (frames come from the Electron window's offscreen producer, which always
-	// shows the *active* tab), so a stale binding looks to the viewer like a
-	// live page whose mouse and keyboard do nothing. See input_target.go for
-	// the watchdog that repairs it.
+	// attachedURL: video follows the active tab, input follows this binding —
+	// a stale binding is a live page whose mouse does nothing (see input_target.go).
 	attachedURL string
 
 	lastMouseX float64
 	lastMouseY float64
 
-	// suppressRightUp: set when a right press was swallowed because it landed
-	// inside the current text selection (a synthetic right press collapses the
-	// selection the select_range path created). The matching release — and
-	// right-pinned moves — are swallowed too so the page never sees a
-	// half right-click.
+	// suppressRightUp: a synthetic right press would collapse the select_range
+	// selection, so the press, its release and right-pinned moves are swallowed.
 	suppressRightUp bool
 
 	// frames routes pointer and key events into cross-origin iframes. The
@@ -98,10 +88,7 @@ func newCDPClient() *CDPClient {
 func (c *CDPClient) SetPreferredTarget(urlPrefix string) {
 	c.mu.Lock()
 	if c.preferredURL == urlPrefix {
-		// Unchanged: leave preferredSetAt alone. The watchdog calls this every
-		// tick while the browser is unreachable, and re-stamping it each time
-		// would keep connectRetryDelay at its 100 ms "tab switch is racing us"
-		// value forever instead of backing off.
+		// Unchanged: leave preferredSetAt alone, or the retry delay never backs off.
 		c.mu.Unlock()
 		return
 	}
@@ -197,12 +184,8 @@ func (c *CDPClient) AttachedURL() string {
 	return c.attachedURL
 }
 
-// AlignTarget makes the input binding follow the active tab, and reports
-// whether it had to reattach. A binding that already serves activeURL is left
-// alone (a tab navigating within its origin keeps the same target, so
-// reattaching per navigation would drop input for no reason); a stale or
-// foreign binding is repaired here instead of waiting for the user to switch
-// tabs by hand. Called from the watchdog in input_target.go.
+// AlignTarget: rebind input to the active tab; a still-serving binding is left
+// alone. Called from the input_target watchdog.
 func (c *CDPClient) AlignTarget(activeURL string) bool {
 	if activeURL == "" {
 		return false
@@ -211,11 +194,8 @@ func (c *CDPClient) AlignTarget(activeURL string) bool {
 		return false
 	}
 	if !c.hasTargetMatching(activeURL) {
-		// Nothing attachable serves the active tab (it is mid-navigation, the
-		// runner's URL has drifted from /json/list, ...). Keep the preference
-		// armed so the next real reconnect binds correctly, but leave the
-		// connection alone: reattaching now would only bounce input without
-		// ever converging.
+		// Nothing attachable serves the active tab: keep the preference armed,
+		// leave the connection alone — reattaching now would bounce input.
 		c.SetPreferredTarget(activeURL)
 		return false
 	}
@@ -290,11 +270,8 @@ func (c *CDPClient) listTargets() ([]cdpTarget, error) {
 	return targets, nil
 }
 
-// hasTargetMatching reports whether /json/list currently exposes a page target
-// whose URL starts with prefix — i.e. whether re-attaching could actually reach
-// that page. AlignTarget uses it to tell "bound to the wrong page" (repair it)
-// apart from "the tab the runner reports has no attachable target yet"
-// (reconnecting would only bounce input without ever converging).
+// hasTargetMatching: is the preferred target actually attachable? Separates
+// "wrong page" (repair) from "no target yet" (retry).
 func (c *CDPClient) hasTargetMatching(prefix string) bool {
 	if prefix == "" {
 		return false
@@ -349,10 +326,7 @@ func (c *CDPClient) connect() error {
 	}
 	if wsURL == "" {
 		if preferred != "" && time.Since(setAt) < preferredRetryWindow {
-			// A tab switch just happened but the expected target isn't in
-			// /json/list yet (or its URL prefix went stale). Retrying is
-			// better than attaching to an arbitrary page target and sending
-			// the user's clicks to the wrong tab.
+			// Expected target not listed yet: retry rather than send clicks to the wrong tab.
 			return fmt.Errorf("preferred target %q not in /json/list yet, retrying", preferred)
 		}
 		wsURL = fallback
@@ -384,15 +358,9 @@ func (c *CDPClient) connect() error {
 	}
 	c.mu.Unlock()
 
-	// NOTE: Input.enable is intentionally NOT called — it's not needed for
-	// Input.dispatchMouseEvent (which works without it) and on some Electron/
-	// Chromium builds it puts the input dispatch pipeline into a state where
-	// drag-selection via mouseMoved+buttons silently fails.
+	// NOTE: no Input.enable — it breaks drag-selection on some builds. And no
+	// Network/Runtime here: the multi-target capture client owns those (enabling both = every event twice).
 	_ = c.call("Page.enable", nil)
-	// Network/Runtime capture deliberately does NOT happen on this connection:
-	// it only ever saw the active tab. The multi-target capture client
-	// (cdp_capture.go) attaches to every target instead — enabling the domains
-	// here too would deliver every captured event twice.
 	_ = c.ensureFocus()
 	return nil
 }
@@ -428,10 +396,7 @@ func (c *CDPClient) call(method string, params map[string]interface{}) error {
 	return c.conn.WriteJSON(msg)
 }
 
-// callWithResult sends a command and waits for Chromium's reply so callers
-// can read return values (Runtime.evaluate etc.). Input dispatch on
-// loopback answers in well under a millisecond; the timeout only guards a
-// wedged browser.
+// callWithResult: input dispatch answers in <1 ms; the timeout only guards a wedged browser.
 func (c *CDPClient) callWithResult(method string, params map[string]interface{}, timeout time.Duration) (json.RawMessage, error) {
 	c.mu.Lock()
 	if c.conn == nil || !c.connected {
@@ -490,10 +455,7 @@ func (c *CDPClient) evaluateStringTimeout(expression string, timeout time.Durati
 	return parseEvaluateString(result)
 }
 
-// evaluateStringAwaitTimeout is evaluateStringTimeout for expressions that
-// return a promise (navigator.clipboard.readText, for one). Without
-// awaitPromise Chromium hands back the pending promise object, which
-// returnByValue renders as a value-less remote object — i.e. "".
+// evaluateStringAwaitTimeout: without awaitPromise a pending promise renders as "".
 func (c *CDPClient) evaluateStringAwaitTimeout(expression string, timeout time.Duration) (string, error) {
 	result, err := c.callWithResult("Runtime.evaluate", map[string]interface{}{
 		"expression":    expression,
@@ -506,10 +468,7 @@ func (c *CDPClient) evaluateStringAwaitTimeout(expression string, timeout time.D
 	return parseEvaluateString(result)
 }
 
-// errBadResultShape: Runtime.evaluate answered, but not with the string this
-// helper promises. The renderer is alive — the expression (or the parser) is
-// what is wrong, so callers that use an answered probe as liveness evidence
-// must not read this as "no answer".
+// errBadResultShape: the renderer answered — not liveness evidence of "no answer".
 var errBadResultShape = errors.New("evaluate: bad result shape")
 
 func parseEvaluateString(result json.RawMessage) (string, error) {

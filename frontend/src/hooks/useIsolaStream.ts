@@ -47,19 +47,13 @@ export type { IsolaQuality, IsolaNetQuality, AbrState, AbrTick, AbrResult } from
 export { abrTick } from './isola/abr';
 export type { IsolaStreamMetrics } from './isola/streamMetrics';
 
-// setAddressValue writes the tab strip's address field and records the value the
-// strip rendered, so a later tabs broadcast can tell an untouched field from an
-// in-flight edit. The strip is rebuilt by replacing the input node, so the
-// rendered value has to travel with the node it describes.
+// setAddressValue stores the rendered value so a later tabs broadcast can tell an untouched field from an in-flight edit.
 function setAddressValue(input: HTMLInputElement, value: string) {
   input.value = value;
   input.dataset.shownUrl = value;
 }
 
-// Browser-chrome palette for the in-container tab strip and the page
-// context menu. Both are built with imperative DOM nodes (not React), so they
-// cannot use Tailwind's dark: variant and have to pick colors from the active
-// theme explicitly.
+// Imperative DOM (not React) — no Tailwind dark: variant, colors come from this palette.
 const TABBAR_PALETTE = {
   dark: {
     barBg: 'rgba(17, 24, 39, 0.88)',
@@ -99,13 +93,7 @@ const TABBAR_PALETTE = {
   },
 } as const;
 
-// Background painted inside the capture element behind the decoded frame.
-// object-fit:contain letterboxes the remote frame whenever the viewer's aspect
-// ratio differs from the capture's (which fullscreen always changes), and that
-// padding shows this fill. It must match the app background — dark:gray-950 /
-// light:zinc-200, the same colors as the viewer root — or the letterbox reads as
-// glaring dark bars (the old hardcoded #030712 was invisible in dark theme but
-// looked like black lines in light theme).
+// Letterbox fill behind the contain-fitted frame; must match the viewer root background or the padding reads as dark bars.
 const CAPTURE_LETTERBOX_BG = { dark: '#030712', light: '#e4e4e7' } as const;
 
 
@@ -116,44 +104,20 @@ const INPUT_BACKLOG_CAP = 32;
 // Consecutive reconnect attempts for the input channel before giving up (a
 // successful open resets the counter).
 const INPUT_RECONNECT_ATTEMPTS = 5;
-// The streamer writes a keepalive on the input channel every 20s. Three
-// missing keepalives mean the socket is half-open (a close event never
-// fires for those) and every tab command would silently no-op.
+// Three missing 20s keepalives = half-open socket; every tab command would silently no-op.
 const INPUT_ZOMBIE_MS = 65000;
 
-// A server metrics message closes the arrival window once a second. Two missing
-// messages mean the sample no longer describes "now" (stream paused, ABR
-// restart, tab stalled), so the tick falls back to its own window instead of
-// feeding a stale rate into the loss estimate.
+// Two missing metrics messages: fall back to the free-running window instead of a stale rate.
 const ARRIVAL_WINDOW_MAX_AGE_MS = 2500;
 
 // IsolaStreamMetrics, ABR, MSE/WebCodecs decode helpers → ./isola/*
 
-// ── Canvas insets for the network panel (bottom or side split) ──────────
-// The canvas is created imperatively by the hook, so the panel layout is
-// communicated through these module-level insets, applied at creation and
-// adjustable live via setIsolaInsets().
+// Canvas insets for the network panel, applied imperatively via setIsolaInsets().
 let isolaInsets = { right: 0, bottom: 0 };
-// Reserve 36px at the top for the isola browser chrome (tab strip, URL
-// field, reload button). When the user's profile disables the strip (no
-// tabs support on this session) we collapse this to 0 and render a full
-// viewport capture. The value is read by applyInsets() so both video and
-// canvas accounts for it automatically, and kept in sync by rebuildTabBar
-// when it creates/destroys the strip element.
-//
-// EAGER INIT (non-viewOnly): on host (non-share) connects we set this to
-// 36px immediately in doConnect, BEFORE any canvas/video element is
-// created. This avoids a ~1-frame layout race where the first decoded
-// frame renders at top=0 with the tab strip overlaying the capture's top
-// 36px, then the first tabs broadcast fixes it late (user-visible flash).
+// 36px reserved for the in-container tab strip; set eagerly in doConnect so the first frame never flashes at top=0.
 let isolaTopOffset = 0;
 function getIsolaTopOffset() { return isolaTopOffset; }
-// Direct refs to the currently-mounted capture elements. Stored at creation
-// time; cleared on disconnect. Avoids the fragility of global
-// document.querySelector('#vnc-container canvas') selectors that silently
-// return the wrong element when multiple container nodes exist in the DOM
-// (e.g. RestartSession transition, share+viewer overlays) or the element
-// lives outside an id'ed wrapper for legacy transports.
+// Direct refs to the mounted capture elements; querySelector breaks with multiple containers.
 let currentCaptureVideo: HTMLVideoElement | null = null;
 let currentCaptureCanvas: HTMLCanvasElement | null = null;
 function applyInsetsToBoth() {
@@ -171,10 +135,7 @@ export function setIsolaInsets(insets: { right?: number; bottom?: number }) {
 function applyInsets(el: HTMLVideoElement | HTMLCanvasElement) {
   const { right, bottom } = isolaInsets;
   const top = getIsolaTopOffset();
-  // Replaced elements (<canvas>, <video>) do NOT honor the four-corner
-  // absolute inset model when width/height are auto — CSS spec picks the
-  // intrinsic capture size instead. Use explicit calc() percentages so the
-  // capture stretches to fill the full viewport, then position with top/left.
+// Replaced elements ignore the inset model with auto sizing — use explicit calc() percentages.
   el.style.position = 'absolute';
   el.style.left = '0';
   el.style.top = `${top}px`;
@@ -193,26 +154,12 @@ function applyInsets(el: HTMLVideoElement | HTMLCanvasElement) {
   el.style.transform = 'none';
 }
 
-// ── Copy/select-all routing ──────────────────────────────────────────────
-// Ctrl+C / Ctrl+A on the viewer can mean two different things: copy the
-// remote selection, or copy host-side UI chrome (toolbar, tab strip, network
-// panel, debug overlay). Focus decides — clicking the stream container puts
-// focus on it, clicking local chrome moves focus away. The live DOM selection
-// must NOT decide: the container's mousedown handler preventDefaults (so the
-// remote caret stays authoritative), which also leaves any previous host
-// selection intact. Judging by that stale selection made Ctrl+A fall through
-// to the host document — selecting the toolbar and tab strip instead of the
-// remote page — and Ctrl+C then kept copying that host chrome.
+// Copy/select-all routing: focus decides (container vs host chrome); the live DOM selection must not — mousedown preventDefault leaves stale host selections.
 export function copyChordStaysLocal(container: Node, active: Element | null): boolean {
   return !active || !(active === container || container.contains(active));
 }
 
-// mapClientToCapture maps a client-space pointer position onto capture-space
-// pixels for CDP input. The capture element renders with object-fit: contain,
-// so the image is scaled by a single factor and centred (letterboxed) inside
-// its box: undo the centring, divide by the scale to reach frame pixels, then
-// rescale frame pixels into capture pixels (ABR may serve a scaled-down
-// encode while input must address the full-resolution capture).
+// mapClientToCapture: undo contain-letterbox centring, scale to frame pixels, rescale to full capture (ABR may serve a smaller encode).
 export function mapClientToCapture(
   clientX: number,
   clientY: number,
@@ -239,23 +186,8 @@ export function mapClientToCapture(
   };
 }
 
-// Arrival metering aligned to the server's own metrics window.
-//
-// The ABR compares the client's arrival rate against `sent_kbps`, which the
-// streamer measured over one of *its* seconds. A free-running 1 Hz client timer
-// measures a different second, and on a change-driven stream that difference is
-// not noise: the encoder emits one burst of frames per interaction and then
-// nothing at all until the page changes again. A client window that starts just
-// after a burst counts the burst's bytes in the previous window and then reads
-// exactly zero, while `sent_kbps` — still describing the burst window — reports
-// a healthy rate. The ratio comes out 0, far below the `bad` threshold, so the
-// toolbar signal went red for a second every time the pointer travelled across
-// a link (every hover repaints and so starts another burst).
-//
-// Closing the window on the metrics message itself keeps the measured interval
-// and the server's yardstick in phase — same wall-clock second, same bytes. The
-// stream is one ordered TCP connection, so every frame the server counted for
-// that window has already been delivered when its metrics message is read.
+// Arrival metering closed on the server's metrics messages so the sample and
+// sent_kbps describe the same second; a free-running window fabricates loss on bursty streams.
 export interface ArrivalWindow {
   /** When the last metrics message arrived (performance.now), 0 before the first. */
   atMs: number;
@@ -286,21 +218,13 @@ export function advanceArrivalWindow(win: ArrivalWindow, nowMs: number, totalByt
   win.bytes = totalBytes;
 }
 
-// Frame-rate stream counters. The frame path runs at the decode rate (up to the
-// encode ceiling, ~25/s), so these are plain data the caller keeps in a ref and
-// the 1 Hz metrics tick publishes — never setMetrics per frame. Publishing them
-// per frame re-rendered the whole viewer at the frame rate for two numbers only
-// the opt-in debug overlay reads.
+// Frame-rate counters: plain data in a ref, published by the 1 Hz tick — never per frame.
 export interface FrameCounters {
   /** Latest packet sequence number seen on the wire. */
   sequenceNumber: number;
   /** Running total of IDR packets received this view. */
   keyframeCount: number;
-  /**
-   * Sequence number of the previous packet in the current encoder run, or
-   * null before the first packet and after a run change. A gap is only
-   * meaningful relative to this baseline: `seq === lastSeq + 1` is in order.
-   */
+  /** lastSeq: baseline for gap arithmetic; `seq === lastSeq + 1` is in order. */
   lastSeq: number | null;
   /** Missing packets accumulated in the current loss burst (since the last
    *  IDR or run reset). Drives the one-shot keyframe request. */
@@ -327,10 +251,7 @@ export function createFrameCounters(): FrameCounters {
   };
 }
 
-/** Consecutive missing packets in one burst that justify a keyframe request.
- *  One or two dropped delta frames heal on the next P-frame; five means the
- *  streamer shed a real slice of the GOP (mailbox overflow) and every frame
- *  until the next IDR is undecodable. */
+/** LOSS_BURST_PACKETS: five missing = the streamer shed a real GOP slice; only an IDR heals. */
 export const LOSS_BURST_PACKETS = 5;
 
 /** What one packet's gap arithmetic implies for the caller. */
@@ -341,11 +262,7 @@ export interface PacketLossNotice {
   requestKeyframe: boolean;
 }
 
-/** Record one streamed packet: advance the sequence number, count IDRs, and
- *  account for gaps. Gaps come from `seq` (uint32 LE at header offset 2),
- *  which restarts with every encoder run, so a backward or duplicate number
- *  means the run changed — the baseline resets rather than a bogus gigantic
- *  gap being counted. Mutates in place; the caller keeps it in a ref. */
+/** Record one packet; seq restarts per encoder run, so backward/duplicate = run change, not a gap. */
 export function noteStreamedPacket(
   counters: FrameCounters,
   seq: number,
@@ -381,10 +298,7 @@ export function noteStreamedPacket(
   return notice;
 }
 
-/** Drop the gap baseline and burst state. `stream_init`/`stream_reset` mean a
- *  replacement encoder run whose seq restarts at 0; carrying the old baseline
- *  across would count the entire old run as lost. Cumulative totals stay: they
- *  describe the whole view, not one run. */
+/** Drop the gap baseline on stream_init/stream_reset: the new run's seq restarts at 0. */
 export function resetPacketLoss(counters: FrameCounters): void {
   counters.lastSeq = null;
   counters.burstLost = 0;
@@ -402,10 +316,7 @@ export function createPacketLossWindow(): PacketLossWindow {
   return { lost: 0, received: 0 };
 }
 
-/** Publish packet-loss numbers at 1 Hz. Returns the cumulative `packetsLost`
- *  and `packetLossRatio = lost / (lost + received)` for the packets seen since
- *  the previous call; 0 when the window saw none, and clamped to [0, 1] against
- *  counter resets. Mutates `win` in place. */
+/** Publish windowed loss at 1 Hz: ratio over this tick's delta, clamped, 0 when empty. */
 export function samplePacketLoss(
   counters: FrameCounters,
   win: PacketLossWindow,
@@ -444,8 +355,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
   const [remoteClipboard, setRemoteClipboard] = useState<string>('');
   const [audioMuted, setAudioMutedState] = useState(true);
   const [audioActive, setAudioActive] = useState(false);
-  // Latest browser tab strip state, mirrored into React so the network panel
-  // can list every open tab even before (or without) captured traffic for it.
+  // Tab strip state mirrored into React so the network panel can list every open tab.
   const [browserTabs, setBrowserTabs] = useState<Array<{ id: number; url: string; title: string; active: boolean }>>([]);
   const [metrics, setMetrics] = useState<IsolaStreamMetrics>({
     connectMs: null,
@@ -515,9 +425,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const captureSizeRef = useRef({ w: 0, h: 0 });
-  // ── WebCodecs mode: raw Annex-B access units → VideoDecoder → canvas.
-  // No MediaSource container, no re-buffering: frames render the moment
-  // the decoder emits them, so glass-to-glass latency is one frame.
+  // WebCodecs mode: raw Annex-B → VideoDecoder → canvas; latency is one frame.
   const wcModeRef = useRef(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const decoderRef = useRef<WCDecoder | null>(null);
@@ -529,18 +437,13 @@ export function useIsolaStream(defaultTargetUrl?: string) {
   const tsUsRef = useRef(0);
   const frameStepUsRef = useRef(33333);
   const keyframeSeenRef = useRef(false);
-  // ── On-demand keyframe recovery ──
-  // A decode error or a reset with no IDR re-arms a single recovery attempt:
-  // one request_keyframe if none arrived within the timeout, then the recovery
-  // duration is measured until the next IDR flips keyframeSeenRef true.
+  // One armed recovery attempt per decode error / IDR-less reset.
   const decodeErrorCountRef = useRef(0);
   const lastRecoveryMsRef = useRef<number | null>(null);
   const recoveryStartedAtRef = useRef<number | null>(null);
   const recoveryRequestedRef = useRef(false);
   const keyframeRequestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Consecutive keyframe requests sent without an IDR landing. A few are
-  // normal (the streamer restarts its encoder per request); too many mean the
-  // restarts are failing server-side and only a fresh connection helps.
+  // Too many unanswered requests = streamer restarts failing; only a fresh connection helps.
   const recoveryRequestsRef = useRef(0);
   const wcFramesRef = useRef(0);
   const wcDecodedThisSecondRef = useRef(0);
@@ -552,50 +455,34 @@ export function useIsolaStream(defaultTargetUrl?: string) {
   // forever in a lifetime average.
   const lossWindowRef = useRef<PacketLossWindow>(createPacketLossWindow());
   const tabbarRef = useRef<HTMLDivElement | null>(null);
-  // When set, the tab strip is hosted here instead of inside the capture
-  // container. The viewer uses this in fullscreen to fold the browser chrome
-  // (tabs + address bar) into its own toolbar row so everything sits on one
-  // line; null restores the default in-container placement.
+  // Fullscreen host slot for the browser chrome; null restores in-container placement.
   const tabBarHostRef = useRef<HTMLElement | null>(null);
   // URL box gets focus once, when the tab bar first appears after page open.
   const urlAutofocusRef = useRef(false);
-  // Seed URL from the session config (whatever the user typed on the landing
-  // page). Used when the runner hasn't emitted a real tabs broadcast yet or
-  // the active tab still reports empty/about:blank during cold start.
+  // Seed URL from session config, used before a real tabs broadcast arrives.
   const seedTargetUrlRef = useRef(defaultTargetUrl || '');
   // The id of the tab the session started with. The seed above describes THAT
   // tab only — see seedForActiveTab.
   const initialTabIdRef = useRef<number | null>(null);
-  // Pending user-initiated navigation URL. When the user presses Enter in the
-  // URL field, the blur handler runs immediately after but the runner hasn't
-  // yet broadcast the updated tabs array — without this, the blur handler
-  // overwrites the URL box with the stale active.url (about:blank) and the
-  // user sees a ~1s flash of about:blank before the next tabs repaint.
-  // Cleared by the msg.type==='tabs' handler once the active tab URL no longer
-  // matches the placeholder list (i.e. the runner confirmed the navigation).
+  // Enter's blur runs before the runner broadcasts the new URL; without this the blur
+  // handler flashes about:blank. Cleared once the tabs handler confirms the navigation.
   const pendingNavRef = useRef<string>('');
   const menuRef = useRef<HTMLDivElement | null>(null);
   const menuCleanupRef = useRef<(() => void) | null>(null);
   const wcContainerRef = useRef<HTMLElement | null>(null);
   const wcViewOnlyRef = useRef(false);
   const hoverURLRef = useRef(''); // last link under the pointer (from cursor broadcast)
-  // Computed cursor shape under the remote pointer, from the streamer's cursor
-  // broadcast. Used to tell a text drag ("text" = I-beam) from every other
-  // left drag, so only the former takes the DOM select_range path.
+  // Remote cursor shape; only "text" drags take the DOM select_range path.
   const remoteCursorRef = useRef('default');
-  // Drag-selection state. `text` latches whether the drag is over selectable
-  // text; the DOM-API select_range path replaces CDP mouse replay only for
-  // such drags (Input.dispatchMouseEvent with buttons doesn't produce selection
-  // in Electron offscreen mode). All other left drags stream raw mousemove.
+  // Text drags use DOM select_range (CDP button-pinned moves don't select in
+  // Electron offscreen mode); every other left drag streams raw mousemove.
   const dragStartRef = useRef<{ x: number; y: number; text: boolean } | null>(null);
   const lastSelectRangeRef = useRef(0);
   // ── Audio: Opus packets (marker 0x03) → AudioDecoder → AudioContext ──
   const audioCtxRef = useRef<AudioContext | null>(null);
   const audioDecoderRef = useRef<WCAudioDecoder | null>(null);
   const audioChunkCtorRef = useRef<WCAudioChunkCtor | null>(null);
-  // decoder reset guard: 3+ consecutive decode errors within 200ms tear the
-  // decoder down and build a fresh one — this recovers from corrupted Opus
-  // streams after reconnects without losing future frames.
+  // 3+ decode errors in 200ms tear the Opus decoder down and rebuild it.
   const audioErrRef = useRef<{ count: number; at: number }>({ count: 0, at: 0 });
   const audioNextRef = useRef(0);
   const audioTsUsRef = useRef(0);
@@ -612,10 +499,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
   const inputLastMsgAtRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const mediaSourceRef = useRef<MediaSource | null>(null);
-  // The blob URL attached to the video element. Every stream_reset (ABR step,
-  // resize, forced keyframe) builds a new MediaSource; without revoking the
-  // previous URL the old MediaSource and its appended fMP4 stay alive for the
-  // life of the document, so memory grew with every quality change.
+  // Every stream_reset builds a new MediaSource; revoke the old URL or memory grows per quality change.
   const mediaObjectUrlRef = useRef<string | null>(null);
   const sourceBufferRef = useRef<SourceBuffer | null>(null);
   const pendingSegmentsRef = useRef<Uint8Array<ArrayBuffer>[]>([]);
@@ -645,10 +529,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
   // performance.now() of the in-flight RTT ping, or null when none.
   const pingOutstandingRef = useRef<number | null>(null);
   const rttEmaRef = useRef<number | null>(null);
-  // Live encoder target (from server metrics) vs. session base (stream_init).
-  // Congestion is measured as arrival/server-egress rather than
-  // arrival/target: the encoder uses capped VBR, so an idle page legitimately
-  // produces far less than the target and must not be read as congestion.
+  // Congestion = arrival/egress, not arrival/target: capped VBR legitimately undershoots the target on idle pages.
   const targetKbpsRef = useRef(0);
   const sentKbpsRef = useRef(0);
   // Arrival metering closed on the server's metrics messages, so the sample and
@@ -678,11 +559,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     sessionId?: string;
   } | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
-  // Failed (re)connect cycles for the stream WS. Lives on a ref, not a local
-  // in doConnect: each reconnect spawns a fresh doConnect closure, so a local
-  // counter reset every cycle and the max-attempts cap never triggered — the
-  // client then hammered an unreachable/rejecting endpoint forever. Reset on
-  // a successful open and on an explicit connect().
+  // A ref, not a doConnect local: each reconnect spawns a fresh closure, so a local counter never reached the cap.
   const reconnectAttemptRef = useRef(0);
 
   const pasteToRemote = useCallback(async (text?: string) => {
@@ -717,10 +594,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     }
   }, []);
 
-  // Applies the persisted manual quality once the server has reported the
-  // session's base bitrate (stream_init). No-op in auto mode. A set_bitrate
-  // for the already-active rung is ignored server-side, so this can't loop
-  // when the restart it triggers sends a fresh stream_init.
+  // Applies the persisted rung once stream_init reports base bitrate; a duplicate set_bitrate is ignored server-side.
   const applyPersistedQuality = useCallback(() => {
     const q = loadPersistedQuality();
     if (q === 'auto') return;
@@ -821,9 +695,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     }
     wcChunkCtorRef.current = null;
     lastWcConfigRef.current = null;
-    // Recovery state must not leak across connections: a stale armed timer
-    // would fire request_keyframe on the new socket (harmless but noisy), and
-    // a stale counter could escalate a fresh connection prematurely.
+    // Recovery state must not leak across connections.
     recoveryStartedAtRef.current = null;
     recoveryRequestedRef.current = false;
     recoveryRequestsRef.current = 0;
@@ -898,9 +770,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     }
     setFirstFrame(false);
     setConnected(false);
-    // Clear module-level capture element refs (set during canvas/video
-    // creation) so subsequent reconnects don't try to re-layout removed
-    // elements, and the shared globals reset to a clean state.
+    // Clear module-level capture element refs so reconnects start clean.
     currentCaptureVideo = null;
     currentCaptureCanvas = null;
   }, [hideContextMenu]);
@@ -933,10 +803,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       iws.send(JSON.stringify(obj));
       return;
     }
-    // Unlike sendEvent there is no stream-WS fallback here: the stream
-    // channel hands unknown control types to the input dispatcher, which
-    // drops them. Buffer instead so a tab command issued while the channel
-    // is reconnecting is replayed on open rather than silently lost.
+    // No stream-WS fallback here: buffer so a tab command issued mid-reconnect is replayed, not lost.
     const q = inputBacklogRef.current;
     q.push({ ev: obj, at: Date.now() });
     while (q.length > INPUT_BACKLOG_CAP) q.shift();
@@ -1014,30 +881,17 @@ export function useIsolaStream(defaultTargetUrl?: string) {
   }, [hideContextMenu, pasteToRemote, sendCtrl]);
 
   const rebuildTabBar = useCallback((tabs: Array<{ id: number; url: string; title: string; active: boolean }>) => {
-    // The strip normally lives inside the capture container as browser chrome
-    // overlaid on the top of the stream. In fullscreen the viewer points
-    // tabBarHostRef at a slot in its toolbar row, so the strip is re-homed
-    // there and laid out inline instead (see below).
+    // Fullscreen re-homes the strip into the viewer's toolbar slot.
     const externalHost = tabBarHostRef.current;
     const host = externalHost ?? wcContainerRef.current;
     // Operator kill-switch from config.yaml (settings.isola_tabs) — the
     // strip is a UI feature, not part of the wire protocol.
     if (!host || wcViewOnlyRef.current || !getIsolaTabs()) return;
-    // A broadcast landing while the user is mid-typing in the URL field
-    // must not rebuild the bar: innerHTML='' destroys the focused input,
-    // focus falls to body, and the window-capture key handlers relay the
-    // remaining keystrokes into the remote page. Skip only broadcasts that
-    // don't change the tab set, though: a tab open/close/switch must repaint
-    // even while the field is focused, or clicking a chip's ✕ would close the
-    // remote tab while leaving its chip on screen (focus never leaves the
-    // field — the ✕ handler calls preventDefault).
+    // innerHTML='' would destroy a focused URL field and leak keystrokes remote-ward;
+    // skip only no-change broadcasts — a tab open/close/switch must repaint even mid-typing.
     const prevUrl = tabbarRef.current?.querySelector<HTMLInputElement>('input');
     const urlFocused = !!prevUrl && document.activeElement === prevUrl;
-    // A broadcast may only be discarded for a field that holds a real edit.
-    // The viewer autofocuses the box while the page is still blank (so the user
-    // can type immediately), and a warm claim navigates after that focus: every
-    // later tabs broadcast would otherwise be dropped and the strip would stay
-    // on about:blank with an unnamed tab.
+    // Only a real edit may block a repaint; an autofocused untouched field must follow warm-claim navigations.
     const urlEdited = urlFocused && !!prevUrl && prevUrl.value !== (prevUrl.dataset.shownUrl ?? '');
     // A host change (fullscreen toggled) must always repaint so the strip is
     // re-homed, even while the URL field is focused.
@@ -1046,25 +900,18 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     const structureChanged = prevTabs.length !== tabs.length
       || prevTabs.some((t, i) => t.id !== tabs[i].id || t.active !== tabs[i].active);
     if (shouldSkipTabBarRebuild({ urlFocused, urlEdited, structureChanged, hostChanged })) return;
-    // The field belongs to the ACTIVE tab. When that changes (a new tab, a tab
-    // switch) whatever is in the box describes the tab we just left, so it must
-    // not be carried over — otherwise opening a tab from the address bar leaves
-    // the previous URL sitting there instead of the new tab's blank address.
+    // The field describes the ACTIVE tab; on a switch its content must not carry over.
     const activeTabChanged = (prevTabs.find((t) => t.active)?.id ?? null)
       !== (tabs.find((t) => t.active)?.id ?? null);
     if (activeTabChanged) {
       // The pending navigation also belonged to the tab we left.
       pendingNavRef.current = '';
     }
-    // Carry an in-progress edit across the rebuild below (the input element is
-    // replaced, taking its value and caret with it). An untouched field carries
-    // nothing: it must show the ACTIVE tab's URL from this broadcast, which is
-    // exactly the value a warm claim's late navigation supplies.
+    // Carry an in-progress edit across the rebuild; an untouched field shows the active tab's URL.
     const keepEdit = urlEdited && shouldCarryUrlEdit({ urlFocused, activeTabChanged }) && prevUrl
       ? { value: prevUrl.value, start: prevUrl.selectionStart, end: prevUrl.selectionEnd }
       : null;
-    // The field had focus without an edit (the viewer autofocused it): keep the
-    // caret where the user left it even though the text now comes from the tab.
+    // Autofocused but untouched: keep the caret where the user left it.
     const keepCaret = urlFocused && !urlEdited && !activeTabChanged && prevUrl
       ? { start: prevUrl.selectionStart, end: prevUrl.selectionEnd }
       : null;
@@ -1083,21 +930,11 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       bar.style.userSelect = 'none';
       host.appendChild(bar);
       tabbarRef.current = bar;
-      // The bar overlays the canvas top — remote clicks on it should not
-      // fall through to the page. Both mousedown AND contextmenu must be
-      // stopped: without the contextmenu guard, a right-click on the URL
-      // field bubbles to the container's onContextMenu → focusViewer(),
-      // which blurs the input and drops the user's text selection (so Copy
-      // from the native menu no longer works) while popping the remote
-      // Copy/Paste overlay over the local browser chrome.
+      // Stop mousedown AND contextmenu, or a right-click blurs the input and pops the remote menu over local chrome.
       bar.addEventListener('mousedown', (e) => e.stopPropagation());
       bar.addEventListener('contextmenu', (e) => e.stopPropagation());
     }
-    // (Re)apply the layout for whichever host currently owns the strip. In
-    // the capture container it is an absolutely-positioned 36px overlay with
-    // its own chrome background; in the toolbar row it is a plain inline flex
-    // child (no own background, so the toolbar's shows through) that takes
-    // the free space between the session info and the action buttons.
+    // In-container: absolute 36px overlay. In the toolbar row: plain inline flex child.
     if (external) {
       bar.style.position = 'static';
       bar.style.top = '';
@@ -1122,20 +959,13 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       bar.style.background = pal.barBg;
     }
     bar.style.color = pal.barText;
-    // Re-home the strip if its host changed since the last rebuild (e.g. the
-    // viewer toggled fullscreen). appendChild moves the existing node.
+    // appendChild re-homes the existing node when the host changed.
     if (bar.parentElement !== host) host.appendChild(bar);
-    // A strip living inside the capture container overlays the top 36px, so
-    // the canvas/video inset around it. One hosted in the toolbar does not
-    // overlap the stream, which then uses the full viewport.
+    // In-container strip overlays the top 36px; toolbar-hosted does not.
     setIsolaTopOffset(external ? 0 : 36);
     bar.innerHTML = '';
 
-    // Fallback URL: use the seed (from session config, the URL the user typed on
-    // the landing page) for the tab the session STARTED with, while that tab
-    // still reports a meaningless placeholder (browser cold start, first tabs
-    // broadcast before the runner has navigated anywhere). A tab opened later is
-    // blank on purpose and must not inherit it.
+    // Seed URL only for the tab the session started with, while it still reports a placeholder.
     const activeRaw = tabs.find((t) => t.active);
     if (initialTabIdRef.current === null && tabs.length > 0) {
       initialTabIdRef.current = tabs.reduce((min, t) => (t.id < min ? t.id : min), tabs[0].id);
@@ -1223,11 +1053,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     };
     bar.appendChild(plus);
 
-    // Back sits immediately left of reload, both left of the address bar.
-    // Same chip as the plus button. mousedown (not click) so the browser's
-    // own drag/selection flow isn't disturbed — the URL field handles its
-    // own captures. tab_back walks the active tab's history; a tab with
-    // nowhere to go is a no-op on the runner.
+    // mousedown (not click) so the browser's drag/selection flow isn't disturbed.
     const back = document.createElement('div');
     back.setAttribute('title', 'Back');
     back.setAttribute('role', 'button');
@@ -1304,10 +1130,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       }
       url.blur();
     };
-    // programmatic focus (autofocus after page load) must not clear
-    // about:blank or select text — only explicit user focus (mousedown /
-    // Tab key) clears/selects so the remote page's current URL stays in
-    // view after the page already opened.
+    // Only explicit user focus clears/selects; autofocus leaves the current value alone.
     let userFocus = false;
     const markUserFocus = () => { userFocus = true; };
     url.addEventListener('mousedown', markUserFocus);
@@ -1322,9 +1145,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     });
     url.addEventListener('blur', () => {
       userFocus = false;
-      // If user just pressed Enter (pendingNav set), keep the URL they
-      // submitted visible instead of flashing back to the stale active.url
-      // (still about:blank until runner sends next tabs broadcast).
+      // Keep the submitted URL visible instead of flashing back to the stale active.url.
       if (pendingNavRef.current) {
         setAddressValue(url, pendingNavRef.current);
       } else {
@@ -1333,10 +1154,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     });
     bar.appendChild(url);
 
-    // Restore an edit that was in flight when this rebuild started: put the
-    // typed text and caret back into the fresh input and re-focus it, so a tab
-    // open/close/switch performed from the address bar neither loses what was
-    // typed nor drops focus to <body> (which would leak keystrokes remote-ward).
+    // Restore an in-flight edit into the fresh input so keystrokes never leak to <body>.
     if (keepEdit) {
       setAddressValue(url, keepEdit.value);
       url.focus();
@@ -1345,9 +1163,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         url.setSelectionRange(keepEdit.start ?? end, end);
       } catch { /* selection unsupported on this input type */ }
     } else if (urlFocused) {
-      // The field had focus when the strip was rebuilt (the active tab changed,
-      // or the untouched field just received the real page URL): keep it there
-      // (and out of the remote page) while it shows the NEW tab's address.
+      // Keep focus out of the remote page while the field shows the new tab's address.
       url.focus();
       if (keepCaret) {
         try {
@@ -1357,10 +1173,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       }
     }
 
-    // Autofocus ONCE — on the very first render of the viewer page, when
-    // the active tab is still empty/about:blank (i.e. the user hasn't
-    // navigated yet). After a page is loaded (real URL in the active tab)
-    // we never move focus to the box — the user can still click it.
+    // Autofocus once, only before the first navigation; never steal focus after a page loads.
     if (!urlAutofocusRef.current) {
       const ae = document.activeElement;
       const pageReady = active && active.url !== '' && active.url !== 'about:blank';
@@ -1376,24 +1189,17 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     }
   }, [sendCtrl]);
 
-  // Repaint the imperative tab strip when the theme toggles. The strip is
-  // built outside React's render tree, so it does not pick up Tailwind's
-  // dark: variant on its own — we replay the last tabs broadcast to restyle it.
+  // The strip lives outside React's render tree; replay the last broadcast to restyle it.
   useEffect(() => {
     themeRef.current = theme;
-    // Repaint the letterbox fill behind the capture so a theme toggle is
-    // reflected live (it matches the app background and must follow it).
+    // Letterbox fill must follow the app background through theme toggles.
     const letterbox = CAPTURE_LETTERBOX_BG[theme];
     if (videoRef.current) videoRef.current.style.backgroundColor = letterbox;
     if (canvasRef.current) canvasRef.current.style.backgroundColor = letterbox;
     if (lastTabsRef.current.length > 0) rebuildTabBar(lastTabsRef.current);
   }, [theme, rebuildTabBar]);
 
-  // Re-home the tab strip. The viewer passes its toolbar slot while
-  // fullscreen (so the session id, tabs, address bar and action buttons share
-  // one line) and null otherwise, which returns the strip to its usual
-  // in-container chrome position. Repaints immediately so the move is instant
-  // instead of waiting for the next tabs broadcast.
+  // Fullscreen passes its toolbar slot; null restores the in-container position.
   const setTabBarHost = useCallback((el: HTMLElement | null) => {
     if (tabBarHostRef.current === el) return;
     tabBarHostRef.current = el;
@@ -1409,10 +1215,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     _sessionId?: string,
   ) => {
     disconnect();
-    // Reset per-connection ABR state. The server starts a fresh per-viewer
-    // encoder at the session base on every connection, so the controller
-    // restarts at L0; a manual override persists and is re-applied from
-    // localStorage once stream_init reports base_bitrate.
+    // Fresh encoder per connection: restart at L0; a manual override re-applies on stream_init.
     pingOutstandingRef.current = null;
     rttEmaRef.current = null;
     targetKbpsRef.current = 0;
@@ -1432,16 +1235,8 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     if (container && getComputedStyle(container).position === 'static') {
       container.style.position = 'relative';
     }
-    // Eagerly reserve 36px of vertical space for the isola browser chrome
-    // (tab strip, URL field, back and reload buttons) on HOST sessions (viewOnly =
-    // share viewer has no in-container tab strip so it uses full viewport).
-    // Without this, the FIRST decoded frame renders at top=0 and the tab
-    // strip overlays on top of the capture's top 36px until the first tabs
-    // WS broadcast arrives — which is exactly what user reports as "tabs
-    // are hovering the website". We set this BEFORE any canvas/video
-    // element is created so applyInsets() at creation time already uses
-    // top=36 (no visible layout flash). Collapses back to 0 on disconnect,
-    // and stays 0 when the strip is hosted in the toolbar (fullscreen).
+    // Eager 36px for host sessions (viewOnly has no strip) so the first frame
+    // never renders under the tab strip. 0 on disconnect or toolbar-hosted.
     if (!viewOnly && getIsolaTabs() && !tabBarHostRef.current) {
       isolaTopOffset = 36;
     } else {
@@ -1449,10 +1244,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     }
     isolaInsets = { right: 0, bottom: 0 };
     setError(null);
-    // The first connection is not a reconnect: showing "Reconnecting" while a
-    // fresh session is still being established made the launch look like it
-    // had already failed once. Only retries after a dropped/failed attempt
-    // (reconnectAttemptRef > 0) count as reconnecting.
+    // Only retries after a failed attempt count as reconnecting.
     setReconnecting(reconnectAttemptRef.current > 0);
     connectStartedAtRef.current = performance.now();
     firstFrameRecordedRef.current = false;
@@ -1463,10 +1255,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     lastBitrateWindowRef.current = { at: performance.now(), bytes: 0 };
     arrivalWindowRef.current = createArrivalWindow();
 
-    // Stream WS: capability negotiation rides the handshake — a
-    // WebCodecs-capable client asks for raw Annex-B via mode=webcodecs
-    // (the server's fMP4/MSE path serves everyone else). First-message
-    // negotiation raced slow links and poisoned legacy WS connections.
+    // Capability negotiation rides the handshake (?mode=webcodecs); first-message negotiation raced slow links.
     const wsUrl = new URL(streamWsUrl);
     wsUrl.searchParams.set('channel', 'isola');
     const wcCapable = !!(wcHost.VideoDecoder && wcHost.EncodedAudioChunk && wcHost.EncodedVideoChunk);
@@ -1507,9 +1296,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         if (msg.type === 'selection' && typeof msg.text === 'string' && msg.text) {
           navigator.clipboard.writeText(msg.text).catch(() => {});
         } else if (msg.type === 'renderer_stall') {
-          // The sandbox had to replace a wedged page renderer (or recovered
-          // from one). Surface it: this turns an unexplained frozen frame into
-          // an explained, self-healing one.
+          // A wedged renderer was replaced; surface it so the frozen frame is explained and self-healing.
           const stalled = msg.stalled === true;
           setMetrics((m) => ({
             ...m,
@@ -1518,8 +1305,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
             rendererRecoveries: typeof msg.recoveries === 'number' ? msg.recoveries : m.rendererRecoveries,
           }));
         } else if (msg.type === 'clipboard_sync' && typeof msg.text === 'string' && msg.text) {
-          // Auto-sync: the sandbox clipboard changed (Ctrl+C in the remote
-          // browser) — mirror it onto the host clipboard.
+          // Sandbox clipboard changed — mirror it onto the host clipboard.
           setRemoteClipboard(msg.text);
           navigator.clipboard.writeText(msg.text).catch(() => {});
         } else if (msg.type === 'tabs' && Array.isArray(msg.tabs)) {
@@ -1531,22 +1317,17 @@ export function useIsolaStream(defaultTargetUrl?: string) {
           }
           rebuildTabBar(arr);
         } else if (msg.type === 'net' && msg.e && typeof msg.e === 'object') {
-          // Network monitor entry (metadata only). Dispatch as a DOM event
-          // so the panel can live in React without the hook owning it.
+          // DOM-event dispatch keeps the panel React-owned.
           window.dispatchEvent(new CustomEvent('isola-net', { detail: msg.e }));
         } else if (msg.type === 'headers' && msg.e && typeof msg.e === 'object') {
-          // Document headers + posture/TLS, computed by the streamer. Same
-          // dispatch pattern as net/console so the panel stays React-owned.
+          // Document headers + posture/TLS; same dispatch pattern as net/console.
           window.dispatchEvent(new CustomEvent('isola-headers', { detail: msg.e }));
         } else if (msg.type === 'console' && typeof msg.l === 'string' && typeof msg.t === 'string') {
           window.dispatchEvent(new CustomEvent('isola-console', { detail: { i: typeof msg.i === 'number' ? msg.i : undefined, level: msg.l, text: msg.t, tb: msg.tb, ts: typeof msg.ts === 'number' ? msg.ts : undefined } }));
         } else if (msg.type === 'cookie' && typeof msg.n === 'string') {
           window.dispatchEvent(new CustomEvent('isola-cookie', { detail: msg }));
         } else if (msg.type === 'cursor' && typeof msg.c === 'string') {
-          // Cursor-shape feedback: the offscreen capture has no cursor, so
-          // the streamer reports the page's computed cursor under the
-          // pointer and we shape the native CSS cursor accordingly. Keep the
-          // shape too — the mouse handlers use it to tell a text drag apart.
+          // Offscreen capture has no cursor: shape the CSS cursor from the broadcast; keep the shape for text-drag routing.
           remoteCursorRef.current = msg.c;
           const canvas = canvasRef.current;
           if (canvas) canvas.style.cursor = msg.c;
@@ -1555,20 +1336,14 @@ export function useIsolaStream(defaultTargetUrl?: string) {
           // Replay of everything captured before this viewer attached.
           window.dispatchEvent(new CustomEvent('isola-net-init', { detail: msg.entries }));
         } else if (msg.type === 'net_clear') {
-          // Reserved: the streamer does not currently wipe buffers on tab
-          // change — entries carry a per-tab tag (tb) so the panel can
-          // filter them instead.
+          // Reserved: entries carry a per-tab tag (tb) so the panel filters instead.
           window.dispatchEvent(new CustomEvent('isola-net-clear'));
         }
       };
       inputWs.onerror = () => {
         console.warn('[isola] input WS down, inline');
       };
-      // Reconnect. The relay closes this channel when the container has been
-      // silent for 90s, and a network blip closes it too. Without a retry the
-      // ref is left holding a closed socket for the rest of the session, and
-      // because sendCtrl has no stream-WS fallback every later tab command
-      // (new tab, tab switch, "open link in new tab") becomes a silent no-op.
+      // Without a retry every later tab command silently no-ops on the closed socket.
       inputWs.onclose = () => {
         if (inputWsRef.current === inputWs) inputWsRef.current = null;
         if (inputReconnectTimer || inputAttempt >= INPUT_RECONNECT_ATTEMPTS) return;
@@ -1586,16 +1361,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     video.autoplay = true;
     video.muted = true;
     video.playsInline = true;
-    // Tab-bar top-offset (36px when enabled) is already applied here — no
-    // width/height 100% because absolute inset layout sizes the capture
-    // perfectly without clipping the bottom or hiding behind the tab strip
-    // when the network panel toggles.
+    // Inset layout already sizes the capture; no width/height 100%.
     applyInsets(video);
-    // contain, not cover: the remote viewport's aspect ratio (the requested
-    // launch resolution, e.g. 3456x2234) rarely matches the viewer's window,
-    // and cover cropped the overflow — which hid the top of every page right
-    // under the address/tab bar. contain letterboxes instead, so the whole
-    // remote page is always visible and clickable.
+    // contain, not cover — cover cropped the top of every page under the tab strip.
     video.style.objectFit = 'contain';
     video.style.backgroundColor = CAPTURE_LETTERBOX_BG[themeRef.current];
     video.style.cursor = 'none';
@@ -1656,9 +1424,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       if (recoveryRequestedRef.current) return; // one request per attempt
       recoveryRequestedRef.current = true;
       recoveryRequestsRef.current++;
-      // If repeated keyframe requests still yield no IDR, the streamer's
-      // encoder restarts are failing — a fresh connection is the only way
-      // out, and the onclose handler already owns that path.
+      // Repeated requests without an IDR: restarts failing server-side; reconnect.
       if (recoveryRequestsRef.current >= MAX_KEYFRAME_REQUESTS) {
         console.error('[isola] no IDR, reconnect');
         recoveryRequestsRef.current = 0;
@@ -1672,17 +1438,8 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       sendControl({ type: 'request_keyframe' });
     }
 
-    // beginRecovery arms the keyframe-recovery watchdog. It re-arms itself on
-    // every tick while no IDR has landed: a lost request_keyframe or a failed
-    // encoder restart must retry, not wedge the stream forever (a closed
-    // decoder plus a spent one-shot request used to freeze the picture
-    // permanently). recoveryStartedAtRef records when the streak began for
-    // the lastRecoveryMs diagnostic; it clears when an IDR arrives.
-    //
-    // reschedule starts the wait over. stream_reset must use it: the timer
-    // armed when the request was sent has already burned part of its window
-    // on the encoder that was just torn down, and firing it immediately
-    // kills the replacement before that one can emit an IDR.
+    // beginRecovery arms the keyframe watchdog and re-arms until an IDR lands.
+    // reschedule=true (stream_reset): the old timer's window was burned on the torn-down encoder.
     function beginRecovery(reschedule = false) {
       if (recoveryStartedAtRef.current === null) {
         recoveryStartedAtRef.current = performance.now();
@@ -1702,21 +1459,12 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       }, KEYFRAME_REQUEST_TIMEOUT_MS);
     }
 
-    // notePacket is every binary packet's entry to the frame counters. A
-    // sequence gap can only be the streamer shedding packets for this viewer
-    // (TCP), and the decoder cannot resync without an IDR, so a burst of
-    // >= LOSS_BURST_PACKETS missing packets routes into the same recovery path
-    // the decode-error and watchdog cases use: beginRecovery arms the shared
-    // watchdog, requestKeyframeNow spends the shared MAX_KEYFRAME_REQUESTS
-    // budget and reconnects once it is exhausted. The counters fire the notice
-    // once per burst, so a long gap cannot chase the budget on every packet.
+    // notePacket: a TCP gap means the streamer shed packets; a burst of
+    // LOSS_BURST_PACKETS routes into the shared recovery path, once per burst.
     function notePacket(seq: number, isKeyframe: boolean) {
       const loss = noteStreamedPacket(frameCountersRef.current, seq, isKeyframe);
       if (!loss.requestKeyframe) return;
-      // A gap means the reference chain is broken right now. The flag is the
-      // watchdog's "an IDR landed since recovery began" signal, so a stale true
-      // would make the watchdog skip its retry and never escalate to a
-      // reconnect. Clear it here, on both the MSE and WebCodecs paths.
+      // A gap breaks the reference chain; a stale true would stop the watchdog from escalating.
       keyframeSeenRef.current = false;
       beginRecovery();
       requestKeyframeNow();
@@ -1749,11 +1497,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       setMetrics((m) => ({ ...m, decodeErrorCount: decodeErrorCountRef.current }));
     }
 
-    // Bounded decode admission for the Annex-B path. Without it every access
-    // unit went into VideoDecoder.decode() and a burst (or a throttled tab)
-    // left the past queued in front of the live picture; the sink measures
-    // that queue and skips to the next IDR once it exceeds
-    // MAX_DECODE_BACKLOG_MS. Its stats are published by the 1 Hz tick.
+    // Bounded decode admission: the sink drops backlog past MAX_DECODE_BACKLOG_MS and skips to the next IDR.
     const auSink = createWcAccessUnitSink({
       getDecoder: () => decoderRef.current,
       getChunkCtor: () => wcChunkCtorRef.current,
@@ -1762,9 +1506,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       isKeyframeSeen: () => keyframeSeenRef.current,
       setKeyframeSeen: (v: boolean) => { keyframeSeenRef.current = v; },
       onSkipAhead: () => {
-        // Abandon what the decoder still has queued (reset leaves it
-        // unconfigured, so it must be reconfigured in the same breath) and ask
-        // for a fresh IDR so the wait is an encoder restart, not a whole GOP.
+        // Abandon queued frames and ask for a fresh IDR — an encoder restart, not a whole GOP.
         resetWcDecoder(decoderRef.current, lastWcConfigRef.current);
         beginRecovery();
         requestKeyframeNow();
@@ -1794,12 +1536,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
 
     metricsIntervalRef.current = setInterval(() => {
       const now = performance.now();
-      // ── Input-WS liveness: the streamer keepalives the input channel every
-      // 20s, and the relay kills silent channels after 90s. A half-open
-      // socket never fires onclose, so without this check every tab command
-      // (switch/new/close, URL bar) silently no-ops for the rest of the
-      // session — the picture freezes on the old tab and looks like a
-      // rendering bug. Replace the zombie and let the reconnect cycle run.
+      // Half-open input sockets never fire onclose; replace the zombie so tab commands work.
       const liveInput = inputWsRef.current;
       if (
         liveInput && liveInput.readyState === WebSocket.OPEN &&
@@ -1811,9 +1548,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         inputAttempt = 0; // the attempts cap must not block the replacement
         liveInput.close();
       }
-      // ── RTT probe every 2s, on the video channel itself (that's the one
-      // that degrades). App-level JSON ping — the JS WebSocket API can't
-      // send protocol-level ping frames. One outstanding probe at a time.
+      // RTT probe every 2s on the video channel; app-level JSON ping, one outstanding.
       metricsTickRef.current++;
       const wsNow = wsRef.current;
       if (
@@ -1846,9 +1581,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         const fps = wcFramesRef.current;
         wcFramesRef.current = 0;
         const canvas = canvasRef.current;
-        // Decode-queue state as of this tick: the presentation delay the
-        // Annex-B path is carrying and how much the backlog policy threw away
-        // to keep it bounded (see MAX_DECODE_BACKLOG_MS).
+        // Annex-B decode-queue state as of this tick.
         const wcStats = auSink.stats();
         setMetrics((m) => ({
           ...m,
@@ -1863,21 +1596,11 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       const lastSegmentAgeMs = lastSegmentAtRef.current > 0
         ? Math.round(now - lastSegmentAtRef.current)
         : -1;
-      // Packet loss, windowed to the packets this published tick covers (see
-      // samplePacketLoss). Sampled after the first-tick early return above so
-      // the window and the publication interval always match.
+      // Windowed to this tick's packets; sampled after the early return so window and interval match.
       const packetLoss = samplePacketLoss(frameCountersRef.current, lossWindowRef.current);
 
-      // ── Network quality estimation + ABR controller (1 Hz, ref state
-      // only so it never re-renders). While paused (just after a stream
-      // reset) the stream is re-booting — don't read that as degradation.
-      //
-      // Arrival must be the sample closed on the server's own metrics window,
-      // not this tick's free-running window: the server reported `sent_kbps`
-      // for a second that ended at its last metrics message, and comparing that
-      // against a differently-phased second fabricates loss on any bursty
-      // (change-driven) stream. The free-running `bitrateKbps` stays as the
-      // display rate and is the fallback until the first metrics message lands.
+      // ABR: 1 Hz, ref state. Paused right after a reset. Arrival must be the
+      // metrics-aligned sample or bursty streams fabricate loss; free-running bitrateKbps is the fallback.
       const abr = abrRef.current;
       const arrivalWin = arrivalWindowRef.current;
       const arrivalAligned = arrivalWin.fresh && now - arrivalWin.atMs <= ARRIVAL_WINDOW_MAX_AGE_MS;
@@ -1893,21 +1616,18 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       ratioEmaRef.current = abrResult.ratioEma;
       const netQuality = abrResult.netQuality;
       const netRatio = abrResult.netRatio;
-      // libx264 cannot re-target live, so a step is an encoder restart; the
-      // client recovers from the stream_reset + stream_init that follows.
+      // A step is an encoder restart; the client recovers via stream_reset + stream_init.
       if (abrResult.stepToKbps !== null) {
         sendControl({ type: 'set_bitrate', kbps: abrResult.stepToKbps });
       }
 
       setMetrics((m) => ({
         ...m,
-        // Frame-rate counters and decode-recovery state are published here, at
-        // 1 Hz, instead of on every frame/segment.
+        // Frame-rate counters published here at 1 Hz, not per frame.
         ...frameMetricsPatch(frameCountersRef.current),
         packetsLost: packetLoss.packetsLost,
         packetLossRatio: packetLoss.packetLossRatio,
-        // MSE playout state (ref) — skipped in WebCodecs mode, where the canvas
-        // block above publishes the decoded geometry instead.
+        // MSE playout state; WebCodecs mode publishes canvas geometry instead.
         ...(wcModeRef.current ? {} : playoutMetricsPatch(playoutRef.current)),
         decodeErrorCount: decodeErrorCountRef.current,
         lastRecoveryMs: lastRecoveryMsRef.current,
@@ -1928,11 +1648,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       const v = videoRef.current;
       if (!v || v.videoWidth <= 0 || firstFrameRecordedRef.current) return;
       firstFrameRecordedRef.current = true;
-      // Proof the relay and the streamer are both healthy. This — not `onopen`
-      // — is what earns a fresh backoff window: a socket that opens and closes
-      // without a frame (a dead sandbox behind a 101, a streamer that refuses
-      // the subscriber) must keep growing the retry delay until the cap ends
-      // the loop instead of retrying twice a second forever.
+      // A decoded frame — not onopen — earns a fresh backoff window.
       reconnectAttemptRef.current = 0;
       setFirstFrame(true);
       void v.play().catch(() => {});
@@ -1958,9 +1674,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
 
     ws.onmessage = (ev) => {
       if (typeof ev.data === 'string') {
-        // A truncated or rewritten text frame must not throw out of onmessage:
-        // that skips the state transition the frame carries and leaves the
-        // viewer with only an uncaught console error.
+        // A malformed text frame must not throw out of onmessage.
         let msg: Record<string, unknown>;
         try {
           msg = JSON.parse(ev.data) as Record<string, unknown>;
@@ -1970,19 +1684,12 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         if (typeof msg !== 'object' || msg === null) return;
         switch (msg.type) {
           case 'stream_init':
-            // A new encoder run restarts seq at 0; keeping the old baseline
-            // would report the whole previous run as lost.
+            // New run: seq restarts at 0.
             resetPacketLoss(frameCountersRef.current);
-            // The new run's reference chain does not contain anything the
-            // previous run emitted, so no IDR has landed *for this run* until
-            // one arrives.
+            // No IDR of this run has landed yet.
             keyframeSeenRef.current = false;
             if (wcModeRef.current && msg.mode === 'webcodecs') {
-              // An ABR bitrate step is stream_reset + stream_init with the same
-              // codec and geometry; the stream_reset path already dropped and
-              // reconfigured the decoder, so there is nothing to rebuild. Only
-              // the very first init (no canvas/decoder yet) tears anything
-              // down — applyWcStreamInit resizes and reconfigures in place.
+              // An ABR step reuses the same decoder; only the first init tears anything down.
               const firstEntry = !canvasRef.current || !decoderRef.current;
               const ok = firstEntry ? setupWebCodecs(msg) : applyWcStreamInit(
                 msg,
@@ -2016,11 +1723,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
               applyPersistedQuality();
               break;
             }
-            // The server answered with MSE rather than the raw Annex-B
-            // (webcodecs) mode this client asked for — a mismatched/downgraded
-            // handshake. Keep wcModeRef honest so getCoords and the metrics read
-            // the <video> element that actually exists instead of a canvas that
-            // never got created.
+            // Server answered MSE despite mode=webcodecs; keep wcModeRef honest.
             wcModeRef.current = false;
             if (typeof msg.codec === 'string' && msg.codec) {
               streamCodec = pickMseCodec(msg.codec);
@@ -2061,35 +1764,27 @@ export function useIsolaStream(defaultTargetUrl?: string) {
             // Replacement run: seq starts over.
             resetPacketLoss(frameCountersRef.current);
             {
-              // The restart itself isn't degradation: pause the estimator
-              // for a beat so the encoder spin-up gap isn't read as a stall.
+              // The restart itself isn't degradation; pause the estimator.
               const a = abrRef.current;
               a.pausedUntil = Date.now() + ABR_RESTART_PAUSE_MS;
               a.badSecs = 0;
               a.goodSecs = 0;
             }
             if (wcModeRef.current) {
-              // Encoder restarted (resize/ABR): abandon its queued frames but
-              // keep the decoder object. VideoDecoder.reset() leaves the state
-              // "unconfigured" — a bare reset made every later decode() a
-              // no-op, so an ABR step froze the picture for good — so
-              // resetWcDecoder re-arms the same decoder for the next run.
+              // reset() leaves the decoder unconfigured; resetWcDecoder re-arms it for the next run.
               resetWcDecoder(decoderRef.current, lastWcConfigRef.current);
               auSink.resetForNewRun();
               keyframeSeenRef.current = false;
               tsUsRef.current = 0;
               beginRecovery(true); // full window for the replacement encoder's IDR
               if (msg.reason !== 'bitrate_change' && msg.reason !== 'keyframe_request') {
-                // ABR restarts keep the same canvas — don't flash the
-                // loading overlay for a sub-second quality step. A forced
-                // keyframe is just as quick, so it must not flash either.
+                // Quick restarts keep the same canvas — no loading flash.
                 firstFrameRecordedRef.current = false;
                 setFirstFrame(false);
               }
               break;
             }
-            // Encoder was restarted (e.g. after resize). MSE needs a new
-            // init segment. Re-create MediaSource.
+            // MSE needs a new init segment after an encoder restart.
             if (mediaSourceRef.current && mediaSourceRef.current.readyState === 'open') {
               try { mediaSourceRef.current.endOfStream(); } catch { /* ignore */ }
             }
@@ -2098,8 +1793,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
             firstFrameRecordedRef.current = false;
     appendCountRef.current = 0;
             setFirstFrame(false);
-            // Re-create MediaSource so the next segment (which includes
-            // a new init segment) gets parsed correctly.
+            // New MediaSource so the new init segment parses correctly.
             if (videoRef.current) {
               const ms = new MediaSource();
               mediaSourceRef.current = ms;
@@ -2112,8 +1806,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
             }
             break;
           case 'pong': {
-            // RTT probe reply: EMA-smooth the sample (refs — no re-render
-            // here; the metrics interval publishes it).
+            // EMA-smooth into a ref; the metrics interval publishes it.
             const sentAt = pingOutstandingRef.current;
             if (sentAt !== null && typeof msg.ts === 'number') {
               const sample = performance.now() - msg.ts;
@@ -2158,9 +1851,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
               captureLastSentMs: typeof msg.capture_last_sent_ms === 'number' ? msg.capture_last_sent_ms : m.captureLastSentMs,
               captureSentFrames: typeof msg.capture_sent_frames === 'number' ? msg.capture_sent_frames : m.captureSentFrames,
               captureDedupFrames: typeof msg.capture_dedup_frames === 'number' ? msg.capture_dedup_frames : m.captureDedupFrames,
-              // Packet-shed counter from newer streamers. Absent on older
-              // servers, where the client's own seq-gap accounting is the only
-              // evidence of loss — keep the last value rather than zeroing it.
+              // Packet-shed counter from newer streamers; keep the last value on older servers.
               serverDropped: typeof msg.dropped === 'number' ? msg.dropped : m.serverDropped,
             }));
             if (typeof msg.bitrate_kbps === 'number') {
@@ -2168,9 +1859,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
             }
             if (typeof msg.sent_kbps === 'number') {
               sentKbpsRef.current = msg.sent_kbps;
-              // Every frame the server counted for the second it just reported
-              // has already been read: one ordered TCP stream. Close the arrival
-              // window here so both numbers describe the same second.
+              // One ordered TCP stream: closing here puts both numbers on the same second.
               advanceArrivalWindow(arrivalWindowRef.current, performance.now(), bytesReceivedRef.current);
             }
             break;
@@ -2189,11 +1878,8 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       lastSegmentAtRef.current = performance.now();
 
       if (bytes[0] === 0x02 && wcModeRef.current) {
-        // Access unit: H.264 deltas depend on their reference chain, so
-        // in-order delivery is mandatory — but the queue is bounded. The sink
-        // drops the backlog once it exceeds MAX_DECODE_BACKLOG_MS and resumes
-        // on the next IDR instead of replaying it. Timestamps are synthetic
-        // CFR ticks.
+        // In-order delivery, bounded backlog: the sink drops past
+        // MAX_DECODE_BACKLOG_MS and resumes on the next IDR. Synthetic CFR timestamps.
         if (decoderRef.current && decoderRef.current.state === 'closed') {
           // A closed decoder otherwise drops every packet; rebuild from the last config.
           console.warn('[isola-wc] decoder closed, rebuilding');
@@ -2216,8 +1902,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
               }
             }
           }
-          // Ref only — a per-frame setMetrics re-rendered the whole viewer at
-          // the decode rate. The 1 Hz metrics tick publishes these.
+          // Ref only; the 1 Hz tick publishes.
           notePacket(seq, isKeyframe);
         }
         return;
@@ -2225,15 +1910,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
 
       if (bytes[0] === 0x01) {
         segmentsThisSecondRef.current++;
-        // One view over the received buffer: appendBuffer takes any
-        // BufferSource, so slicing the 10-byte header off copied every
-        // fragment (25/s at 30fps) before the media stack copied it again.
+        // One view over the buffer avoids copying the header off every fragment.
         appendSegment(new Uint8Array(buf, 10));
-        // The MSE path only ever checked keyframeSeenRef, which only the
-        // WebCodecs sink set: every IDR we appended was invisible to the
-        // watchdog, so a single loss burst re-armed a 5s timer forever,
-        // restarting the encoder until MAX_KEYFRAME_REQUESTS forced a
-        // reconnect. An appended IDR is exactly the resync signal.
+        // MSE must see appended IDRs as the resync signal too.
         if (isKeyframe) {
           keyframeSeenRef.current = true;
           const recoveryStart = recoveryStartedAtRef.current;
@@ -2298,17 +1977,12 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       setReconnecting(true);
       reconnectTimerRef.current = setTimeout(async () => {
         reconnectTimerRef.current = null;
-        // If the session is gone (deleted, expired, token rejected by a
-        // backend state reset, revoked, or its container died), retrying only
-        // hammers the relay — stop and tell the user.
+        // A dead session: retrying only hammers the relay.
         const sid = connectParamsRef.current?.sessionId;
         if (sid) {
           try {
             const token = getSessionToken(sid);
-            // The probe runs with no other timer pending: a half-open request
-            // (proxy restart, laptop resume) would otherwise park the viewer
-            // on "Reconnecting…" until the browser gives up on it. On timeout
-            // fall through to the reconnect attempt.
+            // 4s abort: a half-open probe must not park the viewer on "Reconnecting…" forever.
             const ac = new AbortController();
             const abortTimer = setTimeout(() => ac.abort(), 4000);
             const res = await fetch(`/api/sessions/${sid}`, {
@@ -2321,8 +1995,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
               setError('Session is no longer available');
               return;
             }
-            // A dead container keeps its row (and a 200) for the rest of the
-            // TTL, so the status is the only signal that retrying is pointless.
+            // Dead containers keep a 200 until the TTL; only the status says retrying is pointless.
             const body = (await res.json().catch(() => null)) as { status?: unknown } | null;
             if (body && isSessionTerminated(body.status)) {
               setConnected(false);
@@ -2379,18 +2052,8 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       container.style.outline = 'none';
 
       const getCoords = (e: MouseEvent | WheelEvent) => {
-        // Always measure the actual capture element's bounding box (video for
-        // MSE, canvas for WebCodecs) — both are absolutely positioned, so the
-        // rect already includes the tab strip top offset, the network side/bottom
-        // panel offsets, etc. Using the container rect used to produce a 36px
-        // offset in video mode because the video no longer fills the full
-        // container height (it starts 36px lower to avoid the tab strip).
-        //
-        // Prefer the mode's element but fall back to whichever element exists:
-        // the server can answer a `mode=webcodecs` handshake with an MSE stream
-        // (and a decoder can fail to configure), and reading canvas.width off a
-        // null canvas collapsed every click to (0,0) — dead mouse input while
-        // keyboard kept working.
+        // Measure the actual capture element's rect (it carries every inset);
+        // fall back to whichever element exists — a null canvas collapsed clicks to (0,0).
         const el: HTMLCanvasElement | HTMLVideoElement | null = wcModeRef.current
           ? (canvasRef.current ?? videoRef.current)
           : (videoRef.current ?? canvasRef.current);
@@ -2410,10 +2073,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         );
       };
 
-      // macOS delivers the secondary click (Control-click, used by
-      // one-button mice and trackpads) as a LEFT press carrying ctrlKey
-      // instead of button=2. Without this, such a "right click" was
-      // forwarded as a plain left click and the remote page navigated.
+      // macOS Control-click is a LEFT press with ctrlKey; map it to 'right'.
       const isMacPlatform = typeof navigator !== 'undefined'
         && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
       const buttonName = (e: MouseEvent) => (
@@ -2435,9 +2095,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
           sws.send(payload);
           return;
         }
-        // Neither socket is sendable. Buffer briefly instead of dropping:
-        // a click whose press and release span a reconnect must land as a
-        // pair. mousemove is not worth replaying.
+        // Buffer a click spanning a reconnect; mousemove is not worth replaying.
         if (iws && iws.readyState === WebSocket.CONNECTING && event.type !== 'mousemove') {
           const q = inputBacklogRef.current;
           q.push({ ev: event, at: Date.now() });
@@ -2446,11 +2104,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       };
 
       const focusViewer = () => {
-        // Drop any host-side text selection (toolbar, tab strip, network
-        // panel) on the way in. The mousedown handlers call preventDefault, so
-        // the browser never collapses the old selection itself, and leaving it
-        // live means a host Ctrl+C copies UI chrome instead of the remote
-        // selection the user just made.
+        // Drop host-side selections on the way in, or host Ctrl+C copies chrome.
         const sel = window.getSelection();
         if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
           const node = sel.anchorNode;
@@ -2472,16 +2126,8 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         const { x, y } = getCoords(e);
         const st = dragStartRef.current;
         if (st && (e.buttons & 1) !== 0) {
-          // Left-button drag. The DOM select_range path exists only for TEXT
-          // drags (CDP button-pinned moves are unreliable for selection in
-          // Electron's offscreen compositor). Every other left drag — video
-          // seek/volume sliders, canvas apps, maps, drag handles, scrollbar
-          // thumbs — must reach the page as a real button-pinned mousemove:
-          // swallowing it left the page with mousedown and mouseup at
-          // different points and no motion between them, so a slider snapped
-          // back to wherever it was first pressed instead of tracking.
-          // The streamer broadcasts the computed cursor under the pointer, so
-          // "is this a text cursor" is known without guessing coordinates.
+          // Text drags use select_range; every other left drag must reach the
+          // page as a real button-pinned mousemove or sliders snap back.
           if (st.text || remoteCursorRef.current === 'text') {
             st.text = true;
             const now = Date.now();
@@ -2499,9 +2145,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         focusViewer();
         const { x, y } = getCoords(e);
         if (e.button === 0) {
-          // Arm the drag path. `text` is latched from the remote cursor shape
-          // and may also be upgraded mid-drag (see onMouseMove) once the
-          // cursor probe confirms the pointer sits on selectable text.
+          // text latches the remote cursor shape; upgradable mid-drag.
           dragStartRef.current = { x, y, text: remoteCursorRef.current === 'text' };
         }
         sendEvent({ type: 'mousedown', button: buttonName(e), x, y, buttons: e.buttons });
@@ -2524,9 +2168,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         sendEvent({ type: 'mouseup', button: buttonName(e), x, y, buttons: e.buttons });
       };
 
-      // Wheel chunking: CDP wheel deltas apply instantly (no native smooth
-      // scrolling offscreen), so spread each gesture over ~120ms in three
-      // slices — same total delta, visibly smoother motion.
+      // CDP wheel deltas apply instantly; spread each gesture over ~120ms in three slices.
       const wq = { dx: 0, dy: 0, x: 0, y: 0, timer: 0 as ReturnType<typeof setInterval> | 0 };
       const onWheel = (e: WheelEvent) => {
         e.preventDefault();
@@ -2555,10 +2197,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         e.preventDefault();
         e.stopPropagation();
         focusViewer();
-        // Electron's offscreen renderer can't show its native context menu
-        // (it never renders into captured frames), so right-click opens a
-        // client-side menu: Copy reads the remote selection over CDP,
-        // Paste pushes the host clipboard in.
+        // Offscreen renderer has no native context menu; the client-side menu reads/pushes over CDP.
         showContextMenu(e.clientX, e.clientY);
       };
 
@@ -2583,16 +2222,13 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       };
 
       const onKeyDown = (e: KeyboardEvent) => {
-        // The tab bar's URL field and other editable chrome take priority:
-        // capture-phase handlers would otherwise steal every keystroke
-        // before the field receives it.
+        // Editable chrome takes priority over the capture-phase key handlers.
         const t = e.target as HTMLElement | null;
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
           return;
         }
         if (e.repeat) return;
-        // Copy/select-all belong to the remote browser when the viewer has
-        // focus, and to the host UI otherwise (see copyChordStaysLocal).
+        // Copy/select-all follow focus (see copyChordStaysLocal).
         if (e.metaKey || e.ctrlKey) {
           const key = e.key.toLowerCase();
           if (key === 'c' || key === 'a') {
@@ -2631,9 +2267,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       container.addEventListener('mousedown', onMouseDown);
       container.addEventListener('wheel', onWheel, { passive: false });
       container.addEventListener('contextmenu', onContextMenu);
-      // mouseup on window only: it catches releases inside the container
-      // (bubbling) and outside it (dragging off-canvas). Registering both
-      // sent every mouseup to the remote twice.
+      // window-level only: also catches releases off-canvas; registering both sent mouseup twice.
       window.addEventListener('mouseup', onMouseUp);
       window.addEventListener('keydown', onKeyDown, true);
       window.addEventListener('keyup', onKeyUp, true);
@@ -2685,9 +2319,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     doConnect(streamWsUrl, inputWsUrl, container, viewOnly, bandwidthKbps, sessionId);
   }, [doConnect]);
 
-  // enableAudio wires the Opus path: AudioContext (must be created in a
-  // user-gesture handler — the mute button), AudioDecoder, and the buffer
-  // pump. audioMuted=false afterwards routes decoded frames to the speakers.
+  // enableAudio: AudioContext must be created in a user gesture; afterwards decoded frames reach the speakers.
   const enableAudioRef = useRef<() => Promise<void>>(null as any);
   const enableAudio: () => Promise<void> = useCallback(async () => {
     const DecoderCtor = wcHost.AudioDecoder;

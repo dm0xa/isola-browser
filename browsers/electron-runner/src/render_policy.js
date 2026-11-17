@@ -1,23 +1,9 @@
 'use strict';
 
-// Cost-control policy for the offscreen runner, kept free of Electron imports so
-// the rules are pinned by test/render_policy.test.js — the same reason
-// capture_fallback.js exists as its own module.
-//
-// Two rules live here:
-//
-//  1. frameRateFor — an offscreen BrowserWindow is composited at whatever
-//     webContents.setFrameRate() was last given, and backgroundThrottling is off
-//     for streamed windows. An inactive tab therefore keeps painting at the
-//     capture rate unless someone lowers it. Measured on about.gitlab.com: a
-//     background tab running a full-viewport WebGL hero kept a software-GL
-//     renderer busy for a viewer that could not see it.
-//
-//  2. shouldAutoRecover — replacing a wedged renderer reloads the page. When a
-//     page wedges every fresh renderer (heavy software-GL content does), that
-//     becomes a reload loop that costs the page's state and never converges.
-//     Automatic recovery therefore gets a budget; the manual recover action is
-//     never limited by it.
+// Cost-control policy, Electron-free so tests pin it. frameRateFor: inactive
+// or unwatched tabs composite at the background rate (a background WebGL tab
+// kept a software-GL renderer busy for nobody). shouldAutoRecover: automatic
+// renderer replacement gets a budget; manual recover never consults it.
 
 const DEFAULT_BACKGROUND_FPS = 1;
 const DEFAULT_RECOVER_MAX = 3;
@@ -25,15 +11,8 @@ const DEFAULT_RECOVER_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_SAME_URL_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_LOAD_CAPTURE_DELAYS_MS = [1200, 5000];
 
-// frameRateFor returns the compositor frame rate a tab should run at now.
-//
-// Only the active tab of an attached viewer is worth the capture rate. A tab
-// that is inactive, or a session nobody is watching (capture paused), is
-// composited at the background rate instead: the picture cannot reach anyone,
-// and on a software-GL page every frame is real CPU.
-//
-// backgroundFps <= 0 disables the throttle (escape hatch to the previous
-// behaviour: every tab at the capture rate).
+// frameRateFor: only the active tab of an attached viewer gets the capture
+// rate; backgroundFps <= 0 disables the throttle.
 function frameRateFor({ base, active, captureActive, backgroundFps = DEFAULT_BACKGROUND_FPS }) {
   const rate = Number.isFinite(base) && base > 0 ? base : 30;
   if (!(Number.isFinite(backgroundFps) && backgroundFps > 0)) return rate;
@@ -41,17 +20,9 @@ function frameRateFor({ base, active, captureActive, backgroundFps = DEFAULT_BAC
   return Math.max(1, Math.min(backgroundFps, rate));
 }
 
-// shouldAutoRecover decides whether one more automatic renderer replacement is
-// worth a reload. Manual recover does not consult this.
-//
-//   cooldown  — at least this long since ANY recovery (the runner's pacing rule)
-//   window    — at most maxPerWindow automatic recoveries in windowMs
-//   same-url  — at most one per URL in sameUrlWindowMs: a page that has already
-//               wedged a brand-new renderer is the page's work, and another
-//               reload is what turns it into a loop
-//
-// history entries are { url, at } in milliseconds; a missing/blank url only
-// counts against the window rule.
+// shouldAutoRecover: cooldown + per-window budget + one per URL — a page that
+// already wedged a fresh renderer would turn further reloads into a loop.
+// history entries are { url, at } ms; a blank url only counts against the window.
 function shouldAutoRecover({
   url,
   now,
@@ -83,14 +54,9 @@ function shouldAutoRecover({
   return { allow: true, reason: 'ok' };
 }
 
-// loadCaptureDelays returns the post-load capturePage() offsets to schedule.
-//
-// Each one is a full-surface ReadPixels — the expensive path on a software-GL
-// page, and the only place Chromium itself complains ("GPU stall due to
-// ReadPixels"). The series exists because offscreen paint misses GPU-layer
-// hero/background images that arrive after did-finish-load, so the LAST offset
-// is always kept; the earlier ones are only worth a readback while this
-// document has not put a full frame on the wire yet.
+// loadCaptureDelays: post-load capturePage() readbacks (the expensive path —
+// the only place Chromium logs a GPU stall). The last offset is always kept;
+// earlier ones only before the document's first full frame.
 function loadCaptureDelays({
   configured = DEFAULT_LOAD_CAPTURE_DELAYS_MS,
   fullFrameSent = false,
@@ -121,16 +87,9 @@ function parseDelayList(raw, fallback = DEFAULT_LOAD_CAPTURE_DELAYS_MS) {
   return parsed.length > 0 ? parsed : fallback.slice();
 }
 
-// captureCommandEffect decides what a {"cmd":"capture","on":bool} command from
-// the streamer must do.
-//
-// The streamer re-sends the current state (force) on every ctrl-socket
-// reconnect, so a command whose value equals the runner's own flag is a
-// deliberate "this is still the truth" signal, not a no-op. It has to re-assert
-// the compositor rate: a tab left at the background rate while capture is on
-// (stale rate after a late resize, a lost resume, a re-attached tab) otherwise
-// stays at ~1 fps for the rest of the session, with the streamer still
-// reporting "active" and the page looking frozen.
+// captureCommandEffect: the streamer re-sends state on every reconnect, so
+// equal values are a deliberate "still the truth" — and must re-assert the
+// compositor rate, or a stale background rate leaves the page at ~1 fps.
 function captureCommandEffect({ on, wasActive, hasActiveTab }) {
   const active = on === true;
   return {
@@ -140,12 +99,8 @@ function captureCommandEffect({ on, wasActive, hasActiveTab }) {
   };
 }
 
-// applyCaptureCommand executes that decision against injected session hooks.
-// The decision alone is not the fix: it only holds if the runner applies the
-// re-assert, so the wiring lives here too and is unit-tested with fakes.
-//
-// setActive must run before any other hook: startForwarding and setTabFrameRate
-// both read the flag (the latter logs it).
+// applyCaptureCommand: the wiring (not just the decision) is tested here;
+// setActive must run before hooks that read the flag.
 function applyCaptureCommand({
   on,
   wasActive,
@@ -192,10 +147,7 @@ function applyCaptureCommand({
   return false;
 }
 
-// reassertActiveRate is the watchdog tick: while a viewer is attached the
-// active tab's rate is re-applied every few seconds, so a rate lost by any
-// path that does not go through a capture transition repairs itself instead of
-// freezing the session at ~1 fps.
+// reassertActiveRate: repairs rates lost without a capture transition (~1 fps freeze).
 function reassertActiveRate({ captureActive, tab, setTabFrameRate }) {
   if (captureActive !== true || !tab) return false;
   setTabFrameRate(tab, true);

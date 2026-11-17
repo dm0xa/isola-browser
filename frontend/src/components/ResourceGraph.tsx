@@ -78,14 +78,8 @@ export interface GraphData {
 const ROOT_NODE_ID = 'root:request';
 
 /**
- * Whether the page is currently painted light.
- *
- * The graph is drawn on its own canvas, but everything around it — the panel,
- * the tab strip, the toolbar — is styled by Tailwind's `dark:` variants, which
- * key off the `dark` class on <html>. Reading that same signal (rather than the
- * React theme context) means the canvas can never disagree with its
- * surroundings, which is exactly the bug this guards against: a graph that
- * stayed dark inside an otherwise light panel.
+ * Whether <html> carries Tailwind's `dark` class — the same signal as the
+ * surrounding panel, so the canvas can never disagree with it.
  */
 function useDocumentLight(): boolean {
   const read = () => typeof document === 'undefined' || !document.documentElement.classList.contains('dark');
@@ -437,13 +431,8 @@ function compareResources(a: GraphNode, b: GraphNode): number {
 }
 
 /**
- * Summary-first view of the full graph.
- *
- * Every host is reduced to its card until the user opens it; an open host
- * reveals one row per resource class, and an open class reveals a bounded
- * preview of its resources plus an explicit “more” row. This keeps the
- * cross-axis of the layered layout proportional to what the user asked to
- * see, not to the request count of a polling site.
+ * Summary-first view: hosts as cards, open host → one row per class, open
+ * class → bounded preview + "more". Layout stays proportional to what the user opened.
  */
 export function applyExpansion(full: GraphData, expansion: GraphExpansion): GraphData {
   if (full.nodes.length === 0) return full;
@@ -726,12 +715,9 @@ function nodeSize(n: GraphNode): { w: number; h: number } {
 const KIND_RANK: Record<GraphNodeKind, number> = { root: 0, host: 1, group: 2, resource: 3, more: 4 };
 
 /**
- * Depth is the graph's vocabulary, one band per kind: entry, pages, hosts,
- * types, files. It is deliberately not edge distance — an expanded page's type
- * groups and the other hosts it loaded are both children of the page, and
- * letting them share a column made the groups read as children of whichever
- * host sat next to them. Fixed bands also keep the graph steady while the
- * capture grows: a new third-party host never pushes the type rows sideways.
+ * Depth: one band per kind (entry, pages, hosts, types, files), not edge distance —
+ * an expanded page's groups and hosts are both its children, and fixed bands keep
+ * the layout steady as the capture grows.
  */
 function computeDepths(data: GraphData): Map<string, number> {
   const hasGroups = data.nodes.some((n) => n.kind === 'group');
@@ -1195,11 +1181,8 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
 
   const groupByType = !onlyFailed && typeFilter.size !== 1;
 
-  // `fullGraph` keeps every captured type so the legend's counts stay stable
-  // while `graph` is what the current filter / failed spotlight draws. It is a
-  // separate memo because building it parses every URL in the capture: folding
-  // it into the filtered build below re-parsed the whole capture on every
-  // filter click, expansion toggle and resize for a graph that never changed.
+  // `fullGraph` (unfiltered, parsed once per capture) keeps the legend's counts
+ // stable; folding it into the filtered build re-parsed every URL on each click.
   const fullGraph = useMemo(() => buildGraph(entries, originHost), [entries, originHost]);
 
   const { graph, viewGraph } = useMemo(() => {
@@ -1421,13 +1404,9 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       const live = svgRef.current;
       if (!live) return;
-      // Clone the live SVG as it is, including a pinned node's fade. Clearing
-      // the selection first exported every node at full strength.
-      //
-      // The frame comes from the content group's real bounding box, not from
-      // layout.totalW/totalH: card widths are estimates, labels and selection
-      // rings can spill past them, and the graph is pannable, so the nominal
-      // totals could leave the right/bottom edge (or a panned view) cropped.
+      // Export the live SVG as-is (including the pinned fade); the frame comes
+      // from the content group's real bbox, not the nominal totals (labels and
+      // selection rings spill past card widths, and the graph is pannable).
       const content = live.querySelector<SVGGElement>('g');
       let bbox: { x: number; y: number; width: number; height: number } | null = null;
       try { bbox = content ? content.getBBox() : null; } catch { bbox = null; }
@@ -2193,11 +2172,8 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     );
   })();
 
-  // A minimap is the navigation aid a 2-D canvas deserves: it shows where the
-  // viewport sits in the wrapped graph and can be dragged directly. It only
-  // appears while the content overflows, so a fitted small graph stays clean.
-  // Nodes are painted into one <canvas>: a <rect> per node added ~1000
-  // elements to the DOM after "expand all", all re-created on every event.
+  // Minimap for the wrapped 2-D canvas, only while content overflows. Painted
+  // into one <canvas>: per-node <rect>s added ~1000 DOM elements after "expand all".
   const minimapGeom = useMemo(() => {
     if (tiny || layout.nodes.length === 0) return null;
     const mmW = 152;

@@ -10,27 +10,12 @@ import (
 // does not make the pump hold a syscall longer than a frame interval.
 const fmp4ReadChunk = 64 * 1024
 
-// maxFMP4Box bounds one fMP4 box the reader is willing to buffer or wait for.
-//
-// ffmpeg's fragment sizes are set by the GOP and the bitrate, not by this
-// reader: a measured 1080p 2 s fragment (12 Mbit/s, x264) is a 512-byte moof
-// plus a 3.1 MiB mdat, and the init pair is under 1 KiB. 32 MiB leaves ~10x
-// headroom for a bigger keyframe or a higher-bitrate stream while keeping a
-// corrupt or hostile box header (which may declare up to 4 GiB) from growing
-// the accumulation buffer without bound.
+// maxFMP4Box: a measured 1080p 2s fragment is 3.1 MiB; 32 MiB keeps ~10x headroom
+// while bounding a hostile box header (declares up to 4 GiB).
 const maxFMP4Box = 32 << 20
 
-// pipeBuffer accumulates bytes read from an encoder's stdout and reclaims the
-// consumed prefix in place.
-//
-// The previous shape — append into a growing slice, then re-slice forward past
-// every extracted segment — paid a full copy of the stream on the append and
-// abandoned one buffer after another as the slice walked forward. Keeping a
-// read offset and a write offset lets one allocation serve the whole run: the
-// pump reads straight into buf[end:], the parser consumes from buf[off:end],
-// and reserve() moves the pending tail back to the front instead of growing.
-//
-// Each encoder pump owns one; nothing here is safe for concurrent use.
+// pipeBuffer: read+write offsets so one allocation serves the whole run; the
+// pump reads into buf[end:], the parser consumes from buf[off:end]. Not concurrent-safe.
 type pipeBuffer struct {
 	buf []byte // always full length: the whole allocation is addressable
 	off int    // start of the unconsumed bytes
@@ -57,10 +42,7 @@ func (p *pipeBuffer) append(data []byte) {
 	p.end += copy(p.buf[p.end:], data)
 }
 
-// maxEmptyReads bounds consecutive zero-byte reads before the pump is told the
-// source made no progress. io.Reader permits (0, nil); an OS pipe never returns
-// it, but handing it back to the pump's read loop would spin that loop forever
-// without delivering a byte.
+// maxEmptyReads: io.Reader permits (0, nil); handing it back to the pump would spin forever.
 const maxEmptyReads = 100
 
 // readFrom reads the next chunk straight from src into the accumulation
@@ -103,13 +85,8 @@ func (p *pipeBuffer) reserve(n int) {
 	p.buf = nb
 }
 
-// fmp4Reader reassembles ffmpeg fragmented-MP4 output into MSE-ready segments:
-//   - init: ftyp + moov (one append)
-//   - media: moof + mdat (one append per fragment)
-//
-// Segments alias the reader's accumulation buffer and are valid until the next
-// Feed/readSegments call. The pump packs each one into a viewer packet — the
-// single copy left on this path — immediately, so nothing outlives its bytes.
+// fmp4Reader: init (ftyp+moov) and media (moof+mdat) segments, aliasing the
+// accumulation buffer — valid until the next read; the pump's packet is the single copy.
 type fmp4Reader struct {
 	q        pipeBuffer
 	initSent bool
@@ -128,10 +105,7 @@ func (r *fmp4Reader) Feed(data []byte) [][]byte {
 	return r.extract()
 }
 
-// readSegments reads the next chunk of ffmpeg stdout into the accumulation
-// buffer and returns the segments that completed. The read goes straight into
-// the buffer, so a pumped byte is copied once (into the caller's packet)
-// instead of twice.
+// readSegments: the read lands directly in the buffer; each byte is copied once.
 func (r *fmp4Reader) readSegments(src io.Reader) ([][]byte, error) {
 	n, err := r.q.readFrom(src)
 	if n == 0 {
@@ -232,12 +206,7 @@ func (r *fmp4Reader) extractOne() ([]byte, bool) {
 	return nil, false
 }
 
-// resync drops bytes from the front of the buffer until the next plausible box
-// start of the kind the reader is waiting for: ftyp before the init segment,
-// moof after it. It is only reached on malformed input — a declared size that
-// cannot be trusted means the parse position is lost, and honouring it would
-// either buffer gigabytes or wedge the stream forever. The last seven bytes are
-// kept because a box header can straddle two reads.
+// resync: malformed input only — keep the last seven bytes (a box header can straddle reads).
 func (r *fmp4Reader) resync() {
 	buf := r.q.pending()
 	want := "moof"

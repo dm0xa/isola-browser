@@ -43,10 +43,7 @@ type Orchestrator struct {
 	// dnsFallbackWarnOnce logs the encryption downgrade once per process.
 	dnsFallbackWarnOnce sync.Once
 
-	// containerMisses counts consecutive health probes that reported a
-	// session's container as not running, keyed by session ID. It exists so a
-	// single false negative (a container mid-restart, a runtime hiccup) does
-	// not finalize a live session.
+	// containerMisses: consecutive not-running probes per session; a single false negative must not finalize.
 	containerMisses sync.Map // sessionID -> *atomic.Int64
 
 	// reaping serializes FinalizeIfContainerGone per session: both relay
@@ -59,24 +56,12 @@ type Orchestrator struct {
 // as not running before the session is finalized.
 const containerMissLimit = 3
 
-// healthProbeTimeout bounds one `docker inspect` health probe. The probe runs on
-// the app context, which lives for the whole process, so without a deadline of
-// its own a wedged daemon (or a paused VM) leaves the probe blocked inside
-// CombinedOutput and the health-checker goroutine never checks another session.
-// On expiry the probe returns an inconclusive failure — empty output plus a
-// non-nil error — which the loop deliberately skips rather than counting.
+// healthProbeTimeout: without it a wedged daemon blocks the health goroutine forever;
+// expiry yields an inconclusive probe the loop skips.
 const healthProbeTimeout = 10 * time.Second
 
-// runtimeUnreachable reports whether the output of a failed `docker inspect`
-// describes a runtime the CLI could not reach, as opposed to the runtime
-// answering that the container is not there.
-//
-// The exit code cannot be used to tell the two apart — both are non-zero — and
-// neither can a single "not found" message: the docker CLI in front of the
-// podman compat API answers a missing hex ID with an image-name normalization
-// error rather than "no such object". So we look for the connectivity
-// signatures instead: if the daemon itself complained, the container is not
-// usable; if the CLI could not reach the daemon, we have learned nothing.
+// runtimeUnreachable: the daemon itself was unreachable — the probe learned nothing
+// (exit codes and "not found" strings cannot tell the two apart).
 func runtimeUnreachable(output string) bool {
 	s := strings.ToLower(output)
 	for _, sig := range []string{
@@ -95,22 +80,9 @@ func runtimeUnreachable(output string) bool {
 	return false
 }
 
-// containerAbsent reports whether the output of a failed `docker inspect`
-// positively says *this container is not there*, as opposed to a failure that
-// says nothing about it at all.
-//
-// This is the inverse of runtimeUnreachable and it exists because a miss is
-// destructive: containerMissLimit consecutive ones finalize the session. Only
-// an answer that names the container's absence may be allowed to count, so a
-// probe that failed for an unmodelled reason — empty output, a message we do
-// not recognise, a CLI killed by a timeout — is treated as inconclusive and
-// skipped instead of being read as "the container is gone".
-//
-// Both runtimes' real removal messages live here: podman's `Error: no such
-// object`, the daemon's `No such container`, and the podman-compat API's
-// image-name normalization error (it reads the bare hex ID as an image name).
-// Dropping that last one would make a genuinely removed container look
-// inconclusive and leak its session on that runtime.
+// containerAbsent: the probe positively named this container's absence. A miss is
+// destructive, so anything unrecognized is inconclusive. All three runtimes' removal
+// messages live here — dropping one leaks its session.
 func containerAbsent(output string) bool {
 	s := strings.ToLower(output)
 	for _, sig := range []string{
@@ -138,10 +110,7 @@ func (o *Orchestrator) noteContainerMiss(sessionID string) int {
 // only. Runs once; empty result means "unknown" and containers stay permissive.
 func (o *Orchestrator) proxyIPOnBrowserNet() string {
 	o.proxyIPOnce.Do(func() {
-		// Only a process that is itself a container can hold an address on
-		// browser-net. On a host install (LaunchAgent, systemd unit) the inspect
-		// below can never succeed — the hostname is the machine's, not a
-		// container ID — and it cost 152 ms on the first create.
+		// Only a container process can hold a browser-net address; the host-install inspect cost 152 ms and can't succeed.
 		if !runningInContainer() {
 			return
 		}
@@ -236,10 +205,7 @@ type CreateSessionParams struct {
 	// proxy. Empty leaves the image's system pool alone.
 	IntelCAPEM  string
 	DockerImage string // Docker image name (e.g. isola-browser:electron)
-	// warmLabel stamps the container with isola.warm=1 instead of a session
-	// label. Warm-pool containers are the pool's property: the orphan sweep
-	// filters on isola.session_id and must never see them. No code path may
-	// set this outside the warm pool.
+	// isola.warm=1 instead of a session label: the orphan sweep must never see warm containers.
 	warmLabel bool
 }
 
@@ -279,26 +245,11 @@ func validateBrowserFlags(flags string) error {
 	return nil
 }
 
-// stackLabel marks every container isola creates (sandbox, warm pool) so the
-// whole deployment answers one filter: `docker ps -a --filter label=isola.stack`.
-// It is metadata for operators only — no code path filters on it, and it must
-// never stand in for isola.session_id/isola.warm, which carry lifecycle meaning.
+// stackLabel: operator-visible marker (`docker ps --filter label=isola.stack`); never stands in for the lifecycle labels.
 const stackLabel = "isola.stack=1"
 
-// containerLabels returns the --label pairs for a container. Exactly one of
-// the two label sets is ever applied:
-//
-//   - session containers get isola.session_id, which the orphan sweep filters
-//     on and the health checker/reapers correlate with the DB row;
-//   - warm-pool containers get isola.warm instead and must NEVER carry
-//     isola.session_id — the sweep would read that placeholder id as an
-//     untracked session and terminate the container, including after it has
-//     been claimed and is serving a user.
-//
-// Both sets carry isola.stack=1; it is a shared marker, not part of the
-// one-of-two invariant.
-//
-// Kept as a pure function because getting it wrong is silent and destructive.
+// containerLabels: exactly one of isola.session_id / isola.warm — a warm container
+// carrying session_id is destroyed by the sweep. Pure function; getting it wrong is silent.
 func containerLabels(sessionID, userID string, warm bool) []string {
 	if warm {
 		return []string{
@@ -314,11 +265,7 @@ func containerLabels(sessionID, userID string, warm bool) []string {
 	}
 }
 
-// torSessionArgs returns the `-e` environment arguments that route a session
-// through Tor. Exit-country pinning is optional: an empty country means "any
-// exit". The country list is re-validated here even though the API already
-// normalized it — a caller that asked for a pinned exit must not silently egress
-// from a wider set, so an unusable value is an error, not a downgrade.
+// torSessionArgs: the exit country is re-validated here — an unusable pin is an error, not a downgrade.
 func torSessionArgs(enabled bool, exitCountry string) ([]string, error) {
 	if !enabled {
 		return nil, nil
@@ -337,11 +284,8 @@ func torSessionArgs(enabled bool, exitCountry string) ([]string, error) {
 	return args, nil
 }
 
-// dnsSessionArgs returns the DNS-related `docker run` arguments for a session.
-// In the encrypted modes (tls/https) it points the container's resolver at the
-// local forwarder (proxyIP); otherwise it passes the plaintext servers.
-// fellBack reports that an encrypted mode could not use the forwarder, so the
-// caller can warn once instead of on every session.
+// dnsSessionArgs: encrypted modes point the resolver at the local forwarder (proxyIP);
+// fellBack lets the caller warn once.
 func dnsSessionArgs(mode string, proxyEnabled bool, proxyIP string, servers []string) (args []string, fellBack bool) {
 	encrypted := mode == "tls" || mode == "https"
 	if encrypted && proxyEnabled && proxyIP != "" {
@@ -353,13 +297,7 @@ func dnsSessionArgs(mode string, proxyEnabled bool, proxyIP string, servers []st
 	return dnsArgs(servers), fellBack
 }
 
-// dnsArgs builds the `--dns` flag pairs for a session container. Blank entries
-// are dropped: `docker run --dns ""` is rejected outright, so a stray empty
-// YAML/env entry must not turn into a failed session. An empty result leaves the
-// container on the runtime's embedded resolver (Docker 127.0.0.11 / Podman
-// gateway), which is the documented opt-out.
-//
-// Kept as a pure function so the flag shape can be tested without Docker.
+// dnsArgs: blank entries dropped (docker rejects `--dns ""`); empty result = the runtime's embedded resolver. Pure function.
 func dnsArgs(servers []string) []string {
 	args := make([]string, 0, len(servers)*2)
 	for _, server := range servers {
@@ -413,10 +351,8 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 		cmdArgs = append(cmdArgs, "--add-host", params.PinnedHost+":"+params.PinnedIP)
 	}
 
-	// DNS. The encrypted modes route the container's resolver at this process's
-	// browser-net address, where the DoT/DoH forwarder listens; the plaintext
-	// hop is then confined to the browser-net bridge. Falls back to plaintext
-	// resolvers when the forwarder is not running.
+	// Encrypted DNS modes route the resolver at this process on browser-net;
+	// plaintext fallback when the forwarder is not running.
 	dnsCmdArgs, dnsFellBack := dnsSessionArgs(params.DNSMode, o.dnsProxyEnabled, o.proxyIPOnBrowserNet(), params.DNSServers)
 	if dnsFellBack {
 		o.dnsFallbackWarnOnce.Do(func() {
@@ -425,13 +361,7 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 	}
 	cmdArgs = append(cmdArgs, dnsCmdArgs...)
 
-	// ── Seccomp (VULN-5) ──
-	// Docker's default seccomp profile is always active unless overridden. The
-	// bundled /etc/isola/seccomp.json is stricter than the default, but it is
-	// not applied by default because the Chromium/ffmpeg runtime needs
-	// syscalls it does not yet allow (splice, mknod, chmod, unshare, ...).
-	// Operators who have validated the profile for their image can opt in via
-	// ISOLA_SECCOMP_PROFILE=/etc/isola/seccomp.json.
+	// Seccomp (VULN-5): the bundled stricter profile is opt-in — the Chromium/ffmpeg runtime needs syscalls it does not allow yet.
 	if p := strings.TrimSpace(os.Getenv("ISOLA_SECCOMP_PROFILE")); p != "" {
 		if _, err := os.Stat(p); err == nil {
 			cmdArgs = append(cmdArgs, "--security-opt", "seccomp="+p)
@@ -441,11 +371,7 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 		}
 	}
 
-	// ── MAC confinement ──
-	// The entrypoint refuses to start a session unless an enforcing LSM
-	// (AppArmor docker-default or SELinux) confines it. Session containers do
-	// not inherit this process's environment, so forward the operator's opt-out
-	// (ISOLA_REQUIRE_MAC=0) for it to take effect.
+	// MAC confinement: forward the operator's ISOLA_REQUIRE_MAC=0 opt-out to the entrypoint's gate.
 	if v := strings.TrimSpace(os.Getenv("ISOLA_REQUIRE_MAC")); v != "" {
 		cmdArgs = append(cmdArgs, "-e", "ISOLA_REQUIRE_MAC="+v)
 	}
@@ -506,13 +432,8 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 
 	containerID := strings.TrimSpace(string(out))
 
-	// Prefer published host ports (backend on host, macOS/Podman VM scenario
-	// where host has no route to the bridge subnet). Fall back to the
-	// container's browser-net IP for the docker-compose deployment where
-	// isola runs alongside browsers on the same bridge. A mapping in
-	// `docker inspect` alone is not proof of reachability: published ports
-	// bind the host's loopback, which a containerized backend cannot dial —
-	// so verify with a real connection before committing to that path.
+	// Published host ports first (backend on host); a mapping in inspect is not
+	// proof of reachability, so verify with a real connection before committing.
 	host := ""
 	port := 0
 	cdpPort := 0
@@ -676,11 +597,7 @@ func (o *Orchestrator) TerminateSession(ctx context.Context, containerID string)
 	return nil
 }
 
-// ResizeSessionDisplay asks isola-streamer to apply a capture resize.
-//
-// It talks to the streamer's HTTP port directly, like the audio toggle: the
-// sandbox image is minimal and ships no curl, so shelling out inside the
-// container is not an option.
+// ResizeSessionDisplay talks to the streamer's HTTP port: the sandbox image ships no curl.
 func (o *Orchestrator) ResizeSessionDisplay(ctx context.Context, containerHost string, containerPort, width, height int) error {
 	if width <= 0 || height <= 0 {
 		return fmt.Errorf("invalid resize target: %dx%d", width, height)
@@ -835,11 +752,8 @@ func (o *Orchestrator) getHostPort(ctx context.Context, containerID, portKey str
 	return p, nil
 }
 
-// containerEndpoints reads both published host ports and the browser-net IP in
-// a single `docker inspect`. Cold create used to spawn three inspects here
-// (5900, 9223, and the IP) and each one is a separate CLI process on the
-// create→first-frame path. The template prints one line with `|` separators so
-// an absent mapping leaves an empty field instead of shifting positions.
+// containerEndpoints reads published ports + browser-net IP in one inspect
+// (cold create used to spawn three); `|` separators keep absent fields aligned.
 func (o *Orchestrator) containerEndpoints(ctx context.Context, containerID string) (streamPort, cdpPort int, ip string, err error) {
 	const tpl = `{{with index .NetworkSettings.Ports "5900/tcp"}}{{if .}}{{(index . 0).HostPort}}{{end}}{{end}}|` +
 		`{{with index .NetworkSettings.Ports "9223/tcp"}}{{if .}}{{(index . 0).HostPort}}{{end}}{{end}}|` +
@@ -938,10 +852,7 @@ func (o *Orchestrator) StartHealthChecker(ctx context.Context, st *store.MemStor
 				running := inspectErr == nil && strings.TrimSpace(string(out)) == "true"
 
 				if !running && runtimeUnreachable(string(out)) {
-					// The CLI never got an answer out of the runtime: socket
-					// hiccup, paused VM, daemon restarting. That says nothing
-					// about this particular container, so skip the round and
-					// re-probe on the next tick instead of finalizing.
+					// Runtime unreachable: skip the round, re-probe next tick.
 					log.Warn().Err(inspectErr).Str("session_id", sess.ID.String()).
 						Str("container_id", sess.ContainerID).
 						Msg("health: runtime unreachable")
@@ -951,19 +862,8 @@ func (o *Orchestrator) StartHealthChecker(ctx context.Context, st *store.MemStor
 					o.containerMisses.Delete(sess.ID.String())
 					continue
 				}
-				// Everything below is a *failed* probe, and a miss is destructive:
-				// containerMissLimit consecutive ones finalize the session. So a miss
-				// may only be counted on a positive answer about this container — the
-				// runtime said it is stopped (the CLI succeeded and printed false), or
-				// it said the container is not there (containerAbsent). Any other
-				// failure has told us nothing about the container, and counting it
-				// finalizes sessions whose container the daemon still reports as Up.
-				//
-				// The trade is deliberate: an unrecognised failure leaves a genuinely
-				// dead session's row to the expiry and idle reapers, which is bounded
-				// by the session TTL, instead of destroying a live sandbox. A row that
-				// outlives its container for a few minutes costs a slot; a false
-				// finalize costs the user their work.
+				// A miss is destructive: count only a positive answer (stopped
+				// or containerAbsent); unrecognized failures go to the TTL reapers.
 				if inspectErr != nil && !containerAbsent(string(out)) {
 					log.Warn().Err(inspectErr).Str("session_id", sess.ID.String()).
 						Str("container_id", sess.ContainerID).
@@ -1038,10 +938,7 @@ func (o *Orchestrator) ReconcileRestoredSessions(ctx context.Context, st *store.
 				continue
 			}
 		}
-		// Either the runtime answered and the container is not running, or the row
-		// never recorded a container — the process died during provisioning. Both
-		// leave nothing that can serve. A container that outlived its row is swept
-		// by CleanupOrphanContainers, because no session row names it.
+		// Not running or never provisioned: nothing can serve. Orphans go to CleanupOrphanContainers.
 		s := sess
 		log.Info().Str("session_id", s.ID.String()).Str("status", s.Status).
 			Str("container_id", s.ContainerID).
@@ -1068,10 +965,7 @@ func (o *Orchestrator) listLabeledSessionContainers(ctx context.Context) []label
 	return parseLabeledContainers(string(out))
 }
 
-// parseLabeledContainers parses the tab-separated output above. An absent
-// isola.warm label prints as an empty third field, so the line ends with a tab:
-// trimming the whole output first would drop that field on the last line and
-// silently hide one container from the sweep (a lone orphan forever).
+// parseLabeledContainers: an absent warm label prints a trailing tab — trim the whole output and the last field is lost.
 func parseLabeledContainers(out string) []labeledContainer {
 	var containers []labeledContainer
 	for _, line := range strings.Split(out, "\n") {
@@ -1083,10 +977,7 @@ func parseLabeledContainers(out string) []labeledContainer {
 		if len(parts) < 2 || parts[0] == "" {
 			continue
 		}
-		// Belt and braces: warm-pool containers are the pool's property. A
-		// claimed one is already covered by the active-container check below,
-		// but a labeling mistake must never make the sweep kill a container
-		// that may be serving a user.
+		// Belt and braces: never let a labeling mistake make the sweep kill a possibly-serving container.
 		if len(parts) == 3 && strings.TrimSpace(parts[2]) != "" {
 			continue
 		}
@@ -1117,14 +1008,8 @@ func (o *Orchestrator) listWarmContainers(ctx context.Context) []string {
 	return ids
 }
 
-// RemoveContainerByName force-removes a container by its deterministic name
-// and ignores the not-found case.
-//
-// Needed because a failed `docker run` can still have created the container:
-// if the CLI dies after the daemon accepted the request (signal, timeout,
-// constrained host), only the client sees an error while the container runs
-// on. The container carries the warm label, so the orphan sweep will not
-// collect it — it has to be removed by name.
+// RemoveContainerByName: a failed `docker run` may still have created the
+// container; the warm label hides it from the sweep, so remove it by name.
 func (o *Orchestrator) RemoveContainerByName(ctx context.Context, name string) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -1187,17 +1072,9 @@ func (o *Orchestrator) StartOrphanCleaner(ctx context.Context, st *store.MemStor
 	}
 }
 
-// isolaBitrateKbps scales encoder bitrate linearly with pixel area
-// (6 Mbps @ 720p). The viewer's ABR ladder steps down from this base.
-// shmBudgetMB sizes a session's /dev/shm tmpfs for the capture it will carry.
-//
-// One BGRA frame at the clamped capture size is the unit that matters (8.3 MB
-// at 1920x1080), and the offscreen compositor keeps several copy-output
-// bitmaps in flight while raster tiles, shared bitmaps and V8 need room of
-// their own — hence a frame count plus headroom rather than a round number.
-// The floor keeps today's proven value at 1080p, and the ceiling keeps the
-// budget inside the container's memory limit (default 2g — see
-// ISOLA_SESSION_MEMORY_MB).
+// isolaBitrateKbps: linear in pixel area, 6 Mbps @ 720p; ABR steps down from it.
+// shmBudgetMB: one BGRA frame × frames-in-flight + headroom, floored at the
+// proven 1080p value and capped by the container memory limit.
 const (
 	shmFramesInFlight = 8
 	shmHeadroomMB     = 256

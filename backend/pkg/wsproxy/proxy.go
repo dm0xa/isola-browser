@@ -26,14 +26,8 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     CheckOrigin,
 }
 
-// CheckOrigin validates the Origin header for WebSocket upgrade requests.
-//
-// Browsers always send an Origin header on WebSocket handshakes, so a missing
-// Origin is rejected (this blocks non-browser clients and stripped-header
-// cross-site hijacking). Browser requests must present an Origin matching the
-// request host. A localhost/127.0.0.1 origin is only accepted when the request
-// itself is served from localhost, which keeps local development working
-// without allowing a locally-served page to hijack a remote deployment.
+// CheckOrigin: browsers always send Origin; a missing one is rejected, host
+// origin must match, and localhost origins only for localhost-served requests.
 func CheckOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
@@ -93,10 +87,7 @@ type Proxy struct {
 	cache         *store.MemCache
 	st            *store.MemStore
 	orch          *orchestrator.Orchestrator
-	// activity holds the sessions that produced relay traffic since the last
-	// flush. Presence is what flushActivity needs; the timestamp is only the
-	// debounce clock. sync.Map + atomic keeps the per-message path lock-free —
-	// trackActivity runs 25–50 times a second per viewer.
+	// Presence is what the flusher needs; sync.Map keeps the per-message path lock-free (25-50/s per viewer).
 	activity sync.Map // sessionID → *atomic.Int64 (unix nanos)
 }
 
@@ -114,10 +105,7 @@ func New(cache *store.MemCache, st *store.MemStore, orch *orchestrator.Orchestra
 // relay). Must be called before serving traffic.
 func (p *Proxy) SetClipboardHook(hook ClipboardHook) { p.clipboardHook = hook }
 
-// SetAdminAuth installs the validator for admin-token WS access (shadowing).
-// The fn receives the raw admin_token query value and reports whether it is
-// a live admin access token. This binary never sets it, so admin tokens are
-// always rejected — shadowing is a privileged capability.
+// SetAdminAuth: this binary never sets it, so admin tokens are always rejected — shadowing is privileged.
 func (p *Proxy) SetAdminAuth(fn AdminTokenValidator) { p.adminAuth = fn }
 
 // AdminTokenValidator reports whether the supplied token belongs to a
@@ -153,10 +141,7 @@ func (p *Proxy) flushActivity() {
 	}
 }
 
-// drainActivity removes and returns every session with relay activity since the
-// last drain. Deleting an entry a relay goroutine is recording at the same
-// moment is harmless: this drain has already observed that session, so the
-// update it triggers is not lost, and the next message re-creates the entry.
+// drainActivity: deleting an entry being recorded now is harmless — this drain already saw the session.
 func (p *Proxy) drainActivity() []string {
 	var ids []string
 	p.activity.Range(func(key, _ any) bool {
@@ -167,10 +152,7 @@ func (p *Proxy) drainActivity() []string {
 	return ids
 }
 
-// activityDebounce is how often one session's activity timestamp is refreshed.
-// trackActivity is called once per relayed message (25–50/s per viewer), while
-// the flusher runs every 10s and only needs presence, so refreshing at most
-// once a second loses nothing and keeps the relay's hot path off any lock.
+// activityDebounce: the flusher needs presence only; 1 Hz keeps the hot path off any lock.
 var activityDebounce = time.Second
 
 // trackActivity records activity for a session. It is debounced: a call inside
@@ -199,12 +181,8 @@ func (p *Proxy) trackActivity(sessionID string) {
 	}
 }
 
-// HandleWebSocket handles incoming WebSocket connections on /ws/{sessionId}.
-// Query params:
-//
-//	host=1           — marks this as the host connection (can send input)
-//	channel=isola    — video relay (Isola transport; empty channel is treated as isola)
-//	channel=input    — JSON input relay to isola-streamer
+// HandleWebSocket: /ws/{sessionId}. host=1 marks the host connection; channel=isola (default)
+// relays video, channel=input relays JSON input.
 func (p *Proxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionId")
 	if sessionID == "" {
@@ -262,14 +240,8 @@ func (p *Proxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	log.Info().Str("session_id", sessionID).Str("container_addr", addr).Str("channel", channel).Msg("proxying connection")
 
-	// Dial the container before upgrading the client.
-	//
-	// Upgrading first turned a dead sandbox into a live-looking socket: the
-	// browser saw 101 and onopen, the viewer resets its reconnect backoff on
-	// open, so a dead container produced a handshake loop twice a second for the
-	// rest of the session TTL. Dialing first makes that an HTTP 502 the browser
-	// reports as a failed handshake — backoff engages — and it is the earliest
-	// point at which the relay can tell the sandbox is gone.
+	// Dial the container before upgrading: upgrading first gave a dead sandbox a
+	// live 101 and a 2 Hz reconnect loop; dialing first answers a prompt 502.
 	containerWS, err := p.dialContainer(addr, r, isInput)
 	if err != nil {
 		log.Error().Err(err).Str("session_id", sessionID).Str("container_addr", addr).Str("channel", channel).Msg("relay: dial failed")
@@ -308,10 +280,7 @@ func (p *Proxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	log.Debug().Str("session_id", sessionID).Str("channel", channel).Int64("bytes_in", bytesIn).Int64("bytes_out", bytesOut).Msg("relay: connection closed")
 }
 
-// dialContainer opens the relay's upstream socket to the sandbox.
-//
-// The container dial carries the client's query string for the video channel
-// because capability negotiation (mode=webcodecs) rides the handshake.
+// dialContainer forwards the client's query string — capability negotiation rides the handshake.
 func (p *Proxy) dialContainer(addr string, r *http.Request, isInput bool) (*websocket.Conn, error) {
 	target := "ws://" + addr + "/?" + r.URL.RawQuery
 	if isInput {
@@ -321,14 +290,7 @@ func (p *Proxy) dialContainer(addr string, r *http.Request, isInput bool) (*webs
 	return conn, err
 }
 
-// reapGoneContainer asks the orchestrator to finalize the session once the
-// runtime confirms its container is gone.
-//
-// Runs detached from the failing request so a client that hangs up mid-reap
-// cannot abort it, and off the response path so a dead sandbox answers with a
-// prompt 502 instead of waiting on `docker stop`. The orchestrator serializes
-// calls per session, so both relay channels failing together cost one
-// finalization.
+// reapGoneContainer: detached and off the response path; the orchestrator serializes per session.
 func (p *Proxy) reapGoneContainer(sessionID string) {
 	if p.orch == nil || p.st == nil || p.cache == nil {
 		return
@@ -348,14 +310,8 @@ func (p *Proxy) reapGoneContainer(sessionID string) {
 // variable so tests can exercise the ping cadence without waiting 30s.
 var keepalivePingInterval = 30 * time.Second
 
-// keepalivePing sends WebSocket pings every keepalivePingInterval to detect silently dropped connections.
-//
-// It also refreshes the session's activity clock. Payload-driven activity alone
-// is not enough: a viewer watching a static page receives no messages (the
-// encoder omits frames identical to the last one), so last_activity would stall
-// and the idle reaper would tear down a sandbox that still has a viewer attached.
-// A ping is proof the viewer is still there, and a ping write that fails stops
-// the refresh so the reaper can collect an abandoned session.
+// keepalivePing: a static page sends no frames, so pings alone keep last_activity
+// fresh — and a failing ping write lets the reaper collect an abandoned session.
 func keepalivePing(clientConn *websocket.Conn, wg *sync.WaitGroup, closeAll func(), done chan struct{}, trackActivity func(string), sessionID string) {
 	defer wg.Done()
 	defer closeAll()
@@ -390,12 +346,8 @@ func (p *Proxy) getContainerAddr(ctx context.Context, sessionID string) (string,
 	return addr, nil
 }
 
-// authorizeAccess returns (canView, canControl) for a WebSocket connection.
-//
-// Access is capability-based: a valid control token grants view+control, a
-// valid share token grants view-only. There is deliberately no anonymous
-// fallback — knowing a session ID must never be enough to view or control
-// someone else's browser.
+// authorizeAccess: capability-based — control token = view+control, share token =
+// view-only. No anonymous fallback: knowing a session id is never enough.
 func (p *Proxy) authorizeAccess(ctx context.Context, sessionID, sessionToken, shareToken, adminToken string) (bool, bool, error) {
 	// Admin shadow access: view-only, validated by the injected admin auth.
 	// Checked first so an admin never falls into anonymous denial.
@@ -434,12 +386,7 @@ func (p *Proxy) authorizeAccess(ctx context.Context, sessionID, sessionToken, sh
 	return false, false, nil
 }
 
-// AuthorizeWS validates a WebSocket capability from the request's query
-// parameters (session_token, share_token, or admin_token) for sessionID and
-// returns (canView, canControl).
-//
-// Exported so plugin sub-routes under /ws/{sessionId}/... can enforce the same
-// capability model as the main relay instead of trusting a bare session id.
+// AuthorizeWS validates a WS capability from query params; exported for plugin sub-routes.
 func (p *Proxy) AuthorizeWS(r *http.Request, sessionID string) (canView, canControl bool, err error) {
 	q := r.URL.Query()
 	return p.authorizeAccess(r.Context(), sessionID,
