@@ -6,6 +6,51 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- The backend no longer crashes when an idle warm-pool container dies: the
+  claim and reconcile paths used a test-only teardown hook.
+- A claimed warm container is shielded from the orphan sweep until its session
+  is active, so a sweep can no longer stop the sandbox a viewer is about to
+  stream from.
+- A Tor session with a pinned exit country gets its full 90 s stream budget
+  instead of being cancelled at 60 s.
+- `DELETE /api/sessions/{id}` finishes tearing the container down even when the
+  client hangs up mid-request.
+- The server stops accepting requests before draining the warm pool on
+  shutdown, and the startup reconcile is time-bounded, so neither leaves an
+  untracked container nor blocks the listener.
+- `GET /api/sessions/{id}/intel` answers `502 intel_failed` when the upstream
+  document exceeds 4 MiB instead of returning truncated JSON with `200`.
+- An MSE viewer recovers from a packet-loss burst instead of asking for a
+  keyframe every 5 s and eventually reconnecting.
+- A stalled viewer input socket no longer freezes network/console capture, and a
+  persistent frame-socket `accept` error no longer spins a core.
+- The viewer disconnects on every unmount and times out its reconnect probe, so
+  leaving a connecting session no longer leaks sockets and timers.
+- The viewer revokes each blob URL when it is replaced and ignores a malformed
+  text frame, so memory stays bounded across quality steps.
+
+### Changed
+
+- Sandbox start and teardown are faster: readiness is polled instead of two
+  fixed one-second sleeps, shutdown kills instead of awaiting grace, a cold
+  start discovers the container with one `docker inspect` instead of three, and
+  the streamer wait polls every 100 ms. Same host: `POST /api/sessions` →
+  `running` 1.59 s → 1.23 s, → first frame 2.84 s → 1.42 s.
+- A warm-pool claim now requires an exact resolution match, like theme and
+  frame rate. Reshaping an idle warm container is applied lazily by Chromium
+  and cost more than the cold start it was meant to save, so a smaller request
+  cold-starts at the size it asked for.
+- A host install no longer attempts the container-only `browser-net` address
+  lookup on its first session launch.
+- The streamer recycles frame buffers per connection instead of allocating a
+  surface per frame, and copies full-width damage as one contiguous run.
+- The viewer shell is memoised, network/console/cookie captures publish once
+  per 50 ms burst, URL analysis and graph layout are cached, and pan/zoom
+  commits once per frame — so a busy capture no longer re-renders the whole
+  panel per event.
+
 ## [1.6.1] - 2026-11-12
 
 ### Added
