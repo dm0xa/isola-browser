@@ -90,7 +90,7 @@ func intelRootCAs() *x509.CertPool {
 		pool = x509.NewCertPool()
 	}
 	if !pool.AppendCertsFromPEM([]byte(pem)) {
-		log.Printf("intel: INTEL_CA_PEM contains no usable certificate; using the system pool")
+		log.Printf("intel: INTEL_CA_PEM unusable, system pool")
 		return nil
 	}
 	return pool

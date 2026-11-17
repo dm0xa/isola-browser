@@ -118,7 +118,7 @@ func (m *Module) supervise(ctx context.Context, wg *sync.WaitGroup) {
 		m.running = false
 		m.mu.Unlock()
 		log.Warn().Str("module", m.man.Module).Err(waitErr).
-			Int("restarts", m.restarts).Msg("modulehost: module exited — restarting")
+			Int("restarts", m.restarts).Msg("modulehost: exited, restarting")
 
 		select {
 		case <-ctx.Done():
@@ -130,7 +130,7 @@ func (m *Module) supervise(ctx context.Context, wg *sync.WaitGroup) {
 		}
 
 		if err := m.launch(ctx); err != nil {
-			log.Error().Str("module", m.man.Module).Err(err).Msg("modulehost: relaunch failed")
+			log.Error().Str("module", m.man.Module).Err(err).Msg("modulehost: relaunch")
 			continue
 		}
 		backoff = time.Second
@@ -220,7 +220,7 @@ func (m *Module) statusSnapshot() Status {
 type logWriter struct{ module string }
 
 func (w logWriter) Write(p []byte) (int, error) {
-	log.Info().Str("module", w.module).Msg(string(trimNewline(p)))
+	log.Debug().Str("module", w.module).Msg(string(trimNewline(p)))
 	return len(p), nil
 }
 

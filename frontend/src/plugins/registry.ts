@@ -78,7 +78,7 @@ export function ensurePluginsLoaded(
           // Chunk self-registers via window.__isolaPlugins.registerPlugin.
           await import(/* @vite-ignore */ p.config!.chunk as string);
         } catch (err) {
-          console.warn(`[plugin] failed to load chunk for ${p.name}`, err);
+          console.warn(`[plugin] chunk ${p.name}`, err);
         }
       }),
   ).then(() => undefined);

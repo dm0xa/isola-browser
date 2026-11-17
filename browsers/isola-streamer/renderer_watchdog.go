@@ -109,14 +109,14 @@ func startRendererWatchdog() {
 				failStreak = 0
 				if time.Since(lastShapeLogAt) > time.Minute {
 					lastShapeLogAt = time.Now()
-					log.Printf("renderer: probe answered with a non-string result (%v) — fix the probe expression", err)
+					log.Printf("renderer: bad probe result: %v", err)
 				}
 				continue
 			}
 			if err == nil {
 				noteProbeSuccess()
 				if !stalledAt.IsZero() {
-					log.Printf("renderer: responsive again after %v", time.Since(stalledAt).Round(time.Second))
+					log.Printf("renderer: responsive after %v", time.Since(stalledAt).Round(time.Second))
 					stalledAt = time.Time{}
 				}
 				failStreak = 0
@@ -130,7 +130,7 @@ func startRendererWatchdog() {
 			}
 			if stalledAt.IsZero() {
 				stalledAt = time.Now()
-				log.Printf("renderer: %d probes unanswered in a row (%v) — treating the renderer as blocked", failStreak, err)
+				log.Printf("renderer: blocked (%d unanswered): %v", failStreak, err)
 			}
 			// While the renderer stays blocked, probe on the slower cadence:
 			// every probe is a Runtime.evaluate queued behind the stuck work.
@@ -150,8 +150,7 @@ func startRendererWatchdog() {
 			if recent >= rendererRecoverMaxInWindow {
 				if suppressedFor.IsZero() {
 					suppressedFor = time.Now()
-					log.Printf("renderer: %d recoveries in %v did not stop the stalls — leaving the page alone (manual recover still available)",
-						recent, rendererRecoverLoopWindow)
+					log.Printf("renderer: giving up")
 				}
 				continue
 			}
@@ -169,10 +168,10 @@ func startRendererWatchdog() {
 			// fresh renderer got reloaded about once a minute instead of being left
 			// alone after the first fresh renderer failed too.
 			if !writeCtrlCommand(map[string]any{"cmd": "tab_recover", "auto": true}) {
-				log.Printf("renderer: blocked, but the runner control socket is down — cannot request recovery")
+				log.Printf("renderer: blocked, ctrl socket down")
 				continue
 			}
-			log.Printf("renderer: asked the runner to recreate the tab window (attempt %d)", requests)
+			log.Printf("renderer: recover request %d", requests)
 			// Give the reloaded page time to settle before judging it again.
 			failStreak = 0
 			stalledAt = time.Time{}

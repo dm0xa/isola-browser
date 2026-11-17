@@ -160,11 +160,11 @@ func (c *CDPClient) Start() {
 	for {
 		if err := c.connect(); err != nil {
 			delay := c.connectRetryDelay()
-			log.Printf("cdp: connect failed: %v (retry in %s)", err, delay)
+			log.Printf("cdp: connect: %v (retry %s)", err, delay)
 			c.waitReconnectDelay(delay)
 			continue
 		}
-		log.Printf("cdp: connected to Chromium")
+		log.Printf("cdp: connected")
 		c.readPump()
 		c.mu.Lock()
 		c.connected = false
@@ -174,7 +174,7 @@ func (c *CDPClient) Start() {
 		}
 		c.mu.Unlock()
 		c.frames.close()
-		log.Printf("cdp: disconnected, reconnecting")
+		log.Printf("cdp: reconnecting")
 		c.waitReconnectDelay(250 * time.Millisecond)
 	}
 }
@@ -364,9 +364,9 @@ func (c *CDPClient) connect() error {
 		// The preferred (active-tab) target is not in /json/list. We are about
 		// to bind somewhere else, and input_target.go must notice — otherwise
 		// clicks and keystrokes go to a page the viewer cannot see.
-		log.Printf("cdp: preferred target %q not found, falling back to %q", preferred, targetURL)
+		log.Printf("cdp: preferred %q missing, fallback %q", preferred, targetURL)
 	}
-	log.Printf("cdp: attaching to target %s (url=%q preferred=%q)", wsURL, targetURL, preferred)
+	log.Printf("cdp: attach %s url=%q", wsURL, targetURL)
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {

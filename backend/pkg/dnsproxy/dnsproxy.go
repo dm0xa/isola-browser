@@ -499,9 +499,9 @@ func (s *Server) resolve(ctx context.Context, query []byte) []byte {
 			return resp
 		}
 		if err != nil {
-			log.Debug().Err(err).Str("upstream", u.String()).Msg("dnsproxy: upstream failed")
+			log.Debug().Err(err).Str("upstream", u.String()).Msg("dnsproxy: upstream")
 		} else {
-			log.Debug().Str("upstream", u.String()).Msg("dnsproxy: short upstream response")
+			log.Debug().Str("upstream", u.String()).Msg("dnsproxy: short response")
 		}
 		if ctx.Err() != nil {
 			break

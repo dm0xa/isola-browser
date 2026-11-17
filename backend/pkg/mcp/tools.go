@@ -614,7 +614,7 @@ func (s *Service) abandonSession(ctx context.Context, sessionID string) {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
 	if err := s.terminateSession(cleanupCtx, sessionID); err != nil {
-		log.Error().Err(err).Str("session_id", sessionID).Msg("mcp: abandoned session not terminated")
+		log.Error().Err(err).Str("session_id", sessionID).Msg("mcp: abandoned, not terminated")
 	}
 }
 

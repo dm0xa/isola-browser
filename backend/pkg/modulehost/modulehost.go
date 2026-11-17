@@ -88,30 +88,30 @@ func Start(ctx context.Context, opts Options) (*Host, error) {
 	for _, d := range found {
 		name := d.Manifest.Module
 		if !d.Enabled {
-			log.Info().Str("module", name).Msg("modulehost: disabled — skipping")
+			log.Info().Str("module", name).Msg("modulehost: disabled")
 			continue
 		}
 		if !d.BinFound {
 			log.Warn().Str("module", name).Str("bin", d.Manifest.Backend.Bin).
-				Msg("modulehost: binary missing — skipping (reinstall the module)")
+				Msg("modulehost: binary missing")
 			continue
 		}
 		if d.Manifest.API != "" && d.Manifest.API != modulesdk.APIVersion {
 			log.Warn().Str("module", name).Str("api", d.Manifest.API).
-				Msg("modulehost: unsupported manifest api — skipping")
+				Msg("modulehost: unsupported api")
 			continue
 		}
 
 		m := &Module{man: d.Manifest, dir: d.Dir, opts: opts, socket: filepath.Join(runtimeDir, name+".sock")}
 		if err := m.launch(hctx); err != nil {
-			log.Error().Str("module", name).Err(err).Msg("modulehost: launch failed — module disabled for this run")
+			log.Error().Str("module", name).Err(err).Msg("modulehost: launch, disabled")
 			m.stop()
 			continue
 		}
 
 		var info modulesdk.Info
 		if err := m.clientSnapshot().get(hctx, "/module/info", &info); err != nil {
-			log.Error().Str("module", name).Err(err).Msg("modulehost: info fetch failed — module disabled for this run")
+			log.Warn().Str("module", name).Err(err).Msg("modulehost: info, disabled")
 			m.stop()
 			continue
 		}
@@ -172,7 +172,7 @@ func (h *Host) healthLoop(ctx context.Context) {
 		for _, m := range mods {
 			if err := m.health(ctx); err != nil {
 				log.Warn().Str("module", m.man.Module).Err(err).
-					Msg("modulehost: health probe failed — killing for supervised restart")
+					Msg("modulehost: health probe, restarting")
 				m.kill()
 			}
 		}
@@ -229,7 +229,7 @@ func (h *Host) chunkFor(name string) (dir, entry string, ok bool) {
 		// module directory (e.g. "../../../etc/passwd") when served.
 		if !withinDir(m.dir, m.man.Frontend.Entry) {
 			log.Warn().Str("module", name).Str("entry", m.man.Frontend.Entry).
-				Msg("module frontend entry escapes its directory; refusing to serve")
+				Msg("modulehost: entry escapes dir")
 			continue
 		}
 		return m.dir, m.man.Frontend.Entry, true

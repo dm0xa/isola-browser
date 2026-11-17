@@ -56,7 +56,7 @@ func parseIntEnvAllowZero(key string, defaultVal int) int {
 func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("ws: upgrade error: %v", err)
+		log.Printf("ws: upgrade: %v", err)
 		return
 	}
 	defer conn.Close()
@@ -68,7 +68,7 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 	// session for any client that doesn't announce itself.
 	webcodecs := r.URL.Query().Get("mode") == "webcodecs"
 	if webcodecs {
-		log.Printf("ws: webcodecs client — raw annex-b mode")
+		log.Printf("ws: webcodecs, annex-b")
 	}
 
 	currentMu.RLock()
@@ -208,7 +208,7 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 			"reason":    "encoder_error",
 			"retryable": true,
 		}); err != nil {
-			log.Printf("ws: encoder error report failed: %v", err)
+			log.Printf("ws: error report: %v", err)
 		}
 		_ = conn.WriteControl(
 			websocket.CloseMessage,
@@ -247,7 +247,7 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
 		if !lastBitrateStep.IsZero() && now.Sub(lastBitrateStep) < bitrateStepMinInterval {
 			bitrateStepsRefused++
-			log.Printf("ws: set_bitrate ignored, %s since the last step (min %s, %d refused)",
+			log.Printf("ws: set_bitrate ignored (%s < %s, %d refused)",
 				now.Sub(lastBitrateStep).Round(time.Millisecond), bitrateStepMinInterval, bitrateStepsRefused)
 			return
 		}
@@ -267,14 +267,13 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 		landed := hub.attach(sub, next, "bitrate_change")
 		if landed == nil {
 			// The viewer keeps the rung it is already on.
-			log.Printf("ws: encoder restart at %d kbps failed", newKbps)
+			log.Printf("ws: restart %dkbps: spawn failed", newKbps)
 			return
 		}
 		if landed == cur {
 			// The cap mapped the request back onto the run this viewer is
 			// already decoding, so nothing changed and nothing was announced.
-			log.Printf("ws: bitrate %d → %d kbps asked, keeping the %d kbps run (run cap %d)",
-				oldKbps, newKbps, landed.key.kbps, maxConcurrentRuns)
+			log.Printf("ws: bitrate %d→%d kept %d", oldKbps, newKbps, landed.key.kbps)
 			return
 		}
 		// From here the viewer moved to a different run: the budget is spent.
@@ -284,7 +283,10 @@ func handleViewerWS(w http.ResponseWriter, r *http.Request) {
 		if landed.key.kbps != newKbps || landed.key.scale != newScale {
 			return
 		}
-		log.Printf("ws: bitrate %d → %d kbps, scale %.2f (ABR)", oldKbps, newKbps, newScale)
+		if landed.key.kbps != lastAbrLogKbps {
+			lastAbrLogKbps = landed.key.kbps
+			log.Printf("ws: bitrate %d→%d", oldKbps, landed.key.kbps)
+		}
 	}
 
 	// Goroutine C: periodic metrics for debug overlay (1 Hz). Read from the

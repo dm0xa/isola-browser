@@ -692,7 +692,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         const textToPaste = text || await navigator.clipboard.readText();
         ws.send(JSON.stringify({ type: 'clipboard_sync', text: textToPaste }));
       } catch (err) {
-        console.error('Failed to read clipboard', err);
+        console.error('[isola] clipboard read', err);
       }
     }
   }, []);
@@ -1562,7 +1562,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         }
       };
       inputWs.onerror = () => {
-        console.warn('[isola] input WS error, falling back to inline events');
+        console.warn('[isola] input WS down, inline');
       };
       // Reconnect. The relay closes this channel when the container has been
       // silent for 90s, and a network blip closes it too. Without a retry the
@@ -1622,19 +1622,13 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         sb.mode = 'segments';
         sb.addEventListener('updateend', () => flushPending());
         sb.addEventListener('error', () => {
-          console.error('[isola] SourceBuffer error', {
-            codec,
-            updating: sb.updating,
-            buffered: sb.buffered.length,
-            mediaError: video.error?.code,
-            mediaMessage: video.error?.message,
-          });
+          console.error('[isola] sourcebuffer error', video.error?.code);
           sourceBufferRef.current = null;
         });
         sourceBufferRef.current = sb;
         flushPending();
       } catch (e) {
-        console.error('[isola] failed to add SourceBuffer', e);
+        console.error('[isola] addSourceBuffer', e);
         setError('MSE not supported or codec unavailable');
         setReconnecting(false);
       }
@@ -1666,7 +1660,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       // encoder restarts are failing — a fresh connection is the only way
       // out, and the onclose handler already owns that path.
       if (recoveryRequestsRef.current >= MAX_KEYFRAME_REQUESTS) {
-        console.error('[isola] no IDR after repeated keyframe requests — reconnecting');
+        console.error('[isola] no IDR, reconnect');
         recoveryRequestsRef.current = 0;
         recoveryRequestedRef.current = false;
         const stalled = wsRef.current;
@@ -1747,7 +1741,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       videoRef,
     };
     function noteDecodeError(e: unknown) {
-      console.error('[isola-wc] decode error:', e);
+      console.error('[isola-wc] decode:', e);
       decodeErrorCountRef.current++;
       keyframeSeenRef.current = false; // out of sync until the next IDR
       beginRecovery();
@@ -1812,7 +1806,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         inputLastMsgAtRef.current > 0 &&
         Date.now() - inputLastMsgAtRef.current > INPUT_ZOMBIE_MS
       ) {
-        console.warn('[isola] input WS unresponsive — forcing reconnect');
+        console.warn('[isola] input WS unresponsive, reconnect');
         inputLastMsgAtRef.current = Date.now(); // once per window
         inputAttempt = 0; // the attempts cap must not block the replacement
         liveInput.close();
@@ -2064,9 +2058,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
             }
             break;
           case 'stream_reset':
-            console.log('[isola] stream reset:', msg.reason);
-            // The replacement run's seq starts over; the old baseline is not
-            // comparable to it.
+            // Replacement run: seq starts over.
             resetPacketLoss(frameCountersRef.current);
             {
               // The restart itself isn't degradation: pause the estimator
@@ -2203,11 +2195,8 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         // on the next IDR instead of replaying it. Timestamps are synthetic
         // CFR ticks.
         if (decoderRef.current && decoderRef.current.state === 'closed') {
-          // A fatal decode error closes the VideoDecoder, and nothing else
-          // rebuilt it — every packet was silently dropped from then on and
-          // the picture froze for good. Re-create it from the last negotiated
-          // config; deltas are ignored below until the next IDR re-syncs.
-          console.warn('[isola-wc] decoder closed — rebuilding');
+          // A closed decoder otherwise drops every packet; rebuild from the last config.
+          console.warn('[isola-wc] decoder closed, rebuilding');
           createWcDecoder();
           auSink.resetForNewRun();
         }
@@ -2282,7 +2271,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
             setAudioActive(true);
           }
         } catch (e) {
-          console.error('[isola-audio] decode error:', e);
+          console.error('[isola-audio] decode:', e);
         }
       }
     };
@@ -2704,7 +2693,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     const DecoderCtor = wcHost.AudioDecoder;
     const ChunkCtor = wcHost.EncodedAudioChunk;
     if (!DecoderCtor || !ChunkCtor) {
-      console.warn('[isola-audio] WebCodecs audio unavailable in this browser');
+      console.warn('[isola-audio] webcodecs unavailable');
       return;
     }
     audioChunkCtorRef.current = ChunkCtor;
@@ -2776,7 +2765,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
               }
             }
           } catch (e) {
-            console.warn('[isola-audio] output copy failed:', e);
+            console.warn('[isola-audio] output copy:', e);
             data.close();
             return;
           }
@@ -2791,12 +2780,12 @@ export function useIsolaStream(defaultTargetUrl?: string) {
             src.start(audioNextRef.current);
             audioNextRef.current += frames / sr;
           } catch (e) {
-            console.warn('[isola-audio] playout failed:', e);
+            console.warn('[isola-audio] playout:', e);
           }
           data.close();
         },
         error: (err) => {
-          console.error('[isola-audio] decoder error:', err);
+          console.error('[isola-audio] decoder:', err);
           const now = Date.now();
           const r = audioErrRef.current;
           r.count = (now - r.at < 200) ? r.count + 1 : 1;

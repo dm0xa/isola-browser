@@ -18,7 +18,7 @@ function hardenCtrlSocket(sockPath, env = process.env, fsImpl = require('fs')) {
   try {
     fsImpl.chmodSync(sockPath, 0o660);
   } catch (err) {
-    console.warn(`[electron] ctrl socket chmod failed: ${err.message}`);
+    console.warn(`[electron] ctrl chmod: ${err.message}`);
   }
   const uid = parseInt(env.ISOLA_CTRL_SOCK_UID || '', 10);
   const gid = parseInt(env.ISOLA_CTRL_SOCK_GID || '', 10);
@@ -26,7 +26,7 @@ function hardenCtrlSocket(sockPath, env = process.env, fsImpl = require('fs')) {
     try {
       fsImpl.chownSync(sockPath, uid, gid);
     } catch (err) {
-      console.warn(`[electron] ctrl socket chown failed: ${err.message}`);
+      console.warn(`[electron] ctrl chown: ${err.message}`);
     }
   }
 }

@@ -10,14 +10,8 @@
 // (tab_new/tab_switch/tab_close/tab_navigate/tab_back/tab_reload/get_tabs) and
 // broadcasts tab state back so viewers can render a tab strip.
 
-// Electron emits its own security warnings ("Insecure Content-Security-Policy")
-// as console.warn() in the renderer. The isola runner exists to render
-// arbitrary, untrusted third-party pages, so a wrapper-level CSP is neither
-// possible nor meaningful — and the warning is not harmless here: isola-streamer
-// taps Runtime.consoleAPICalled, so it surfaces in the viewer's console panel
-// looking like page output. Suppress it before any window exists. This gates
-// only Electron's built-in warnings; the runner's own console.log lines (the
-// [electron] output on the container's stdout) are untouched.
+// Runner renders arbitrary untrusted pages: wrapper CSP is meaningless, and the
+// built-in warning would surface in the viewer's console via consoleAPICalled.
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true';
 
 const { app, BrowserWindow, nativeTheme, session } = require('electron');
@@ -277,16 +271,29 @@ function extrapolateEdges(full, bmpW, bmpH) {
   }
 }
 
+// Blocked-navigation/address events can fire many times per second (a page
+// hammering redirects); one line per kind per second is enough to see it.
+const blockedLogAt = {};
+function logBlocked(kind, url) {
+  const now = Date.now();
+  if (now - (blockedLogAt[kind] || 0) < 1000) return;
+  blockedLogAt[kind] = now;
+  console.log(`[electron] blocked ${kind}: ${String(url).slice(0, 200)}`);
+}
+
 function connectToUds(sockPath) {
   return new Promise((resolve) => {
     const attempt = () => {
       const sock = net.createConnection(sockPath);
       sock.on('connect', () => {
-        console.log(`[electron] connected to ${sockPath}`);
+        console.log(`[electron] uds connected ${sockPath}`);
         resolve(sock);
       });
       sock.on('error', (err) => {
-        console.log(`[electron] UDS connect error: ${err.message}, retrying in 500ms`);
+        udsAttempts++;
+        if (udsAttempts === 1 || udsAttempts % 20 === 0) {
+          console.log(`[electron] uds retry ${udsAttempts}: ${err.message}`);
+        }
         sock.destroy();
         setTimeout(attempt, 500);
       });
@@ -538,7 +545,7 @@ function stopCaptureFallback(reason) {
   if (!fallbackTimer) return;
   clearInterval(fallbackTimer);
   fallbackTimer = null;
-  console.warn(`[electron] capture fallback stopped (${reason})`);
+  console.warn(`[electron] fallback stopped (${reason})`);
 }
 
 function maybeStartCaptureFallback() {
@@ -607,7 +614,7 @@ async function captureAndSend(reason) {
     writeFrame([{ x: 0, y: 0, w, h }], image);
     console.log(`[electron] capturePage (${reason})`);
   } catch (err) {
-    console.warn(`[electron] capturePage failed (${reason}): ${err.message}`);
+    console.warn(`[electron] capturePage ${reason}: ${err.message}`);
   }
 }
 
@@ -653,7 +660,7 @@ async function confirmStalled() {
     }
     return true;
   } catch (err) {
-    console.warn(`[electron] stall probe failed: ${err.message}`);
+    console.warn(`[electron] stall probe: ${err.message}`);
     return true;
   }
 }
@@ -860,7 +867,7 @@ function themeBackgroundColor() {
 function loadResolved(win, input) {
   const url = resolveAddressBar(input);
   if (!url) {
-    console.log(`[electron] blocked address: ${String(input).slice(0, 200)}`);
+    logBlocked('address', input);
     return false;
   }
   win.loadURL(url);
@@ -923,14 +930,14 @@ function setTabFrameRate(tab, active) {
   try {
     tab.win.webContents.setFrameRate(next);
   } catch (err) {
-    console.warn(`[electron] setFrameRate(${next}) failed: ${err.message}`);
+    console.warn(`[electron] fps ${next}: ${err.message}`);
     return;
   }
   // Only log real changes: this runs from the capture watchdog too, and a
   // stuck-at-background rate is exactly the state that is invisible elsewhere.
   if (tab.appliedFrameRate !== next) {
     tab.appliedFrameRate = next;
-    console.log(`[electron] tab #${tab.id} compositor ${next}fps (active=${active === true}, capture=${captureActive})`);
+    console.log(`[electron] tab ${tab.id} ${next}fps`);
   }
 }
 
@@ -962,7 +969,6 @@ function setCaptureActive(on) {
     clearLoadCaptures,
   });
   if (!changed) return;
-  console.log(`[electron] capture ${on ? 'resumed' : 'paused'}`);
   if (!on) stopCaptureFallback('capture paused');
 }
 
@@ -998,7 +1004,6 @@ function switchTab(id) {
     void captureAndSend('tab-switch');
   } catch { /* ignore */ }
   broadcastTabs();
-  console.log(`[electron] tab switch → #${id} (${target.url})`);
 }
 
 function createTab(url, activate = true) {
@@ -1053,13 +1058,13 @@ function recreateTabWindow(tab, reason) {
   try {
     if (tab.win && !tab.win.isDestroyed()) tab.win.destroy();
   } catch (err) {
-    console.warn(`[electron] old window destroy failed: ${err.message}`);
+    console.warn(`[electron] old window destroy: ${err.message}`);
   }
   resetFrameState();
   attachTabWindow(tab, current || 'about:blank');
   if (tab.id === activeTabId) startForwarding(tab);
   broadcastTabs();
-  console.log(`[electron] tab #${tab.id} window recreated (${reason}) at ${current}`);
+  console.log(`[electron] tab #${tab.id} recreated (${reason})`);
 }
 
 // attachTabWindow builds the offscreen window for a tab and wires every event
@@ -1139,13 +1144,13 @@ function attachTabWindow(tab, url) {
     broadcastTabs();
   });
   win.webContents.on('did-fail-load', (event, code, desc, url) => {
-    console.log(`[electron] tab #${id} load failed: ${url} (${code}: ${desc})`);
+    console.log(`[electron] load fail ${url}: ${code}`);
   });
 
   const blockDisallowed = (event, navUrl) => {
     if (isAllowedPageNavigation(navUrl)) return;
     event.preventDefault();
-    console.log(`[electron] blocked navigation: ${String(navUrl).slice(0, 200)}`);
+    logBlocked('navigation', navUrl);
   };
   win.webContents.on('will-navigate', blockDisallowed);
   win.webContents.on('will-redirect', blockDisallowed);
@@ -1155,12 +1160,12 @@ function attachTabWindow(tab, url) {
   // Denying the native window lets the tab strip own all browsing surfaces.
   win.webContents.setWindowOpenHandler(({ url, disposition }) => {
     if (!isAllowedPageNavigation(url)) {
-      console.log(`[electron] blocked window.open: ${String(url).slice(0, 200)}`);
+      logBlocked('window.open', url);
       return { action: 'deny' };
     }
     const activate = disposition !== 'background-tab';
     createTab(url, activate);
-    console.log(`[electron] window.open → new tab (${disposition}): ${url}`);
+    console.log(`[electron] window.open ${disposition}: ${url}`);
     return { action: 'deny' };
   });
 
@@ -1285,7 +1290,6 @@ function setupCtrlSocket() {
   });
   server.listen(ISOLA_CTRL_SOCK, () => {
     hardenCtrlSocket(ISOLA_CTRL_SOCK);
-    console.log(`[electron] ctrl socket listening on ${ISOLA_CTRL_SOCK}`);
   });
 }
 
@@ -1303,33 +1307,24 @@ function handleResize(newWidth, newHeight) {
   // The surface just changed shape, so the streamer needs one complete frame
   // before it can apply damage again.
   void captureAndSend('resize');
-  console.log(`[electron] resized to ${w}x${h}`);
 }
 
 // Chromium switches live in ./chrome_flags.js: the list is load-bearing (see the
 // --disable-dev-shm-usage note there) and is asserted by test/chrome_flags.test.js.
 applyChromeFlags(app.commandLine);
 
-// Advertise plain Chrome, not Electron. Electron's default UA names the
-// embedder and UA-sniffing sites (bowser/UAParser tables) then classify the
-// browser as "Electron", which every supported-browser gate rejects — the
-// viewer shows "This browser isn't supported" on an otherwise current
-// Chromium. Set before whenReady() so no window or request can use the old one.
-console.log(`[electron] user agent: ${applyUserAgent(app)}`);
+// Advertise plain Chrome, not Electron: UA-sniffing gates reject "Electron". Set before whenReady().
+applyUserAgent(app);
 
 app.whenReady().then(async () => {
-  console.log(`[electron] starting (${w}x${h}, ${frameRate}fps, url=${START_URL})`);
-  // Apply Tor to the shared default session BEFORE any tab exists. setProxy is
-  // async, so a navigation issued without awaiting it would race the proxy and
-  // could leave the first requests unproxied. On failure we exit instead of
-  // serving: an unproxied session under a Tor request is the leak this feature
-  // must never produce (the entrypoint's bootstrap gate fails closed too).
+  console.log(`[electron] ready ${w}x${h}@${frameRate}`);
+  // Await Tor before any navigation; on failure exit — an unproxied Tor session is the leak this must never produce.
   if (TOR_ENABLED) {
     try {
       await applyTorProxy(session.defaultSession);
-      console.log('[electron] Tor proxy applied (socks5, no bypass)');
+      console.log('[electron] tor proxy applied');
     } catch (err) {
-      console.error(`[electron] FATAL: could not apply Tor proxy: ${err && err.message ? err.message : err}`);
+      console.error(`[electron] FATAL tor proxy: ${err && err.message ? err.message : err}`);
       app.exit(1);
       return;
     }
@@ -1340,7 +1335,6 @@ app.whenReady().then(async () => {
   startStallWatchdog();
   startRateWatchdog();
   startCaptureStatsReport();
-  console.log('[electron] ready');
 });
 
 app.on('window-all-closed', () => {});

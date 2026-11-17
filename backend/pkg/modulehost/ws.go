@@ -31,7 +31,7 @@ func pipeWebSocket(w http.ResponseWriter, r *http.Request, m *Module) {
 
 	moduleConn, err := m.dialModule(r.Context())
 	if err != nil {
-		log.Warn().Str("module", m.man.Module).Err(err).Msg("modulehost: ws pipe dial failed")
+		log.Warn().Str("module", m.man.Module).Err(err).Msg("modulehost: ws dial")
 		// Nothing has been written to the client yet, so a plain error is
 		// still possible (the upgrade handshake never started).
 		http.Error(w, "module unavailable", http.StatusServiceUnavailable)
@@ -45,7 +45,7 @@ func pipeWebSocket(w http.ResponseWriter, r *http.Request, m *Module) {
 		return
 	}
 	if _, err := moduleConn.Write(head); err != nil {
-		log.Warn().Str("module", m.man.Module).Err(err).Msg("modulehost: ws pipe write failed")
+		log.Warn().Str("module", m.man.Module).Err(err).Msg("modulehost: ws write")
 		return
 	}
 

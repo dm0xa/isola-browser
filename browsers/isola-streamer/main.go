@@ -34,13 +34,12 @@ func main() {
 	// Start the frame UDS listener at container boot — before chromium-isola
 	// launches. This is critical: chromium-isola tries to connect immediately
 	// and will hang/fail if nothing is listening.
-	log.Printf("Starting frame listener on %s", frameSock)
+	log.Printf("mux: frame listener %s", frameSock)
 	incoming, err := listenFrames(frameSock)
 	if err != nil {
 		log.Fatalf("failed to start frame listener on %s: %v", frameSock, err)
 	}
 	globalBroadcaster = newFrameBroadcaster(incoming)
-	log.Printf("Frame broadcaster ready (socket=%s)", frameSock)
 
 	initInput()
 	initActivityTracker()

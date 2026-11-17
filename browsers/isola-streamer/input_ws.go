@@ -29,11 +29,11 @@ func handleInputWS(w http.ResponseWriter, r *http.Request) {
 	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("input ws: upgrade error: %v", err)
+		log.Printf("input: ws upgrade: %v", err)
 		return
 	}
 	defer conn.Close()
-	log.Printf("input ws: viewer connected")
+	log.Printf("input: ws viewer")
 
 	var wmu sync.Mutex
 	writeJSON := func(msg map[string]any) {
@@ -111,9 +111,9 @@ func handleInputWS(w http.ResponseWriter, r *http.Request) {
 				})()`, sr[0], sr[1], sr[2], sr[3])
 				text, err := cdpClient.evaluateString(expr)
 				if err != nil {
-					log.Printf("select_range: %v", err)
+					log.Printf("input: select_range: %v", err)
 				} else {
-					log.Printf("select_range: %d chars selected", len(text))
+					log.Printf("input: select_range %d chars", len(text))
 				}
 			case <-done:
 				return
@@ -170,7 +170,7 @@ func handleInputWS(w http.ResponseWriter, r *http.Request) {
 				if cdpClient != nil && cdpClient.Available() {
 					t, err := cdpClient.evaluateString("window.getSelection().toString()")
 					if err != nil {
-						log.Printf("input ws: get_selection failed: %v", err)
+						log.Printf("input: get_selection: %v", err)
 					} else {
 						text = t
 					}

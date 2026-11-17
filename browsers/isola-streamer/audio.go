@@ -64,14 +64,14 @@ func readAudioRTP() {
 	addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:5006")
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
-		log.Printf("audio: RTP listener failed: %v", err)
+		log.Printf("audio: rtp listen: %v", err)
 		return
 	}
 	defer conn.Close()
 	if err := conn.SetReadBuffer(256 * 1024); err != nil {
-		log.Printf("audio: SetReadBuffer failed: %v", err)
+		log.Printf("audio: read buffer: %v", err)
 	}
-	log.Printf("audio: RTP listener on :5006")
+	log.Printf("audio: rtp :5006")
 
 	buf := make([]byte, 2048)
 	for {

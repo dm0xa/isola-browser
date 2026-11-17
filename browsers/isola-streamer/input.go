@@ -87,7 +87,7 @@ func flushPendingInput() {
 				continue
 			}
 			if !cdpClient.handleInput(ev) {
-				log.Printf("input: queued replay failed for %s", ev.Type)
+				log.Printf("input: replay failed %s: ok=false", ev.Type)
 			}
 		}
 		inputQueue.mu.Lock()
@@ -115,7 +115,7 @@ func initInput() {
 		activeCapture = newCaptureClient()
 		go activeCapture.Start()
 	}
-	log.Printf("input: CDP backend initialized")
+	log.Printf("input: cdp backend init")
 }
 
 // handleInputEvent dispatches a received input event via CDP.
@@ -141,7 +141,7 @@ func handleInputEvent(data []byte) {
 		if ok := cdpClient.handleInput(ev); ok {
 			return
 		}
-		log.Printf("input: cdp dispatch failed for %s", ev.Type)
+		log.Printf("input: cdp dispatch %s: ok=false", ev.Type)
 		if significant {
 			// The CDP write failed (connection dying): queue for replay.
 			enqueuePendingInput(data)
@@ -159,5 +159,5 @@ func handleInputEvent(data []byte) {
 		return
 	}
 
-	log.Printf("input: dropped %s (cdp unavailable)", ev.Type)
+	log.Printf("input: dropped %s (no cdp)", ev.Type)
 }

@@ -28,7 +28,7 @@ func RegisterAuth(p plugin.AuthProvider) {
 	mu.Lock()
 	defer mu.Unlock()
 	authProviders = append(authProviders, p)
-	log.Info().Str("name", p.Info().Name).Msg("plugin registered: auth")
+	log.Info().Str("kind", "auth").Str("name", p.Info().Name).Msg("plugin registered")
 }
 
 // RegisterSessionHook registers a session lifecycle hook.
@@ -36,7 +36,7 @@ func RegisterSessionHook(h plugin.SessionHook) {
 	mu.Lock()
 	defer mu.Unlock()
 	sessionHooks = append(sessionHooks, h)
-	log.Info().Str("name", h.Info().Name).Msg("plugin registered: session hook")
+	log.Info().Str("kind", "session_hook").Str("name", h.Info().Name).Msg("plugin registered")
 }
 
 // RegisterWebSocketPlugin registers a WebSocket sub-path handler.
@@ -44,7 +44,7 @@ func RegisterWebSocketPlugin(p plugin.WebSocketPlugin) {
 	mu.Lock()
 	defer mu.Unlock()
 	wsPlugins = append(wsPlugins, p)
-	log.Info().Str("name", p.Info().Name).Str("subpath", p.SubPath()).Msg("plugin registered: websocket")
+	log.Info().Str("kind", "websocket").Str("name", p.Info().Name).Str("subpath", p.SubPath()).Msg("plugin registered")
 }
 
 // RegisterDLP registers a DLP provider.
@@ -52,7 +52,7 @@ func RegisterDLP(p plugin.DLPProvider) {
 	mu.Lock()
 	defer mu.Unlock()
 	dlpProviders = append(dlpProviders, p)
-	log.Info().Str("name", p.Info().Name).Msg("plugin registered: dlp")
+	log.Info().Str("kind", "dlp").Str("name", p.Info().Name).Msg("plugin registered")
 }
 
 // RegisterURLPolicy registers a URL policy provider.
@@ -60,7 +60,7 @@ func RegisterURLPolicy(p plugin.URLPolicy) {
 	mu.Lock()
 	defer mu.Unlock()
 	urlPolicies = append(urlPolicies, p)
-	log.Info().Str("name", p.Info().Name).Msg("plugin registered: url policy")
+	log.Info().Str("kind", "url_policy").Str("name", p.Info().Name).Msg("plugin registered")
 }
 
 // RegisterAuditLogger registers an audit logger.
@@ -68,7 +68,7 @@ func RegisterAuditLogger(l plugin.AuditLogger) {
 	mu.Lock()
 	defer mu.Unlock()
 	auditLoggers = append(auditLoggers, l)
-	log.Info().Str("name", l.Info().Name).Msg("plugin registered: audit")
+	log.Info().Str("kind", "audit").Str("name", l.Info().Name).Msg("plugin registered")
 }
 
 // RegisterSessionGuard registers a session guard for pre-creation checks (rate limiting, abuse prevention).
@@ -76,7 +76,7 @@ func RegisterSessionGuard(g plugin.SessionGuard) {
 	mu.Lock()
 	defer mu.Unlock()
 	sessionGuards = append(sessionGuards, g)
-	log.Info().Str("name", g.Info().Name).Msg("plugin registered: session guard")
+	log.Info().Str("kind", "session_guard").Str("name", g.Info().Name).Msg("plugin registered")
 }
 
 // RegisterFrontendPlugin registers a frontend UI plugin.
@@ -84,7 +84,7 @@ func RegisterFrontendPlugin(p plugin.FrontendPlugin) {
 	mu.Lock()
 	defer mu.Unlock()
 	frontendPlugins = append(frontendPlugins, p)
-	log.Info().Str("name", p.Info().Name).Msg("plugin registered: frontend")
+	log.Info().Str("kind", "frontend").Str("name", p.Info().Name).Msg("plugin registered")
 }
 
 // AuthProviders returns all registered auth providers.

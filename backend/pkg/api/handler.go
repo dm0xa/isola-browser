@@ -347,7 +347,6 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	// cannot overshoot the cap. 0 = unlimited.
 	if err := h.store.CreateSessionIfCapacity(r.Context(), session, h.cfg.MaxSessions); err != nil {
 		if errors.Is(err, store.ErrMaxSessionsReached) {
-			log.Printf("create session: refused, max sessions (%d) reached", h.cfg.MaxSessions)
 			// Tell a waiting client how long to back off before retrying; the UI
 			// retries a few times before it gives up.
 			w.Header().Set("Retry-After", "5")
@@ -453,7 +452,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		log.Printf("create session: container ready in %v (warm=%v)", time.Since(createStart), warmed)
+		log.Printf("create session: container ready warm=%v took=%v", warmed, time.Since(createStart))
 
 		// Wait for stream to be ready before marking session as running. Warm
 		// claims skip this: the pool probed the stream right before handing the
@@ -603,7 +602,7 @@ func (h *Handler) claimWarmContainer(
 
 	if target != nil && target.PinnedIP != "" {
 		h.warmPinWarnOnce.Do(func() {
-			log.Printf("create session: warm container claimed for a DNS-pinned target (%s); the container egress firewall is the SSRF control for this session, not the pin", target.PinnedHost)
+			log.Printf("create session: warm claim with pinned host=%s (firewall is ssrf control)", target.PinnedHost)
 		})
 	}
 
@@ -613,7 +612,7 @@ func (h *Handler) claimWarmContainer(
 	navCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	if err := h.warm.Navigate(navCtx, info.Host, info.Port, targetURL); err != nil {
-		log.Printf("create session: warm navigate failed (%v); falling back to cold", err)
+		log.Printf("create session: warm navigate failed, cold fallback: %v", err)
 		if errors.Is(err, orchestrator.ErrNavigateUnsupported) {
 			// The running browser image predates the warm-pool endpoint: stop
 			// serving claims so the next user does not pay this fallback too.
@@ -1169,7 +1168,7 @@ func (h *Handler) ToggleAudio(w http.ResponseWriter, r *http.Request) {
 		if session != nil {
 			ss = string(session.Status)
 		}
-		log.Printf("audio toggle: session not found or not running (err=%v, nil=%v, status=%s)", err, session == nil, ss)
+		log.Printf("audio toggle: session not running (err=%v, status=%s)", err, ss)
 		respondError(w, http.StatusNotFound, "session_not_found")
 		return
 	}
@@ -1222,7 +1221,6 @@ func (h *Handler) ToggleAudio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("audio toggle: session %s audio %s", id.String()[:8], map[bool]string{true: "enabled", false: "disabled"}[req.Enabled])
 	respondJSON(w, http.StatusOK, map[string]any{"audio_enabled": req.Enabled})
 }
 

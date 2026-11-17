@@ -87,14 +87,14 @@ func newCaptureClient() *captureClient {
 func (c *captureClient) Start() {
 	for {
 		if err := c.connect(); err != nil {
-			log.Printf("capture: connect failed: %v (retry in 2s)", err)
+			log.Printf("capture: connect: %v (retry 2s)", err)
 			time.Sleep(2 * time.Second)
 			continue
 		}
-		log.Printf("capture: browser auto-attach enabled")
+		log.Printf("capture: auto-attach")
 		c.readPump()
 		c.dropConn()
-		log.Printf("capture: disconnected, reconnecting")
+		log.Printf("capture: reconnecting")
 		time.Sleep(2 * time.Second)
 	}
 }
@@ -231,17 +231,17 @@ func (c *captureClient) onAttached(params json.RawMessage) {
 	c.mu.Unlock()
 
 	if err := c.sendSession("Network.enable", map[string]interface{}{}, p.SessionID); err != nil {
-		log.Printf("capture: Network.enable failed: %v", err)
+		log.Printf("capture: Network.enable: %v", err)
 	}
 	if err := c.sendSession("Runtime.enable", map[string]interface{}{}, p.SessionID); err != nil {
-		log.Printf("capture: Runtime.enable failed: %v", err)
+		log.Printf("capture: Runtime.enable: %v", err)
 	}
-	log.Printf("capture: target %s attached (%s)", shortTargetID(p.TargetInfo.TargetID), p.TargetInfo.URL)
+	log.Printf("capture: attached %s (%s)", shortTargetID(p.TargetInfo.TargetID), p.TargetInfo.URL)
 	if reload {
 		if err := c.sendSession("Page.reload", nil, p.SessionID); err != nil {
-			log.Printf("capture: Page.reload failed: %v", err)
+			log.Printf("capture: Page.reload: %v", err)
 		} else {
-			log.Printf("capture: reloaded page for full network capture")
+			log.Printf("capture: reloaded")
 		}
 	}
 }
@@ -421,7 +421,7 @@ func (c *captureClient) onResponse(raw []byte) {
 		return
 	}
 	if r.Error != nil {
-		log.Printf("capture: CDP error in %s: %s", method, r.Error.Message)
+		log.Printf("capture: cdp error %s: %s", method, r.Error.Message)
 	}
 }
 

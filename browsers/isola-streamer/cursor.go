@@ -107,13 +107,15 @@ func maybeQueryCursor(x, y int) {
 				backoff = cursorBackoffMax
 			}
 			cursorBackoffUntil.Store(time.Now().Add(backoff).UnixNano())
-			now := time.Now().UnixNano()
-			if last := cursorFailLogAt.Swap(now); last == 0 || now-last > int64(cursorFailLogInterval) {
-				log.Printf("cursor: probe failed %d in a row (backing off %v): %v", streak, backoff, err)
+			if !cursorFailLogged.Swap(true) {
+				log.Printf("cursor: probe failed %d (backoff %v): %v", streak, backoff, err)
 			}
 			return
 		}
 		noteProbeSuccess()
+		if cursorFailLogged.Swap(false) {
+			log.Printf("cursor: recovered")
+		}
 		cursorBackoffUntil.Store(0)
 		var msg struct {
 			C string `json:"c"`

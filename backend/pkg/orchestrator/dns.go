@@ -38,13 +38,13 @@ func (o *Orchestrator) SetupDNSProxy(ctx context.Context, mode string, servers [
 	o.EnableDNSProxy()
 	go func() {
 		if err := srv.Serve(ctx); err != nil {
-			log.Error().Err(err).Msg("dnsproxy: forwarder stopped")
+			log.Error().Err(err).Msg("dnsproxy: forwarder")
 		}
 	}()
 	log.Info().
 		Str("mode", mode).
 		Str("listen", listen).
 		Int("upstreams", len(servers)).
-		Msg("DNS forwarder started (encrypted resolution for sessions)")
+		Msg("dnsproxy: forwarder")
 	return nil
 }

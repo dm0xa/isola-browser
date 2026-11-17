@@ -220,7 +220,7 @@ func (p *WarmPool) Start(ctx context.Context, interval time.Duration) {
 	p.fillCtx, p.fillCancel = context.WithCancel(context.Background())
 	p.mu.Unlock()
 
-	log.Info().Int("size", p.size).Str("resolution", p.resolution).Msg("warm pool starting")
+	log.Info().Int("size", p.size).Str("resolution", p.resolution).Msg("warm pool: start")
 	p.collectOrphans(ctx)
 	p.reconcile(ctx)
 
@@ -232,7 +232,7 @@ func (p *WarmPool) Start(ctx context.Context, interval time.Duration) {
 			drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			p.Drain(drainCtx)
 			cancel()
-			log.Info().Msg("warm pool stopped")
+			log.Info().Msg("warm pool: stop")
 			return
 		case <-ticker.C:
 			p.reconcile(ctx)
@@ -290,7 +290,7 @@ func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int)
 	// momentary streamer hiccup does not cost the user their fast path.
 	if err := p.probeWithRetry(ctx, &claimed.info.SessionInfo); err != nil {
 		log.Warn().Err(err).Str("container_id", claimed.info.ContainerID).
-			Msg("warm pool: claim probe failed, discarding container")
+			Msg("warm pool: claim probe, discarded")
 		p.clearPending(claimed.info.ContainerID)
 		p.terminate(context.Background(), claimed.info.ContainerID)
 		p.replenish(ctx)
@@ -312,7 +312,7 @@ func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int)
 		Str("warm_age", p.nower().Sub(claimed.startedAt).Round(time.Millisecond).String()).
 		Str("baked_resolution", baked).
 		Str("requested_resolution", resolution).
-		Msg("warm pool: container claimed")
+		Msg("warm pool: claimed")
 	return &claimed.info.SessionInfo, baked
 }
 
@@ -332,7 +332,7 @@ func (p *WarmPool) NotifyNavigateDisabled() {
 	for _, wc := range warm {
 		p.terminate(context.Background(), wc.info.ContainerID)
 	}
-	log.Warn().Msg("warm pool disabled: browser image does not support /navigate; rebuild isola-browser:electron")
+	log.Warn().Msg("warm pool: no navigate, disabled")
 }
 
 func (p *WarmPool) Disabled() bool {
@@ -457,7 +457,7 @@ func (p *WarmPool) collectOrphans(ctx context.Context) {
 	if p.activeContainers != nil {
 		set, err := p.activeContainers(ctx)
 		if err != nil {
-			log.Warn().Err(err).Msg("warm pool: active-session lookup failed; skipping orphan collection")
+			log.Warn().Err(err).Msg("warm pool: lookup, sweep skipped")
 			return
 		}
 		active = set
@@ -466,7 +466,7 @@ func (p *WarmPool) collectOrphans(ctx context.Context) {
 		if containerIDIn(tracked, id) || containerIDIn(active, id) {
 			continue
 		}
-		log.Info().Str("container_id", id).Msg("warm pool: removing untracked warm container")
+		log.Info().Str("container_id", id).Msg("warm pool: removing untracked")
 		p.terminate(ctx, id)
 	}
 }
@@ -502,11 +502,11 @@ func (p *WarmPool) reconcile(ctx context.Context) {
 		// (a streamer mid-restart, a paused VM) must not kill a usable
 		// container and leave the pool empty for the next user.
 		if misses := p.noteMiss(wc.info.ContainerID); misses < warmMissLimit {
-			log.Warn().Err(err).Str("container_id", wc.info.ContainerID).
-				Int("misses", misses).Msg("warm pool: idle container probe failed (confirming)")
+			log.Debug().Err(err).Str("container_id", wc.info.ContainerID).
+				Int("misses", misses).Msg("warm pool: probe, confirming")
 			continue
 		}
-		log.Warn().Err(err).Str("container_id", wc.info.ContainerID).Msg("warm pool: idle container died, replacing")
+		log.Warn().Err(err).Str("container_id", wc.info.ContainerID).Msg("warm pool: idle died, replacing")
 		p.clearMiss(wc.info.ContainerID)
 		dead[wc.info.ContainerID] = true
 		p.terminate(ctx, wc.info.ContainerID)
@@ -612,7 +612,7 @@ func (p *WarmPool) fillOne(ctx context.Context) bool {
 		StreamMode: p.streamMode,
 	})
 	if err != nil {
-		log.Warn().Err(err).Msg("warm pool: provision failed")
+		log.Warn().Err(err).Msg("warm pool: provision")
 		return false
 	}
 	// A warm container is only useful once the in-container stream answers,
@@ -624,7 +624,7 @@ func (p *WarmPool) fillOne(ctx context.Context) bool {
 			return false
 		}
 		log.Warn().Err(err).Str("container_id", info.ContainerID).
-			Msg("warm pool: navigate capability probe failed")
+			Msg("warm pool: navigate probe")
 		p.terminate(ctx, info.ContainerID)
 		return false
 	}
@@ -673,7 +673,7 @@ func (p *WarmPool) Drain(ctx context.Context) {
 	if fillCancel != nil {
 		fillCancel()
 		if !waitTimeout(&p.fillsWG, 15*time.Second) {
-			log.Warn().Msg("warm pool: in-flight fills did not finish before shutdown; leftover sweep will collect them on next start")
+			log.Warn().Msg("warm pool: shutdown, fills in flight")
 		}
 	}
 
@@ -692,7 +692,7 @@ func (p *WarmPool) Drain(ctx context.Context) {
 		stopped++
 	}
 	if stopped > 0 {
-		log.Info().Int("stopped", stopped).Msg("warm pool drained")
+		log.Info().Int("stopped", stopped).Msg("warm pool: drained")
 	}
 }
 
@@ -725,7 +725,7 @@ func (p *WarmPool) terminate(ctx context.Context, containerID string) {
 	tctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := p.orch.TerminateSession(tctx, containerID); err != nil {
-		log.Warn().Err(err).Str("container_id", containerID).Msg("warm pool: terminate failed")
+		log.Warn().Err(err).Str("container_id", containerID).Msg("warm pool: terminate")
 	}
 }
 

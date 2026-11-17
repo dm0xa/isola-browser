@@ -65,7 +65,7 @@ func recordSegment(seg []byte, isInit bool) {
 		f, err := os.Create(filepath.Join(recordDir, name))
 		if err != nil {
 			if !rec.warnRaw {
-				log.Printf("record: cannot create %s: %v", name, err)
+				log.Printf("record: create %s: %v", name, err)
 			}
 			return
 		}
@@ -81,7 +81,7 @@ func recordSegment(seg []byte, isInit bool) {
 	n, err := rec.f.Write(seg)
 	rec.size += int64(n)
 	if err != nil {
-		log.Printf("record: write %s failed: %v", rec.fName, err)
+		log.Printf("record: write %s: %v", rec.fName, err)
 		rec.f.Close()
 		rec.f = nil
 	}
@@ -94,7 +94,7 @@ func recordRawRun() {
 	defer rec.mu.Unlock()
 	if rec.active && !rec.warnRaw {
 		rec.warnRaw = true
-		log.Printf("record: WARNING active run is raw h264 (webcodecs viewer) — recording is skipped for this run")
+		log.Printf("record: skipped (raw h264)")
 	}
 }
 
@@ -117,7 +117,7 @@ func recordStart() error {
 	// write deadline) and must never stall the output pump waiting on rec.mu.
 	defer rec.mu.Lock()
 	syncProducerCapture(false)
-	log.Printf("record: started (dir=%s)", recordDir)
+	log.Printf("record: start dir=%s", recordDir)
 	return nil
 }
 
@@ -188,7 +188,7 @@ func registerRecordRoutes(mux *http.ServeMux) {
 		return
 	}
 	if err := os.MkdirAll(recordDir, 0o755); err != nil {
-		log.Printf("record: cannot create %s — recording disabled: %v", recordDir, err)
+		log.Printf("record: %s: %v", recordDir, err)
 		return
 	}
 

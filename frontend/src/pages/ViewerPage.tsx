@@ -356,7 +356,7 @@ export default function ViewerPage() {
         setAudioMuted(!audioMuted);
       }
     } catch (err) {
-      console.error('Audio toggle failed', err);
+      console.error('[viewer] audio toggle', err);
     }
   }, [id, audioActive, audioMuted, setAudioMuted, viewOnly, shadow]);
 
@@ -735,7 +735,7 @@ export default function ViewerPage() {
         clearSessionToken(oldId);
       }
     } catch (err) {
-      console.error('[restart] failed', err);
+      console.error('[restart]', err);
       setRestarting(false);
     }
   };

@@ -28,7 +28,7 @@ func main() {
 	if frontendFS, err := fs.Sub(frontendFiles, "frontend-dist"); err == nil && frontendFS != nil {
 		opts.FrontendFS = frontendFS
 	} else {
-		log.Warn().Msg("frontend not embedded — API-only mode")
+		log.Warn().Msg("frontend: not embedded, api-only")
 	}
 
 	if err := app.Run(opts); err != nil {

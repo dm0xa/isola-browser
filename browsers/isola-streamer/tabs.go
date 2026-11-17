@@ -172,7 +172,7 @@ func broadcastToInputWS(msg map[string]any) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("inputws: listener panic: %v", r)
+					log.Printf("input: listener panic: %v", r)
 				}
 			}()
 			fn(msg)
@@ -313,10 +313,8 @@ func forwardTabCommand(data []byte) {
 	if base.URL != "" {
 		cmd["url"] = base.URL
 	}
-	out, _ := json.Marshal(cmd)
-	log.Printf("tabs: cmd → %s", out)
 	if !writeCtrlCommand(cmd) {
-		log.Printf("tabs: runner ctrl socket not connected, dropping command")
+		log.Printf("tabs: no ctrl socket, dropped")
 	}
 }
 
@@ -337,7 +335,7 @@ func writeCtrlCommand(cmd map[string]any) bool {
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	if _, err := conn.Write(append(out, '\n')); err != nil {
-		log.Printf("tabs: ctrl write failed: %v", err)
+		log.Printf("tabs: ctrl write: %v", err)
 		return false
 	}
 	return true
@@ -351,7 +349,7 @@ func startTabCtrl() {
 				time.Sleep(time.Second)
 				continue
 			}
-			log.Printf("tabs: connected to runner ctrl socket")
+			log.Printf("tabs: ctrl connected")
 			tabMu.Lock()
 			ctrlConn = conn
 			tabMu.Unlock()
@@ -430,7 +428,7 @@ func startTabCtrl() {
 			}
 			tabMu.Unlock()
 			conn.Close()
-			log.Printf("tabs: ctrl socket lost, retrying in 1s")
+			log.Printf("tabs: ctrl lost, retry 1s")
 			time.Sleep(time.Second)
 		}
 	}()

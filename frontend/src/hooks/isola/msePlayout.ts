@@ -129,7 +129,6 @@ export function flushPendingSegments(
     refs.appendFailRef.current++;
     pending.unshift(seg);
     if (refs.appendFailRef.current < APPEND_MAX_RETRIES) {
-      console.warn('[isola] appendBuffer deferred, retrying:', e);
       if (refs.appendRetryTimerRef.current === null) {
         refs.appendRetryTimerRef.current = setTimeout(() => {
           refs.appendRetryTimerRef.current = null;
@@ -138,7 +137,7 @@ export function flushPendingSegments(
       }
       return;
     }
-    console.error('[isola] appendBuffer failed repeatedly, resetting stream:', e);
+    console.error('[isola] appendBuffer retry limit, resetting', e);
     refs.appendFailRef.current = 0;
     refs.sourceBufferRef.current = null;
     refs.pendingSegmentsRef.current = [];

@@ -260,7 +260,7 @@ func listenFrames(socketPath string) (<-chan *Frame, error) {
 				}
 				// A persistent accept error (fd exhaustion in a 3-CPU container)
 				// used to spin here at full core forever, starving capture.
-				log.Printf("frame reader: accept: %v", err)
+				log.Printf("mux: frame accept: %v", err)
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}

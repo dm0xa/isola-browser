@@ -451,7 +451,7 @@ func (h *streamHub) attach(sub *streamSub, key runKey, resetReason string) *stre
 	h.mu.Unlock()
 
 	if !fresh && (shared.kbps != key.kbps || shared.scale != key.scale) {
-		log.Printf("ws: run cap %d reached, %d kbps/scale %.2f shares the %d kbps run (scale %.2f)",
+		log.Printf("ws: run cap %d, sharing %dkbps/%.2f → %dkbps/%.2f",
 			maxConcurrentRuns, key.kbps, key.scale, shared.kbps, shared.scale)
 	}
 	// Outside the lock: the producer gate reads the hub, and stopping the
@@ -654,18 +654,17 @@ func (h *streamHub) requestKeyframe(sub *streamSub) {
 	if ok, reason := sub.keyframeBudgetAllows(now); !ok {
 		reqs, lastAt := sub.keyframeReqs, sub.keyframeReqAt
 		h.mu.Unlock()
-		log.Printf("ws: keyframe request refused (%s): viewer used %d/%d, last request %s ago",
-			reason, reqs, keyframeRequestsPerConn, now.Sub(lastAt).Round(time.Second))
+		log.Printf("ws: keyframe refused (%s) %d/%d", reason, sub.keyframeReqs, keyframeRequestsPerConn)
 		return
 	}
 	if !keyframeRestartAllowed(run.startedAt, run.keyframeAt.Load(), now) {
 		h.mu.Unlock()
-		log.Printf("ws: keyframe request ignored, encoder has not emitted an IDR yet")
+		log.Printf("ws: keyframe refused (no idr) %d/%d", sub.keyframeReqs, keyframeRequestsPerConn)
 		return
 	}
 	if !h.lastForcedKeyframe.IsZero() && now.Sub(h.lastForcedKeyframe) < lateJoinRestartCooldown {
 		h.mu.Unlock()
-		log.Printf("ws: keyframe request ignored, restart cooldown")
+		log.Printf("ws: keyframe refused (cooldown) viewer %d/%d", sub.keyframeReqs, keyframeRequestsPerConn)
 		return
 	}
 	// Start the replacement first: if ffmpeg will not come up, the viewers keep
@@ -673,7 +672,7 @@ func (h *streamHub) requestKeyframe(sub *streamSub) {
 	fresh := h.spawnLocked(run.key, "requested")
 	if fresh == nil {
 		h.mu.Unlock()
-		log.Printf("ws: keyframe restart at %d kbps failed", run.key.kbps)
+		log.Printf("ws: keyframe restart %dkbps: spawn failed", run.key.kbps)
 		return
 	}
 	h.lastForcedKeyframe = now
@@ -714,7 +713,6 @@ func (h *streamHub) requestKeyframe(sub *streamSub) {
 	if orphan != nil {
 		h.stop(orphan)
 	}
-	log.Printf("ws: forced keyframe at %d kbps (client request)", key.kbps)
 }
 
 // resizeAll re-keys every encoder run to a new producer geometry.
@@ -751,7 +749,7 @@ func (h *streamHub) resizeAll(width, height int) {
 		if fresh == nil || fresh.stopping {
 			fresh = h.spawnLocked(newKey, "resize")
 			if fresh == nil {
-				log.Printf("ws: resize to %dx%d failed for kbps=%d scale=%.2f; keeping the old encoder",
+				log.Printf("ws: resize %dx%d failed (kbps=%d scale=%.2f), keeping old encoder",
 					width, height, key.kbps, key.scale)
 				continue
 			}
@@ -783,7 +781,7 @@ func (h *streamHub) resizeAll(width, height int) {
 		h.stop(p.old)
 	}
 	if len(plan) > 0 {
-		log.Printf("ws: encoder re-keyed to %dx%d (%d run(s))", width, height, len(plan))
+		log.Printf("ws: re-keyed %dx%d (%d runs)", width, height, len(plan))
 	}
 }
 
@@ -811,7 +809,7 @@ func (h *streamHub) spawnLocked(key runKey, reason string) *streamRun {
 	cmd, stdin, stdout, codec, encW, encH, encodeFps, err :=
 		startEncoder(key.width, key.height, key.fps, key.kbps, key.scale, key.rawH264)
 	if err != nil {
-		log.Printf("ws: encoder error: %v", err)
+		log.Printf("ws: encoder: %v", err)
 		return nil
 	}
 	return &streamRun{
@@ -842,14 +840,14 @@ func (h *streamHub) stop(run *streamRun) {
 		select {
 		case <-run.exited:
 		case <-time.After(2 * time.Second):
-			log.Printf("ws: encoder pumps did not exit in time")
+			log.Printf("ws: pump exit timeout")
 		}
 	}
 	// cmd.Wait is called here and only here — a Cmd must be waited on exactly
 	// once, and this is after the stdout pump has drained (Wait closes the
 	// pipe the pump reads, which would otherwise race it).
 	if err := run.cmd.Wait(); err != nil {
-		log.Printf("encoder: ffmpeg exited: %v", err)
+		log.Printf("encoder: ffmpeg exit: %v", err)
 	}
 }
 
@@ -976,7 +974,7 @@ func (r *streamRun) pumpFrames(wg *sync.WaitGroup) {
 			if !frameMatchesRun(stride, height, r.key) {
 				if !r.geometryWaitLogged {
 					r.geometryWaitLogged = true
-					log.Printf("ws: waiting for producer geometry %dx%d (surface is %dx%d)",
+					log.Printf("ws: waiting geometry %dx%d (surface %dx%d)",
 						r.key.width, r.key.height, int(stride)/4, height)
 				}
 				r.skippedTicks.Add(1)
@@ -1123,7 +1121,7 @@ func (r *streamRun) reportOutputError(err error) {
 	select {
 	case <-r.stop:
 	default:
-		log.Printf("ws: ffmpeg stdout read error: %v", err)
+		log.Printf("ws: ffmpeg stdout: %v", err)
 	}
 }
 

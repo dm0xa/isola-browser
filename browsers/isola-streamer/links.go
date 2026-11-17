@@ -202,7 +202,7 @@ func linksHandler(w http.ResponseWriter, r *http.Request) {
 	// Refresh refs first so any ref we return is valid for click on this page
 	// state. Best-effort: links are still returned without refs if it fails.
 	if _, err := refreshSnapshotRefs(); err != nil {
-		log.Printf("links: snapshot refresh: %v", err)
+		log.Printf("links: refresh: %v", err)
 	}
 
 	body, err := cdpClient.evaluateStringTimeout(buildLinksExpression(linksMaxLimit), linksTimeout)

@@ -972,6 +972,6 @@ func graphHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "no-store")
 	if err := png.Encode(w, img); err != nil {
-		log.Printf("graph: encode png: %v", err)
+		log.Printf("graph: png: %v", err)
 	}
 }

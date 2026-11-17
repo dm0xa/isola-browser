@@ -57,7 +57,7 @@ func BuildOnSessionReady() func(ctx context.Context, ev api.SessionEvent) {
 		}
 		for _, hook := range SessionHooks() {
 			if err := hook.OnCreate(ctx, sc); err != nil {
-				log.Warn().Err(err).Str("hook", hook.Info().Name).Msg("session hook OnCreate failed")
+				log.Warn().Err(err).Str("hook", hook.Info().Name).Msg("hook: on_create")
 			}
 		}
 		for _, audit := range AuditLoggers() {
@@ -88,7 +88,7 @@ func BuildOnSessionDeleted() func(ctx context.Context, ev api.SessionEvent) {
 		}
 		for _, hook := range SessionHooks() {
 			if err := hook.OnTerminate(ctx, sc); err != nil {
-				log.Warn().Err(err).Str("hook", hook.Info().Name).Msg("session hook OnTerminate failed")
+				log.Warn().Err(err).Str("hook", hook.Info().Name).Msg("hook: on_terminate")
 			}
 		}
 		for _, audit := range AuditLoggers() {

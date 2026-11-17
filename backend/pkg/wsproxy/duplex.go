@@ -171,7 +171,7 @@ func proxyDuplex(
 				log.Warn().
 					Str("session_id", sessionID).
 					Int64("bytes", n).
-					Msg("relay: oversized control frame from container; closing")
+					Msg("relay: oversized control frame")
 				return
 			}
 			if err := w.Close(); err != nil {
@@ -282,7 +282,7 @@ func relayViewOnlyClient(
 			log.Warn().
 				Str("session_id", sessionID).
 				Dur("window", viewOnlyKeyframeWindow).
-				Msg("view-only request_keyframe dropped: one per window")
+				Msg("relay: keyframe rate-limited")
 			continue
 		}
 		_ = container.SetWriteDeadline(time.Now().Add(duplexWriteDeadline))

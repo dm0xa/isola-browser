@@ -164,7 +164,7 @@ func (a auditAdapter) Log(ctx context.Context, event plugin.AuditEvent) {
 	ctx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 	if err := a.m.clientSnapshot().post(ctx, "/audit/log", event, nil); err != nil {
-		log.Warn().Str("module", a.m.man.Module).Err(err).Msg("modulehost: audit log delivery failed")
+		log.Warn().Str("module", a.m.man.Module).Err(err).Msg("modulehost: audit delivery")
 	}
 }
 

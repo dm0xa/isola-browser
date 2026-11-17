@@ -219,11 +219,9 @@ func (p *Proxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	shareToken := strings.TrimSpace(r.URL.Query().Get("share_token"))
 	adminToken := strings.TrimSpace(r.URL.Query().Get("admin_token"))
 
-	log.Info().Str("session_id", sessionID).Bool("host", isHost).Str("channel", channel).Msg("websocket connection request")
-
 	canView, canControl, err := p.authorizeAccess(r.Context(), sessionID, sessionToken, shareToken, adminToken)
 	if err != nil {
-		log.Error().Err(err).Str("session_id", sessionID).Msg("failed to authorize websocket access")
+		log.Warn().Err(err).Str("session_id", sessionID).Msg("relay: authorize failed")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -257,7 +255,7 @@ func (p *Proxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	addr, err := p.getContainerAddr(r.Context(), sessionID)
 	if err != nil {
-		log.Error().Err(err).Str("session_id", sessionID).Msg("failed to resolve container address")
+		log.Warn().Err(err).Str("session_id", sessionID).Msg("relay: address resolve failed")
 		http.Error(w, "session not found or expired", http.StatusNotFound)
 		return
 	}
@@ -274,7 +272,7 @@ func (p *Proxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// point at which the relay can tell the sandbox is gone.
 	containerWS, err := p.dialContainer(addr, r, isInput)
 	if err != nil {
-		log.Error().Err(err).Str("session_id", sessionID).Str("container_addr", addr).Str("channel", channel).Msg("isola: container relay dial failed")
+		log.Error().Err(err).Str("session_id", sessionID).Str("container_addr", addr).Str("channel", channel).Msg("relay: dial failed")
 		p.reapGoneContainer(sessionID)
 		http.Error(w, "sandbox unavailable", http.StatusBadGateway)
 		return
@@ -305,15 +303,9 @@ func (p *Proxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	if isInput {
-		log.Info().Str("session_id", sessionID).Str("container_addr", addr).Msg("isola: input relay started")
-		proxyDuplex(clientConn, containerWS, sessionID, closeAll, done, p.trackActivity, &bytesIn, &bytesOut, p.clipboardHook, !canControl)
-	} else {
-		log.Info().Str("session_id", sessionID).Str("container_addr", addr).Msg("isola: duplex relay started")
-		proxyDuplex(clientConn, containerWS, sessionID, closeAll, done, p.trackActivity, &bytesIn, &bytesOut, p.clipboardHook, !canControl)
-	}
+	proxyDuplex(clientConn, containerWS, sessionID, closeAll, done, p.trackActivity, &bytesIn, &bytesOut, p.clipboardHook, !canControl)
 
-	log.Info().Str("session_id", sessionID).Str("channel", channel).Int64("bytes_in", bytesIn).Int64("bytes_out", bytesOut).Msg("proxy connection closed")
+	log.Debug().Str("session_id", sessionID).Str("channel", channel).Int64("bytes_in", bytesIn).Int64("bytes_out", bytesOut).Msg("relay: connection closed")
 }
 
 // dialContainer opens the relay's upstream socket to the sandbox.

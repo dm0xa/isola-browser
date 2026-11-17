@@ -149,7 +149,7 @@ func detectHWEncoder() *hwEncoder {
 func probeHWEncoder() *hwEncoder {
 	out, err := exec.Command("ffmpeg", "-hide_banner", "-encoders").Output()
 	if err != nil {
-		log.Printf("encoder: hw probe failed (%v) — using libx264", err)
+		log.Printf("encoder: hw probe %v, libx264", err)
 		return nil
 	}
 	encoders := string(out)
@@ -190,7 +190,7 @@ func probeHWEncoder() *hwEncoder {
 		if probeEncoderUsable(c) {
 			return c
 		}
-		log.Printf("encoder: %s is compiled in but unusable on this host — skipping", c.name)
+		log.Printf("encoder: %s unusable, skipping", c.name)
 	}
 	return nil
 }
@@ -505,7 +505,12 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 		for {
 			n, err := stderr.Read(buf)
 			if n > 0 {
-				log.Printf("ffmpeg: %s", string(buf[:n]))
+				msg := string(buf[:n])
+				// x264 stats/config noise is not a problem report; only
+				// surface genuine errors and warnings.
+				if !strings.Contains(msg, "x264 [info]") && !strings.Contains(msg, "[libx264") && !strings.Contains(msg, "configuration:") {
+					log.Printf("ffmpeg: %s", msg)
+				}
 			}
 			if err != nil {
 				return
@@ -519,10 +524,10 @@ func startEncoder(width, height, fps, bitrateKbps int, scale float64, rawH264 bo
 	// the stream hub's stop() owns that (after the stdout pump has drained,
 	// since Wait closes the pipe). Waiting here as well races on Cmd internals.
 	if encW != width || encH != height {
-		log.Printf("encoder: capture %dx%d → encode %dx%d", width, height, encW, encH)
+		log.Printf("encoder: %dx%d → %dx%d", width, height, encW, encH)
 	}
-	log.Printf("encoder: ffmpeg started capture=%dx%d encode=%dx%d@%dfps(capped from %d) %dkbps gop=%d codec=%s enc=%s raw=%v (pid=%d)",
-		width, height, encW, encH, encodeFps, fps, bitrateKbps, gop, codec, encName, rawH264, cmd.Process.Pid)
+	log.Printf("encoder: ffmpeg %dx%d@%d %dkbps %s pid=%d",
+		encW, encH, encodeFps, bitrateKbps, codec, cmd.Process.Pid)
 	return cmd, stdin, stdout, codec, encW, encH, encodeFps, nil
 }
 

@@ -109,7 +109,7 @@ func (fb *frameBroadcaster) composeLocked(f *Frame) {
 		fb.surface = make([]byte, need)
 		fb.surfH, fb.surfStr = f.Height, f.Stride
 		changed = true
-		log.Printf("broadcaster: surface now %dx%d stride=%d", f.Width, f.Height, f.Stride)
+		log.Printf("broadcaster: surface %dx%d stride=%d", f.Width, f.Height, f.Stride)
 	}
 	if applyRects(fb.surface, fb.surfStr, f) {
 		changed = true
@@ -305,7 +305,7 @@ func (fb *frameBroadcaster) Subscribe() chan *Frame {
 	n := len(fb.subs)
 	fb.mu.Unlock()
 
-	log.Printf("broadcaster: subscriber added (total=%d, seeded=%v)", n, fb.latest != nil)
+	log.Printf("broadcaster: +sub n=%d", n)
 	return ch
 }
 
@@ -321,5 +321,4 @@ func (fb *frameBroadcaster) Unsubscribe(ch chan *Frame) {
 	delete(fb.subs, ch)
 	fb.mu.Unlock()
 	close(ch)
-	log.Printf("broadcaster: subscriber removed (total=%d)", fb.subscriberCount())
 }

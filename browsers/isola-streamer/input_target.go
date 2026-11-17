@@ -50,7 +50,7 @@ func startInputTargetWatchdog() {
 			if !cdpClient.AlignTarget(active) {
 				continue
 			}
-			log.Printf("input: re-aligned to active tab %q (was bound to %q)", active, attached)
+			log.Printf("input: realign %q (was %q)", active, attached)
 		}
 	}()
 }

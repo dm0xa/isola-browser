@@ -31,7 +31,7 @@ func Mount(r chi.Router, cfg *config.Config, deps Deps) {
 		return
 	}
 	if len(cfg.MCPTokens) == 0 {
-		log.Error().Msg("mcp.enabled=true but mcp.token is empty — /mcp not mounted")
+		log.Error().Msg("mcp: no token, not mounted")
 		return
 	}
 	expectedTokens := cfg.MCPTokens
@@ -55,5 +55,5 @@ func Mount(r chi.Router, cfg *config.Config, deps Deps) {
 		ctx := context.WithValue(req.Context(), clientAddrKey{}, req.RemoteAddr)
 		mcpHandler.ServeHTTP(w, req.WithContext(ctx))
 	}))
-	log.Info().Msg("MCP server mounted at POST /mcp (Bearer token required)")
+	log.Info().Msg("mcp: mounted")
 }

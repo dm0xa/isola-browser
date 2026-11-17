@@ -120,7 +120,7 @@ func setupMux(port string, wsHandler http.HandlerFunc) (net.Listener, error) {
 		// when it spawned, so each run is replaced and its viewers reset onto
 		// the new geometry (stream_reset reason=resize).
 		hubFor(globalBroadcaster).resizeAll(width, height)
-		log.Printf("mux: resize to %dx%d (runner notified=%v)", width, height, notified)
+		log.Printf("mux: resize %dx%d (notified=%v)", width, height, notified)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
@@ -128,7 +128,7 @@ func setupMux(port string, wsHandler http.HandlerFunc) (net.Listener, error) {
 	go httpSrv.Serve(httpL)
 
 	go m.Serve()
-	log.Printf("isola-streamer listening on :%s", port)
+	log.Printf("streamer :%s", port)
 	return l, nil
 }
 

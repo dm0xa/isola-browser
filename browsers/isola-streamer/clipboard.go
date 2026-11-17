@@ -72,7 +72,7 @@ func readSandboxClipboard() (string, error) {
 func syncSandboxClipboard(writeJSON func(map[string]any)) {
 	text, err := readSandboxClipboard()
 	if err != nil {
-		log.Printf("clipboard: read failed: %v", err)
+		log.Printf("clipboard: read: %v", err)
 		return
 	}
 	if text == "" {

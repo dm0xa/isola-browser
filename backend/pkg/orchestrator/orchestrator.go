@@ -155,13 +155,13 @@ func (o *Orchestrator) proxyIPOnBrowserNet() string {
 			"{{(index .NetworkSettings.Networks \"browser-net\").IPAddress}}", hostname,
 		).Output()
 		if err != nil {
-			log.Warn().Err(err).Msg("could not resolve backend browser-net IP; session service ports stay open to the bridge")
+			log.Warn().Err(err).Msg("browser-net: resolve")
 			return
 		}
 		ip := strings.TrimSpace(string(out))
 		if net.ParseIP(ip) != nil {
 			o.proxyIP = ip
-			log.Info().Str("proxy_ip", ip).Msg("session service ports will be restricted to this proxy")
+			log.Info().Str("ip", ip).Msg("ports: proxy-only")
 		}
 	})
 	return o.proxyIP
@@ -181,7 +181,7 @@ func runningInContainer() bool {
 
 // New creates a new Orchestrator.
 func New(dockerHost string) (*Orchestrator, error) {
-	log.Info().Str("docker_host", dockerHost).Msg("orchestrator initialized")
+	log.Info().Str("docker_host", dockerHost).Msg("orchestrator: init")
 	return &Orchestrator{host: dockerHost}, nil
 }
 
@@ -373,7 +373,7 @@ func dnsArgs(servers []string) []string {
 // CreateSession starts a new browser-node container.
 func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionParams) (*SessionInfo, error) {
 	name := "isola-" + params.SessionID[:12]
-	log.Info().Str("session_id", params.SessionID).Str("url", params.TargetURL).Msg("creating container")
+	log.Info().Str("session_id", params.SessionID).Str("url", params.TargetURL).Msg("container: create")
 
 	// Validate browser flags at container creation (defense-in-depth beyond admin API)
 	if err := validateBrowserFlags(params.BrowserFlags); err != nil {
@@ -406,7 +406,7 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 		GPUPassthrough: gpuPassthrough,
 	})...)
 	if gpuPassthrough {
-		log.Info().Msg("GPU: ISOLA_GPU=1 and /dev/dri/renderD128 present, passing through for HW encoding")
+		log.Info().Msg("gpu passthrough")
 	}
 	cmdArgs = append(cmdArgs, containerLabels(params.SessionID, params.UserID, params.warmLabel)...)
 	if params.PinnedHost != "" && params.PinnedIP != "" {
@@ -420,7 +420,7 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 	dnsCmdArgs, dnsFellBack := dnsSessionArgs(params.DNSMode, o.dnsProxyEnabled, o.proxyIPOnBrowserNet(), params.DNSServers)
 	if dnsFellBack {
 		o.dnsFallbackWarnOnce.Do(func() {
-			log.Warn().Str("mode", params.DNSMode).Msg("DNS proxy unavailable; falling back to plaintext resolvers for this deployment")
+			log.Warn().Str("mode", params.DNSMode).Msg("dns: plaintext fallback")
 		})
 	}
 	cmdArgs = append(cmdArgs, dnsCmdArgs...)
@@ -435,9 +435,9 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 	if p := strings.TrimSpace(os.Getenv("ISOLA_SECCOMP_PROFILE")); p != "" {
 		if _, err := os.Stat(p); err == nil {
 			cmdArgs = append(cmdArgs, "--security-opt", "seccomp="+p)
-			log.Info().Str("profile", p).Msg("applying custom seccomp profile")
+			log.Info().Str("profile", p).Msg("seccomp: profile")
 		} else {
-			log.Warn().Str("profile", p).Msg("ISOLA_SECCOMP_PROFILE not found; using Docker default seccomp")
+			log.Warn().Str("profile", p).Msg("seccomp: default")
 		}
 	}
 
@@ -500,7 +500,7 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		sanitized := sanitizeOutput(string(out))
-		log.Error().Err(err).Str("output", sanitized).Str("session_id", params.SessionID).Msg("failed to create container")
+		log.Error().Err(err).Str("output", sanitized).Str("session_id", params.SessionID).Msg("container: create")
 		return nil, fmt.Errorf("docker run: %w: %s", err, sanitized)
 	}
 
@@ -519,7 +519,7 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 	hp59, hp9223, containerIP, endpointErr := o.containerEndpoints(ctx, containerID)
 	if endpointErr != nil {
 		log.Warn().Err(endpointErr).Str("container_id", containerID).
-			Msg("container endpoint discovery failed, falling back to browser-net address")
+			Msg("endpoint: discover")
 	}
 	if endpointErr == nil && hp59 > 0 && hp9223 > 0 {
 		if hostReachable(ctx, "127.0.0.1", hp59) {
@@ -528,11 +528,11 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 			cdpPort = hp9223
 			log.Info().Str("container_id", containerID).
 				Int("stream_port", port).Int("cdp_port", cdpPort).
-				Msg("container ready, using published host ports")
+				Msg("container ready")
 		} else {
 			log.Info().Str("container_id", containerID).
 				Int("stream_port", hp59).
-				Msg("published host port unreachable from this backend, falling back to browser-net address")
+				Msg("published port unreachable, browser-net")
 		}
 	}
 	if host == "" {
@@ -542,7 +542,7 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 		host = containerIP
 		port = 5900
 		cdpPort = 9223
-		log.Info().Str("container_id", containerID).Str("ip", host).Msg("container ready, using browser-net address")
+		log.Info().Str("container_id", containerID).Str("ip", host).Msg("container ready")
 	}
 
 	return &SessionInfo{
@@ -592,11 +592,11 @@ func (o *Orchestrator) FinalizeRunningSession(ctx context.Context, st *store.Mem
 		return
 	}
 	sid := sess.ID.String()
-	log.Info().Str("session_id", sid).Msg("finalizing session termination")
+	log.Info().Str("session_id", sid).Msg("session: terminate")
 
 	if sess.ContainerID != "" {
 		if err := o.TerminateSession(ctx, sess.ContainerID); err != nil {
-			log.Warn().Err(err).Str("container_id", sess.ContainerID).Msg("finalize: container stop failed")
+			log.Warn().Err(err).Str("container_id", sess.ContainerID).Msg("finalize: stop")
 		}
 	}
 
@@ -641,7 +641,7 @@ func (o *Orchestrator) FinalizeIfContainerGone(ctx context.Context, st *store.Me
 	}
 
 	log.Warn().Str("session_id", sid).Str("container_id", sess.ContainerID).
-		Msg("relay dial refused and container is gone, finalizing session")
+		Msg("relay: refused, finalizing")
 	o.containerMisses.Delete(sid)
 	s := *sess
 	o.FinalizeRunningSession(ctx, st, cache, &s)
@@ -656,12 +656,12 @@ func (o *Orchestrator) TerminateSession(ctx context.Context, containerID string)
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	log.Info().Str("container_id", containerID).Msg("terminating container")
+	log.Info().Str("container_id", containerID).Msg("container: terminate")
 
 	cmd := o.dockerCmd(ctx, "stop", "-t", "3", containerID)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Warn().Err(err).Str("output", string(out)).Str("container_id", containerID).Msg("docker stop failed, force-removing")
+		log.Warn().Err(err).Str("output", string(out)).Str("container_id", containerID).Msg("docker stop: force remove")
 	} else {
 		// Containers run with --rm, so a successful stop already removed it.
 		// `rm -f` on a vanished container is safe but costs another CLI spawn
@@ -689,7 +689,6 @@ func (o *Orchestrator) ResizeSessionDisplay(ctx context.Context, containerHost s
 		return fmt.Errorf("streamer address unknown")
 	}
 
-	log.Info().Str("container_host", containerHost).Int("port", containerPort).Int("width", width).Int("height", height).Msg("resize: notifying isola-streamer")
 	url := fmt.Sprintf("http://%s/resize?width=%d&height=%d",
 		net.JoinHostPort(containerHost, fmt.Sprintf("%d", containerPort)), width, height)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
@@ -708,7 +707,6 @@ func (o *Orchestrator) ResizeSessionDisplay(ctx context.Context, containerHost s
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 		return fmt.Errorf("resize returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	log.Info().Str("container_host", containerHost).Msg("resize: isola resize ok")
 	return nil
 }
 
@@ -729,7 +727,7 @@ func (o *Orchestrator) WaitForStream(ctx context.Context, host string, port int,
 
 		ready, err := o.waitForIsolaReady(host, port)
 		if err == nil && ready {
-			log.Info().Str("addr", addr).Str("browser_type", browserType).Msg("isola stream is ready")
+			log.Debug().Str("addr", addr).Str("browser_type", browserType).Msg("stream ready")
 			return nil
 		}
 		select {
@@ -868,16 +866,16 @@ func (o *Orchestrator) StartReaper(ctx context.Context, st *store.MemStore, cach
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Msg("reaper stopping")
+			log.Info().Msg("reaper: stop")
 			return
 		case <-ticker.C:
 			sessions, err := st.ListExpiredRunningSessions(ctx)
 			if err != nil {
-				log.Error().Err(err).Msg("reaper: failed to list expired sessions")
+				log.Warn().Err(err).Msg("reaper: list")
 				continue
 			}
 			for _, sess := range sessions {
-				log.Info().Str("session_id", sess.ID.String()).Msg("reaper: terminating expired session")
+				log.Info().Str("session_id", sess.ID.String()).Msg("reaper: expired")
 				s := sess
 				o.FinalizeRunningSession(ctx, st, cache, &s)
 			}
@@ -893,16 +891,16 @@ func (o *Orchestrator) StartIdleReaper(ctx context.Context, st *store.MemStore, 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Msg("idle reaper stopping")
+			log.Info().Msg("idle reaper: stop")
 			return
 		case <-ticker.C:
 			sessions, err := st.ListIdleSessions(ctx, idleTimeout)
 			if err != nil {
-				log.Error().Err(err).Msg("idle reaper: failed to list idle sessions")
+				log.Warn().Err(err).Msg("idle reaper: list")
 				continue
 			}
 			for _, sess := range sessions {
-				log.Info().Str("session_id", sess.ID.String()).Msg("idle reaper: terminating idle session")
+				log.Info().Str("session_id", sess.ID.String()).Msg("idle reaper: idle")
 				s := sess
 				o.FinalizeRunningSession(ctx, st, cache, &s)
 			}
@@ -918,12 +916,12 @@ func (o *Orchestrator) StartHealthChecker(ctx context.Context, st *store.MemStor
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Msg("health checker stopping")
+			log.Info().Msg("health: stop")
 			return
 		case <-ticker.C:
 			sessions, err := st.ListRunningSessions(ctx)
 			if err != nil {
-				log.Error().Err(err).Msg("health checker: failed to list running sessions")
+				log.Warn().Err(err).Msg("health: list")
 				continue
 			}
 			for _, sess := range sessions {
@@ -946,7 +944,7 @@ func (o *Orchestrator) StartHealthChecker(ctx context.Context, st *store.MemStor
 					// re-probe on the next tick instead of finalizing.
 					log.Warn().Err(inspectErr).Str("session_id", sess.ID.String()).
 						Str("container_id", sess.ContainerID).
-						Msg("health checker: runtime unreachable, skipping")
+						Msg("health: runtime unreachable")
 					continue
 				}
 				if running {
@@ -970,7 +968,7 @@ func (o *Orchestrator) StartHealthChecker(ctx context.Context, st *store.MemStor
 					log.Warn().Err(inspectErr).Str("session_id", sess.ID.String()).
 						Str("container_id", sess.ContainerID).
 						Str("output", strings.TrimSpace(string(out))).
-						Msg("health checker: inconclusive probe, skipping")
+						Msg("health: inconclusive probe")
 					continue
 				}
 				// The runtime answered, and not with "running": the container is
@@ -978,12 +976,12 @@ func (o *Orchestrator) StartHealthChecker(ctx context.Context, st *store.MemStor
 				// negative does not finalize a live session.
 				misses := o.noteContainerMiss(sess.ID.String())
 				if misses < containerMissLimit {
-					log.Warn().Str("session_id", sess.ID.String()).
+					log.Debug().Str("session_id", sess.ID.String()).
 						Str("container_id", sess.ContainerID).Int("misses", misses).
-						Msg("health checker: container not running (confirming)")
+						Msg("health: down, confirming")
 					continue
 				}
-				log.Warn().Str("session_id", sess.ID.String()).Str("container_id", sess.ContainerID).Msg("container dead, cleaning up")
+				log.Warn().Str("session_id", sess.ID.String()).Str("container_id", sess.ContainerID).Msg("health: container dead")
 				o.containerMisses.Delete(sess.ID.String())
 				s := sess
 				o.FinalizeRunningSession(ctx, st, cache, &s)
@@ -1006,7 +1004,7 @@ func (o *Orchestrator) dockerReachable(ctx context.Context) bool {
 		return true
 	}
 	log.Warn().Err(err).Str("output", strings.TrimSpace(string(out))).
-		Msg("startup reconcile: container runtime unreachable")
+		Msg("reconcile: runtime unreachable")
 	return false
 }
 
@@ -1019,7 +1017,7 @@ func (o *Orchestrator) ReconcileRestoredSessions(ctx context.Context, st *store.
 
 	sessions, err := st.ListActiveSessions(ctx)
 	if err != nil {
-		log.Warn().Err(err).Msg("startup reconcile: list active sessions failed")
+		log.Warn().Err(err).Msg("reconcile: list")
 		return
 	}
 	if len(sessions) == 0 {
@@ -1028,7 +1026,7 @@ func (o *Orchestrator) ReconcileRestoredSessions(ctx context.Context, st *store.
 
 	if !o.dockerReachable(ctx) {
 		log.Warn().Int("sessions", len(sessions)).
-			Msg("startup reconcile: runtime unreachable, leaving restored sessions alone")
+			Msg("reconcile: runtime unreachable, kept")
 		return
 	}
 
@@ -1047,13 +1045,13 @@ func (o *Orchestrator) ReconcileRestoredSessions(ctx context.Context, st *store.
 		s := sess
 		log.Info().Str("session_id", s.ID.String()).Str("status", s.Status).
 			Str("container_id", s.ContainerID).
-			Msg("startup reconcile: dropping restored session with no live container")
+			Msg("reconcile: dropping, no container")
 		o.FinalizeRunningSession(ctx, st, cache, &s)
 		dropped++
 	}
 
 	log.Info().Int("checked", len(sessions)).Int("dropped", dropped).
-		Msg("startup reconcile: restored sessions checked")
+		Msg("reconcile: done")
 }
 
 // listLabeledSessionContainers returns isola session containers with their session_id label.
@@ -1064,7 +1062,7 @@ func (o *Orchestrator) listLabeledSessionContainers(ctx context.Context) []label
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Warn().Err(err).Str("output", string(out)).Msg("orphan sweep: docker ps failed")
+		log.Warn().Err(err).Str("output", string(out)).Msg("sweep: docker ps")
 		return nil
 	}
 	return parseLabeledContainers(string(out))
@@ -1107,7 +1105,7 @@ func (o *Orchestrator) listWarmContainers(ctx context.Context) []string {
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Warn().Err(err).Str("output", string(out)).Msg("warm pool: docker ps failed")
+		log.Warn().Err(err).Str("output", string(out)).Msg("warm pool: docker ps")
 		return nil
 	}
 	var ids []string
@@ -1134,10 +1132,10 @@ func (o *Orchestrator) RemoveContainerByName(ctx context.Context, name string) {
 	if err != nil {
 		log.Debug().Err(err).Str("name", name).
 			Str("output", strings.TrimSpace(string(out))).
-			Msg("container cleanup by name (likely never created)")
+			Msg("rm by name (likely uncreated)")
 		return
 	}
-	log.Info().Str("name", name).Msg("removed container left by a failed create")
+	log.Info().Str("name", name).Msg("rm orphan by name")
 }
 
 // CleanupOrphanContainers removes session containers that are not tracked as active.
@@ -1145,7 +1143,7 @@ func (o *Orchestrator) CleanupOrphanContainers(ctx context.Context, st *store.Me
 	active := make(map[string]bool)
 	sessions, err := st.ListActiveSessions(ctx)
 	if err != nil {
-		log.Warn().Err(err).Msg("orphan sweep: list active sessions failed")
+		log.Warn().Err(err).Msg("sweep: list")
 		return
 	}
 	for _, sess := range sessions {
@@ -1162,7 +1160,7 @@ func (o *Orchestrator) CleanupOrphanContainers(ctx context.Context, st *store.Me
 		if active[c.ID] {
 			continue
 		}
-		log.Info().Str("container_id", c.ID).Str("session_id", c.SessionID).Msg("orphan sweep: removing untracked container")
+		log.Info().Str("container_id", c.ID).Str("session_id", c.SessionID).Msg("sweep: removing untracked")
 		_ = o.TerminateSession(ctx, c.ID)
 		if c.SessionID != "" {
 			if id, err := uuid.Parse(c.SessionID); err == nil {
@@ -1181,7 +1179,7 @@ func (o *Orchestrator) StartOrphanCleaner(ctx context.Context, st *store.MemStor
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Msg("orphan cleaner stopping")
+			log.Info().Msg("sweep: stop")
 			return
 		case <-ticker.C:
 			o.CleanupOrphanContainers(ctx, st, cache)

@@ -74,7 +74,7 @@ export function createWcDecoder(
         }
       },
       error: (e) => {
-        console.error('[isola-wc] decoder error:', e);
+        console.error('[isola-wc] decoder:', e);
         refs.decodeErrorCountRef.current++;
         refs.keyframeSeenRef.current = false; // out of sync until the next IDR
         callbacks.beginRecovery();
@@ -84,7 +84,7 @@ export function createWcDecoder(
     });
     decoder.configure({ codec: cfg.codec, optimizeForLatency: true });
   } catch (e) {
-    console.error('[isola-wc] configure failed:', e);
+    console.error('[isola-wc] configure:', e);
     return null;
   }
   refs.decoderRef.current = decoder;
@@ -116,14 +116,14 @@ export function resetWcDecoder(
   try {
     decoder.reset();
   } catch (e) {
-    console.error('[isola-wc] reset failed:', e);
+    console.error('[isola-wc] reset:', e);
     return false;
   }
   try {
     decoder.configure({ codec: cfg.codec, optimizeForLatency: true });
     return true;
   } catch (e) {
-    console.error('[isola-wc] reconfigure failed:', e);
+    console.error('[isola-wc] reconfigure:', e);
     return false;
   }
 }
@@ -397,7 +397,7 @@ export function applyWcStreamInit(
       try {
         decoder.configure({ codec, optimizeForLatency: true });
       } catch (e) {
-        console.error('[isola-wc] reconfigure failed:', e);
+        console.error('[isola-wc] reconfigure:', e);
         try { decoder.close(); } catch { /* ignore */ }
         refs.decoderRef.current = null;
         return false;

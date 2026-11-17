@@ -217,7 +217,7 @@ func (c *CDPClient) dispatchChord(combo string) error {
 	}
 	def, ok := cdpKeyDefForToken(keyToken)
 	if !ok {
-		log.Printf("cdp: unknown key token %q in chord %q", keyToken, combo)
+		log.Printf("input: unknown key %q in %q", keyToken, combo)
 		return nil
 	}
 	// Printable keys carry their character as `text` — this is what makes
