@@ -11,6 +11,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// inputWSWriteDeadline bounds a single JSON write to a viewer's input socket.
+// Writes there happen from the capture pump (network/console fan-out), so a
+// stalled reader must fail fast instead of freezing capture for the session.
+const inputWSWriteDeadline = 10 * time.Second
+
 // handleInputWS accepts JSON input events on a dedicated WebSocket so they
 // don't share the video stream connection (avoids head-of-line blocking).
 // It also serves control requests that need a reply — get_selection (read
@@ -34,6 +39,11 @@ func handleInputWS(w http.ResponseWriter, r *http.Request) {
 	writeJSON := func(msg map[string]any) {
 		wmu.Lock()
 		defer wmu.Unlock()
+		// This runs on the CDP capture read goroutine (network/console events),
+		// and the relay only bounds a write from its own side. Without a deadline
+		// here a viewer that stops draining parks the capture pump and freezes
+		// network capture for the whole session.
+		_ = conn.SetWriteDeadline(time.Now().Add(inputWSWriteDeadline))
 		_ = conn.WriteJSON(msg)
 	}
 	unregister := registerTabListener(writeJSON)

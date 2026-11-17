@@ -204,7 +204,19 @@ func netMonitorTap(scope, sessionID, method string, params json.RawMessage, tab 
 		broadcastNetMessage(hmsg)
 	}
 	if hashJob != nil {
-		go hashNetBody(hashJob)
+		select {
+		case netBodyHashSlots <- struct{}{}:
+			go func() {
+				defer func() { <-netBodyHashSlots }()
+				hashNetBody(hashJob)
+			}()
+		default:
+			// Every hash worker is busy. Parking one goroutine per finished
+			// request on the semaphore held the row's publish back for as long as
+			// the queue took (500 resources at 4 jobs/s ≈ 2 minutes), with the
+			// entry pinned meanwhile. Drop the hash instead: the row still ships.
+			go publishEntryWithoutHash(hashJob)
+		}
 	}
 }
 
@@ -517,9 +529,6 @@ func shouldHashBody(r *netRequest, sessionID string) bool {
 // publishes the finished entry. A body that cannot be read (evicted, rejected,
 // timed out) simply yields no hash — the entry still goes out, just without one.
 func hashNetBody(job *netHashJob) {
-	netBodyHashSlots <- struct{}{}
-	defer func() { <-netBodyHashSlots }()
-
 	body, ok := fetchResponseBody(job.sessionID, job.r.cdpID, netBodyHashTimeout)
 
 	netMu.Lock()
@@ -532,6 +541,21 @@ func hashNetBody(job *netHashJob) {
 	// eviction may have dropped it while the body was in flight. Build the
 	// message under the lock; a listener callback (a viewer WS write) must
 	// never run while netMu is held, or one slow viewer stalls capture.
+	var msg map[string]any
+	if netRequests[job.key] == job.r {
+		msg = netWireMessage(job.r)
+	}
+	netMu.Unlock()
+	if msg != nil {
+		broadcastNetMessage(msg)
+	}
+}
+
+// publishEntryWithoutHash ships a finished entry when no hash worker was free
+// to take it, so the row is not withheld waiting for a SHA-1 that never comes.
+func publishEntryWithoutHash(job *netHashJob) {
+	netMu.Lock()
+	job.r.hashPending = false
 	var msg map[string]any
 	if netRequests[job.key] == job.r {
 		msg = netWireMessage(job.r)
