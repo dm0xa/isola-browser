@@ -245,6 +245,12 @@ func trackerForURL(rawURL, host string) string {
 	if label := trackerFor(host); label != "" {
 		return label
 	}
+	// No hostname (data:/blob: URLs) can never match a host-qualified entry, so
+	// lowercasing the whole URL — a full copy of a possibly multi-hundred-KB
+	// data: URI — would be wasted work on every publish.
+	if host == "" {
+		return ""
+	}
 	lower := strings.ToLower(rawURL)
 	for _, entry := range trackerCatalogue {
 		slash := strings.IndexByte(entry.suffix, '/')
