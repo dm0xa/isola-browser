@@ -6,6 +6,8 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-11-17
+
 ### Fixed
 
 - The backend no longer crashes when an idle warm-pool container dies: the
@@ -509,7 +511,8 @@ publishes the section matching the tag.
 Initial release: a Go control plane that boots a disposable Docker sandbox
 running offscreen Chromium.
 
-[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/dm0xa/isola-browser/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/dm0xa/isola-browser/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/dm0xa/isola-browser/compare/v1.5.4...v1.6.0
 [1.5.4]: https://github.com/dm0xa/isola-browser/compare/v1.5.3...v1.5.4
