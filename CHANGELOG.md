@@ -6,13 +6,12 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-11-17
+
 ### Fixed
 
-- The sandbox advertises plain Chrome in its user agent instead of Electron's
-  default, which names the embedder (`electron-runner/1.0.0 ... Electron/45.1.0`).
-  UA-sniffing sites (bowser/UAParser-based supported-browser gates) classified
-  the browser as "Electron" and answered "This browser isn't supported" on a
-  current Chromium engine.
+- Sites that check the browser name no longer turn the sandbox away as
+  "Electron": it now reports the Chrome version it actually runs.
 
 ## [1.6.2] - 2026-11-17
 
@@ -519,7 +518,8 @@ publishes the section matching the tag.
 Initial release: a Go control plane that boots a disposable Docker sandbox
 running offscreen Chromium.
 
-[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.6.2...HEAD
+[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.6.3...HEAD
+[1.6.3]: https://github.com/dm0xa/isola-browser/compare/v1.6.2...v1.6.3
 [1.6.2]: https://github.com/dm0xa/isola-browser/compare/v1.6.1...v1.6.2
 [1.6.1]: https://github.com/dm0xa/isola-browser/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/dm0xa/isola-browser/compare/v1.5.4...v1.6.0
