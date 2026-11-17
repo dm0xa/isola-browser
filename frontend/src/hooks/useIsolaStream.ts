@@ -612,8 +612,13 @@ export function useIsolaStream(defaultTargetUrl?: string) {
   const inputLastMsgAtRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const mediaSourceRef = useRef<MediaSource | null>(null);
+  // The blob URL attached to the video element. Every stream_reset (ABR step,
+  // resize, forced keyframe) builds a new MediaSource; without revoking the
+  // previous URL the old MediaSource and its appended fMP4 stay alive for the
+  // life of the document, so memory grew with every quality change.
+  const mediaObjectUrlRef = useRef<string | null>(null);
   const sourceBufferRef = useRef<SourceBuffer | null>(null);
-  const pendingSegmentsRef = useRef<ArrayBuffer[]>([]);
+  const pendingSegmentsRef = useRef<Uint8Array<ArrayBuffer>[]>([]);
   // Latest MSE playout state, written by syncPlayout on each append and
   // published by the 1 Hz metrics tick. A ref, not state — see msePlayout.ts.
   const playoutRef = useRef<PlayoutMetrics>(createPlayoutMetrics());
@@ -799,6 +804,10 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     }
     sourceBufferRef.current = null;
     pendingSegmentsRef.current = [];
+    if (mediaObjectUrlRef.current) {
+      URL.revokeObjectURL(mediaObjectUrlRef.current);
+      mediaObjectUrlRef.current = null;
+    }
     if (videoRef.current) {
       videoRef.current.src = '';
       if (videoRef.current.parentNode) {
@@ -1598,7 +1607,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
 
     const mediaSource = new MediaSource();
     mediaSourceRef.current = mediaSource;
-    video.src = URL.createObjectURL(mediaSource);
+    if (mediaObjectUrlRef.current) URL.revokeObjectURL(mediaObjectUrlRef.current);
+    mediaObjectUrlRef.current = URL.createObjectURL(mediaSource);
+    video.src = mediaObjectUrlRef.current;
 
     let streamCodec = pickMseCodec(MSE_CODEC_FALLBACK);
     let gotStreamInit = false;
@@ -1633,7 +1644,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       if (gotStreamInit) addSourceBuffer(mediaSource);
     });
 
-    function appendSegment(seg: ArrayBuffer) {
+    function appendSegment(seg: Uint8Array<ArrayBuffer>) {
       const pending = pendingSegmentsRef.current;
       pending.push(seg);
       while (pending.length > MAX_PENDING_SEGMENTS) {
@@ -1708,6 +1719,11 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     function notePacket(seq: number, isKeyframe: boolean) {
       const loss = noteStreamedPacket(frameCountersRef.current, seq, isKeyframe);
       if (!loss.requestKeyframe) return;
+      // A gap means the reference chain is broken right now. The flag is the
+      // watchdog's "an IDR landed since recovery began" signal, so a stale true
+      // would make the watchdog skip its retry and never escalate to a
+      // reconnect. Clear it here, on both the MSE and WebCodecs paths.
+      keyframeSeenRef.current = false;
       beginRecovery();
       requestKeyframeNow();
     }
@@ -1948,12 +1964,25 @@ export function useIsolaStream(defaultTargetUrl?: string) {
 
     ws.onmessage = (ev) => {
       if (typeof ev.data === 'string') {
-        const msg = JSON.parse(ev.data);
+        // A truncated or rewritten text frame must not throw out of onmessage:
+        // that skips the state transition the frame carries and leaves the
+        // viewer with only an uncaught console error.
+        let msg: Record<string, unknown>;
+        try {
+          msg = JSON.parse(ev.data) as Record<string, unknown>;
+        } catch {
+          return;
+        }
+        if (typeof msg !== 'object' || msg === null) return;
         switch (msg.type) {
           case 'stream_init':
             // A new encoder run restarts seq at 0; keeping the old baseline
             // would report the whole previous run as lost.
             resetPacketLoss(frameCountersRef.current);
+            // The new run's reference chain does not contain anything the
+            // previous run emitted, so no IDR has landed *for this run* until
+            // one arrives.
+            keyframeSeenRef.current = false;
             if (wcModeRef.current && msg.mode === 'webcodecs') {
               // An ABR bitrate step is stream_reset + stream_init with the same
               // codec and geometry; the stream_reset path already dropped and
@@ -2029,8 +2058,8 @@ export function useIsolaStream(defaultTargetUrl?: string) {
             }
             break;
           case 'clipboard_sync':
-            setRemoteClipboard(msg.text || '');
-            if (msg.text) {
+            setRemoteClipboard(typeof msg.text === 'string' ? msg.text : '');
+            if (typeof msg.text === 'string' && msg.text) {
               navigator.clipboard.writeText(msg.text).catch(() => {});
             }
             break;
@@ -2082,7 +2111,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
             if (videoRef.current) {
               const ms = new MediaSource();
               mediaSourceRef.current = ms;
-              videoRef.current.src = URL.createObjectURL(ms);
+              if (mediaObjectUrlRef.current) URL.revokeObjectURL(mediaObjectUrlRef.current);
+              mediaObjectUrlRef.current = URL.createObjectURL(ms);
+              videoRef.current.src = mediaObjectUrlRef.current;
               ms.addEventListener('sourceopen', () => {
                 addSourceBuffer(ms);
               });
@@ -2104,10 +2135,10 @@ export function useIsolaStream(defaultTargetUrl?: string) {
           case 'metrics':
             setMetrics((m) => ({
               ...m,
-              inputBackend: msg.input_backend || m.inputBackend,
+              inputBackend: typeof msg.input_backend === 'string' ? msg.input_backend : m.inputBackend,
               inputTarget: typeof msg.input_target === 'string' ? msg.input_target : m.inputTarget,
               inputTargetOK: msg.input_target_ok !== false,
-              activityMode: msg.activity_mode || m.activityMode,
+              activityMode: typeof msg.activity_mode === 'string' ? msg.activity_mode : m.activityMode,
               targetFps: typeof msg.capture_fps === 'number' ? msg.capture_fps : m.targetFps,
               targetBitrateKbps: typeof msg.bitrate_kbps === 'number' ? msg.bitrate_kbps : m.targetBitrateKbps,
               encoderSeq: typeof msg.encoder_seq === 'number' ? msg.encoder_seq : m.encoderSeq,
@@ -2205,7 +2236,29 @@ export function useIsolaStream(defaultTargetUrl?: string) {
 
       if (bytes[0] === 0x01) {
         segmentsThisSecondRef.current++;
-        appendSegment(buf.slice(10));
+        // One view over the received buffer: appendBuffer takes any
+        // BufferSource, so slicing the 10-byte header off copied every
+        // fragment (25/s at 30fps) before the media stack copied it again.
+        appendSegment(new Uint8Array(buf, 10));
+        // The MSE path only ever checked keyframeSeenRef, which only the
+        // WebCodecs sink set: every IDR we appended was invisible to the
+        // watchdog, so a single loss burst re-armed a 5s timer forever,
+        // restarting the encoder until MAX_KEYFRAME_REQUESTS forced a
+        // reconnect. An appended IDR is exactly the resync signal.
+        if (isKeyframe) {
+          keyframeSeenRef.current = true;
+          const recoveryStart = recoveryStartedAtRef.current;
+          if (recoveryStart !== null) {
+            lastRecoveryMsRef.current = Math.round(performance.now() - recoveryStart);
+            recoveryStartedAtRef.current = null;
+          }
+          recoveryRequestedRef.current = false;
+          recoveryRequestsRef.current = 0;
+          if (keyframeRequestTimerRef.current !== null) {
+            clearTimeout(keyframeRequestTimerRef.current);
+            keyframeRequestTimerRef.current = null;
+          }
+        }
         // Ref only — published by the 1 Hz metrics tick, not per segment.
         notePacket(seq, isKeyframe);
         return;
@@ -2263,9 +2316,16 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         if (sid) {
           try {
             const token = getSessionToken(sid);
+            // The probe runs with no other timer pending: a half-open request
+            // (proxy restart, laptop resume) would otherwise park the viewer
+            // on "Reconnecting…" until the browser gives up on it. On timeout
+            // fall through to the reconnect attempt.
+            const ac = new AbortController();
+            const abortTimer = setTimeout(() => ac.abort(), 4000);
             const res = await fetch(`/api/sessions/${sid}`, {
               headers: token ? { 'X-Session-Token': token } : undefined,
-            });
+              signal: ac.signal,
+            }).finally(() => clearTimeout(abortTimer));
             if (res.status === 404 || res.status === 401 || res.status === 403) {
               setConnected(false);
               setReconnecting(false);

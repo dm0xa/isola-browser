@@ -485,11 +485,13 @@ export default function ViewerPage() {
     return () => {
       cancelled = true;
       clearTimeout(timerId);
-      if (connectedRef.current) {
-        isolaRef.current.disconnect();
-        connectedRef.current = false;
-        connectingRef.current = false;
-      }
+      // Unmount can happen mid-connect (back button, "new session" link) while
+      // connectedRef is still false. Gating on it left the stream/input
+      // sockets, the reconnect timer and the 1 Hz metrics interval running
+      // against a detached video element. disconnect() is idempotent.
+      isolaRef.current.disconnect();
+      connectedRef.current = false;
+      connectingRef.current = false;
     };
   }, [id, navigate, viewOnly, handlePollData, connectionGeneration, shadow, shadowToken]);
 

@@ -41,7 +41,7 @@ export function playoutMetricsPatch(
 
 export interface MsePlayoutRefs {
   sourceBufferRef: { current: SourceBuffer | null };
-  pendingSegmentsRef: { current: ArrayBuffer[] };
+  pendingSegmentsRef: { current: Uint8Array<ArrayBuffer>[] };
   videoRef: { current: HTMLVideoElement | null };
   appendCountRef: { current: number };
   appendFailRef: { current: number };

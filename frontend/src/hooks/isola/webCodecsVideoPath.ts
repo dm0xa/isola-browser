@@ -25,7 +25,7 @@ export interface WebCodecsVideoPathRefs {
   frameStepUsRef: { current: number };
   mediaSourceRef: { current: MediaSource | null };
   sourceBufferRef: { current: SourceBuffer | null };
-  pendingSegmentsRef: { current: ArrayBuffer[] };
+  pendingSegmentsRef: { current: Uint8Array<ArrayBuffer>[] };
   videoRef: { current: HTMLVideoElement | null };
 }
 
