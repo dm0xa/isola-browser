@@ -250,15 +250,15 @@ func (p *Proxy) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		isHost = false
 	}
 
+	if !isInput && channel != "" && channel != "isola" {
+		http.Error(w, "unsupported channel", http.StatusBadRequest)
+		return
+	}
+
 	addr, err := p.getContainerAddr(r.Context(), sessionID)
 	if err != nil {
 		log.Error().Err(err).Str("session_id", sessionID).Msg("failed to resolve container address")
 		http.Error(w, "session not found or expired", http.StatusNotFound)
-		return
-	}
-
-	if !isInput && channel != "" && channel != "isola" {
-		http.Error(w, "unsupported channel", http.StatusBadRequest)
 		return
 	}
 
