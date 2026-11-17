@@ -135,7 +135,9 @@ Passive mode resolves IPs, PTR, the CNAME chain and ASN/org/country (Team Cymru
 over DNS — WHOIS on port 43 is outside the sandbox allowlist). Probe mode makes
 one bounded GET per check (8 s, 2 MiB, at most three redirects that must stay on
 the same registrable domain) and refuses targets that resolve to a private
-address. No check sends the hostname to a provider.
+address. No check sends the hostname to a provider. The proxied reply is capped
+at 4 MiB; a larger document is answered with `502 intel_failed` rather than a
+truncated `200`, so a client can always trust a successful body to be complete.
 
 ```bash
 curl -s "http://localhost:8080/api/sessions/$ID/intel?host=example.com&mode=dns" \

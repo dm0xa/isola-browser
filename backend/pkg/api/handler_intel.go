@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,11 +99,28 @@ func (h *Handler) GetSessionIntel(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	// Buffer with an overflow check: streaming through LimitReader cut a body
+	// larger than the cap mid-document and still reported 200, so the viewer and
+	// MCP could not tell a truncated reply from a complete one.
+	var body bytes.Buffer
+	n, err := io.Copy(&body, io.LimitReader(resp.Body, intelMaxResponseBytes+1))
+	if err != nil {
+		log.Printf("intel: response read: %v", err)
+		respondError(w, http.StatusBadGateway, "intel_failed")
+		return
+	}
+	if n > intelMaxResponseBytes {
+		log.Printf("intel: upstream body exceeds %d bytes", intelMaxResponseBytes)
+		respondError(w, http.StatusBadGateway, "intel_failed")
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Length", strconv.Itoa(body.Len()))
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, io.LimitReader(resp.Body, intelMaxResponseBytes)); err != nil {
-		log.Printf("intel: response copy: %v", err)
+	if _, err := body.WriteTo(w); err != nil {
+		log.Printf("intel: response write: %v", err)
 	}
 }
 
