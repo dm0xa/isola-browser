@@ -13,11 +13,11 @@ import (
 func TestCreateSessionIfCapacityUnlimited(t *testing.T) {
 	ms := NewMemStore()
 	defer ms.Close()
-	st := NewMemBridgeStore(ms)
+	st := ms
 	ctx := context.Background()
 
 	for i := 0; i < 5; i++ {
-		if err := st.Sessions.CreateSessionIfCapacity(ctx, &models.Session{
+		if err := st.CreateSessionIfCapacity(ctx, &models.Session{
 			ID:     uuid.New(),
 			Status: models.SessionStatusRunning,
 		}, 0); err != nil {
@@ -29,18 +29,18 @@ func TestCreateSessionIfCapacityUnlimited(t *testing.T) {
 func TestCreateSessionIfCapacityEnforcesCap(t *testing.T) {
 	ms := NewMemStore()
 	defer ms.Close()
-	st := NewMemBridgeStore(ms)
+	st := ms
 	ctx := context.Background()
 
 	// One running session fills the single slot.
-	if err := st.Sessions.CreateSession(ctx, &models.Session{
+	if err := st.CreateSession(ctx, &models.Session{
 		ID:     uuid.New(),
 		Status: models.SessionStatusRunning,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	err := st.Sessions.CreateSessionIfCapacity(ctx, &models.Session{
+	err := st.CreateSessionIfCapacity(ctx, &models.Session{
 		ID:     uuid.New(),
 		Status: models.SessionStatusProvisioning,
 	}, 1)
@@ -49,7 +49,7 @@ func TestCreateSessionIfCapacityEnforcesCap(t *testing.T) {
 	}
 
 	// The refused session must not have been inserted.
-	active, _ := st.Sessions.ListActiveSessions(ctx)
+	active, _ := st.ListActiveSessions(ctx)
 	if len(active) != 1 {
 		t.Fatalf("active sessions = %d, want 1 (refused insert must not persist)", len(active))
 	}
@@ -58,12 +58,12 @@ func TestCreateSessionIfCapacityEnforcesCap(t *testing.T) {
 func TestCreateSessionIfCapacityIgnoresInactive(t *testing.T) {
 	ms := NewMemStore()
 	defer ms.Close()
-	st := NewMemBridgeStore(ms)
+	st := ms
 	ctx := context.Background()
 
 	// Terminated/error rows do not count against the cap.
 	for _, status := range []string{models.SessionStatusTerminated, models.SessionStatusError} {
-		if err := st.Sessions.CreateSession(ctx, &models.Session{
+		if err := st.CreateSession(ctx, &models.Session{
 			ID:     uuid.New(),
 			Status: status,
 		}); err != nil {
@@ -71,7 +71,7 @@ func TestCreateSessionIfCapacityIgnoresInactive(t *testing.T) {
 		}
 	}
 
-	if err := st.Sessions.CreateSessionIfCapacity(ctx, &models.Session{
+	if err := st.CreateSessionIfCapacity(ctx, &models.Session{
 		ID:     uuid.New(),
 		Status: models.SessionStatusProvisioning,
 	}, 1); err != nil {
@@ -86,23 +86,23 @@ func TestCreateSessionIfCapacityIgnoresInactive(t *testing.T) {
 func TestActivateSessionRefusesTerminatedSession(t *testing.T) {
 	ms := NewMemStore()
 	defer ms.Close()
-	st := NewMemBridgeStore(ms)
+	st := ms
 	ctx := context.Background()
 
 	sess := &models.Session{ID: uuid.New(), Status: models.SessionStatusProvisioning}
-	if err := st.Sessions.CreateSession(ctx, sess); err != nil {
+	if err := st.CreateSession(ctx, sess); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Sessions.TerminateSession(ctx, sess.ID); err != nil {
+	if err := st.TerminateSession(ctx, sess.ID); err != nil {
 		t.Fatal(err)
 	}
 
-	err := st.Sessions.ActivateSession(ctx, sess.ID, "container-1", "127.0.0.1", 5900, 0)
+	err := st.ActivateSession(ctx, sess.ID, "container-1", "127.0.0.1", 5900, 0)
 	if !errors.Is(err, ErrSessionNotProvisioning) {
 		t.Fatalf("ActivateSession on terminated session: err = %v, want ErrSessionNotProvisioning", err)
 	}
 
-	got, err := st.Sessions.GetSession(ctx, sess.ID)
+	got, err := st.GetSession(ctx, sess.ID)
 	if err != nil || got == nil {
 		t.Fatalf("get session: %v %v", got, err)
 	}
@@ -119,9 +119,9 @@ func TestActivateSessionRefusesTerminatedSession(t *testing.T) {
 func TestActivateSessionRequiresProvisioningRow(t *testing.T) {
 	ms := NewMemStore()
 	defer ms.Close()
-	st := NewMemBridgeStore(ms)
+	st := ms
 
-	err := st.Sessions.ActivateSession(context.Background(), uuid.New(), "container-1", "127.0.0.1", 5900, 0)
+	err := st.ActivateSession(context.Background(), uuid.New(), "container-1", "127.0.0.1", 5900, 0)
 	if !errors.Is(err, ErrSessionNotProvisioning) {
 		t.Fatalf("err = %v, want ErrSessionNotProvisioning", err)
 	}

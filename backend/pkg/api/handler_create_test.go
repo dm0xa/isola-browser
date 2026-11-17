@@ -21,7 +21,7 @@ import (
 // connect to or control the session).
 func TestCreateSessionPersistsRowAndControlToken(t *testing.T) {
 	mem := store.NewMemStore()
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	cache := store.NewMemCache()
 	orch, err := orchestrator.New("unix:///nonexistent/docker.sock") // lazy — no docker needed
 	if err != nil {
@@ -57,7 +57,7 @@ func TestCreateSessionPersistsRowAndControlToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	row, err := st.Sessions.GetSession(req.Context(), sid)
+	row, err := st.GetSession(req.Context(), sid)
 	if err != nil || row == nil {
 		t.Fatalf("session row missing after 202: err=%v", err)
 	}
@@ -78,7 +78,7 @@ func TestCreateSessionPersistsRowAndControlToken(t *testing.T) {
 func TestCreateSessionRequiresAPITokenWhenConfigured(t *testing.T) {
 	const apiToken = "create-gate-token-32-characters-min!!"
 	mem := store.NewMemStore()
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	cache := store.NewMemCache()
 	orch, err := orchestrator.New("unix:///nonexistent/docker.sock")
 	if err != nil {
@@ -113,7 +113,7 @@ func TestCreateSessionAcceptsAnyConfiguredAPIToken(t *testing.T) {
 	const first = "create-gate-token-32-characters-aa"
 	const second = "create-gate-token-32-characters-bb"
 	mem := store.NewMemStore()
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	cache := store.NewMemCache()
 	orch, err := orchestrator.New("unix:///nonexistent/docker.sock")
 	if err != nil {
@@ -143,7 +143,7 @@ func TestCreateSessionAcceptsAnyConfiguredAPIToken(t *testing.T) {
 // context, so a network client cannot forge it with a header.
 func TestCreateSessionInternalCallerBypassesAPITokenGate(t *testing.T) {
 	mem := store.NewMemStore()
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	cache := store.NewMemCache()
 	orch, err := orchestrator.New("unix:///nonexistent/docker.sock")
 	if err != nil {

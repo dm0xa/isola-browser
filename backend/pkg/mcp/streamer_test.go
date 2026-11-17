@@ -32,9 +32,9 @@ func TestGetNetworkCallsStreamer(t *testing.T) {
 	_ = cache.Set(context.Background(), sessionAddrKey(sessionID), srv.Listener.Addr().String(), 0)
 
 	mem := store.NewMemStore()
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	sess := models.Session{ID: uuid.MustParse(sessionID), Status: models.SessionStatusRunning, TargetURL: "https://example.com"}
-	if err := st.Sessions.CreateSession(context.Background(), &sess); err != nil {
+	if err := st.CreateSession(context.Background(), &sess); err != nil {
 		t.Fatal(err)
 	}
 

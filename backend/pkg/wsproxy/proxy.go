@@ -91,7 +91,7 @@ type Proxy struct {
 	clipboardHook ClipboardHook
 	adminAuth     AdminTokenValidator
 	cache         *store.MemCache
-	st            *store.Store
+	st            *store.MemStore
 	orch          *orchestrator.Orchestrator
 	// activity holds the sessions that produced relay traffic since the last
 	// flush. Presence is what flushActivity needs; the timestamp is only the
@@ -101,7 +101,7 @@ type Proxy struct {
 }
 
 // New creates a new Proxy.
-func New(cache *store.MemCache, st *store.Store, orch *orchestrator.Orchestrator) *Proxy {
+func New(cache *store.MemCache, st *store.MemStore, orch *orchestrator.Orchestrator) *Proxy {
 	p := &Proxy{
 		cache: cache,
 		st:    st,
@@ -147,8 +147,8 @@ func (p *Proxy) flushActivity() {
 		if err != nil {
 			continue
 		}
-		if err := p.st.Sessions.UpdateLastActivity(context.Background(), id); err != nil {
-			log.Warn().Err(err).Str("session_id", sid).Msg("failed to update last_activity")
+		if err := p.st.UpdateLastActivity(context.Background(), id); err != nil {
+			log.Debug().Err(err).Str("session_id", sid).Msg("relay: activity")
 		}
 	}
 }

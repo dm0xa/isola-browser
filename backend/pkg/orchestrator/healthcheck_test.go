@@ -162,7 +162,7 @@ func TestHealthCheckerSkipsInconclusiveProbe(t *testing.T) {
 
 	ms := store.NewMemStore()
 	defer ms.Close()
-	st := store.NewMemBridgeStore(ms)
+	st := ms
 	cache := store.NewMemCache()
 	defer cache.Close()
 	id := seedRestored(t, ms, models.SessionStatusRunning, "033214aab4ab171c54a82427eb6ad346ff78b47655c9831e4a9e008267737b09")
@@ -196,7 +196,7 @@ func TestHealthCheckerFinalizesAbsentContainer(t *testing.T) {
 
 	ms := store.NewMemStore()
 	defer ms.Close()
-	st := store.NewMemBridgeStore(ms)
+	st := ms
 	cache := store.NewMemCache()
 	defer cache.Close()
 	id := seedRestored(t, ms, models.SessionStatusRunning, "033214aab4ab171c54a82427eb6ad346ff78b47655c9831e4a9e008267737b09")

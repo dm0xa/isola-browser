@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -11,8 +12,19 @@ import (
 	"github.com/dm0xa/isola-browser/backend/pkg/models"
 )
 
-// MemStore is an in-memory session store implementing SessionStoreInterface.
-// All data is held in a map with periodic TTL cleanup.
+// ErrMaxSessionsReached is returned by CreateSessionIfCapacity when the
+// configured concurrent-session cap is already in use.
+var ErrMaxSessionsReached = errors.New("max sessions reached")
+
+// ErrSessionNotProvisioning is returned by ActivateSession when the row is no
+// longer in the provisioning state. That happens when the owner deletes the
+// session while its container is still being created: the activation must not
+// resurrect a terminated row, and the caller must tear down the container it
+// just started instead of leaving an untracked sandbox behind.
+var ErrSessionNotProvisioning = errors.New("session is not provisioning")
+
+// MemStore is the in-memory session store. All data is held in a map with
+// periodic TTL cleanup.
 type MemStore struct {
 	mu       sync.RWMutex
 	sessions map[uuid.UUID]*models.Session
@@ -29,7 +41,7 @@ func NewMemStore() *MemStore {
 		doneCh:   make(chan struct{}),
 	}
 	go ms.reapLoop()
-	log.Info().Msg("memstore: in-memory store initialised")
+	log.Info().Msg("memstore: init")
 	return ms
 }
 
@@ -65,14 +77,14 @@ func (ms *MemStore) reap() {
 		// Remove expired sessions (past expiry + 1 hour grace).
 		if s.Status == models.SessionStatusRunning && s.ExpiresAt != nil {
 			if now.Sub(*s.ExpiresAt) > 1*time.Hour {
-				log.Debug().Str("session_id", id.String()).Msg("memstore: reaping expired session")
+				log.Debug().Str("session_id", id.String()).Msg("memstore: reaping expired")
 				delete(ms.sessions, id)
 			}
 		}
 		// Remove provisioning sessions stuck for > 10 minutes.
 		if s.Status == models.SessionStatusProvisioning || s.Status == models.SessionStatusError {
 			if now.Sub(s.CreatedAt) > 10*time.Minute {
-				log.Debug().Str("session_id", id.String()).Msg("memstore: reaping stuck provisioning session")
+				log.Debug().Str("session_id", id.String()).Msg("memstore: reaping stuck")
 				delete(ms.sessions, id)
 			}
 		}
@@ -91,14 +103,10 @@ func (ms *MemStore) Ping(ctx context.Context) error {
 	return nil
 }
 
-type memSessionStore struct {
-	ms *MemStore
-}
-
-func (s *memSessionStore) CreateSession(ctx context.Context, session *models.Session) error {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-	s.insertLocked(session)
+func (ms *MemStore) CreateSession(ctx context.Context, session *models.Session) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	ms.insertLocked(session)
 	return nil
 }
 
@@ -107,12 +115,12 @@ func (s *memSessionStore) CreateSession(ctx context.Context, session *models.Ses
 // reached it, the insert is refused with ErrMaxSessionsReached. The count and
 // the insert share one lock, so two concurrent launches cannot both pass the
 // check and overshoot the cap by one.
-func (s *memSessionStore) CreateSessionIfCapacity(ctx context.Context, session *models.Session, max int) error {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
+func (ms *MemStore) CreateSessionIfCapacity(ctx context.Context, session *models.Session, max int) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
 	if max > 0 {
 		active := 0
-		for _, sess := range s.ms.sessions {
+		for _, sess := range ms.sessions {
 			if isActiveSessionStatus(sess.Status) {
 				active++
 			}
@@ -121,26 +129,26 @@ func (s *memSessionStore) CreateSessionIfCapacity(ctx context.Context, session *
 			return ErrMaxSessionsReached
 		}
 	}
-	s.insertLocked(session)
+	ms.insertLocked(session)
 	return nil
 }
 
 // insertLocked stores a copy of the session so external mutation cannot reach
 // the map. CreatedAt is set when missing so the idle reaper can compute
 // time-since-creation correctly (the Go zero-time is 0001-01-01, which would
-// make the session look ancient). Caller must hold s.ms.mu.
-func (s *memSessionStore) insertLocked(session *models.Session) {
+// make the session look ancient). Caller must hold ms.mu.
+func (ms *MemStore) insertLocked(session *models.Session) {
 	copy := *session
 	if copy.CreatedAt.IsZero() {
 		copy.CreatedAt = time.Now()
 	}
-	s.ms.sessions[session.ID] = &copy
+	ms.sessions[session.ID] = &copy
 }
 
-func (s *memSessionStore) GetSession(ctx context.Context, id uuid.UUID) (*models.Session, error) {
-	s.ms.mu.RLock()
-	defer s.ms.mu.RUnlock()
-	sess, ok := s.ms.sessions[id]
+func (ms *MemStore) GetSession(ctx context.Context, id uuid.UUID) (*models.Session, error) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	sess, ok := ms.sessions[id]
 	if !ok {
 		return nil, nil
 	}
@@ -148,11 +156,11 @@ func (s *memSessionStore) GetSession(ctx context.Context, id uuid.UUID) (*models
 	return &copy, nil
 }
 
-func (s *memSessionStore) ListActiveSessionsByUser(ctx context.Context, userID uuid.UUID) ([]models.Session, error) {
-	s.ms.mu.RLock()
-	defer s.ms.mu.RUnlock()
+func (ms *MemStore) ListActiveSessionsByUser(ctx context.Context, userID uuid.UUID) ([]models.Session, error) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	var out []models.Session
-	for _, sess := range s.ms.sessions {
+	for _, sess := range ms.sessions {
 		if sess.UserID == userID && isActiveSessionStatus(sess.Status) {
 			out = append(out, *sess)
 		}
@@ -160,11 +168,11 @@ func (s *memSessionStore) ListActiveSessionsByUser(ctx context.Context, userID u
 	return out, nil
 }
 
-func (s *memSessionStore) ListActiveSessions(ctx context.Context) ([]models.Session, error) {
-	s.ms.mu.RLock()
-	defer s.ms.mu.RUnlock()
+func (ms *MemStore) ListActiveSessions(ctx context.Context) ([]models.Session, error) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	var out []models.Session
-	for _, sess := range s.ms.sessions {
+	for _, sess := range ms.sessions {
 		if isActiveSessionStatus(sess.Status) {
 			out = append(out, *sess)
 		}
@@ -176,10 +184,10 @@ func isActiveSessionStatus(status string) bool {
 	return status == models.SessionStatusRunning || status == models.SessionStatusProvisioning
 }
 
-func (s *memSessionStore) UpdateSessionStatus(ctx context.Context, id uuid.UUID, status, containerID, containerHost string, containerPort int) error {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-	sess, ok := s.ms.sessions[id]
+func (ms *MemStore) UpdateSessionStatus(ctx context.Context, id uuid.UUID, status, containerID, containerHost string, containerPort int) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	sess, ok := ms.sessions[id]
 	if !ok {
 		return nil
 	}
@@ -190,10 +198,10 @@ func (s *memSessionStore) UpdateSessionStatus(ctx context.Context, id uuid.UUID,
 	return nil
 }
 
-func (s *memSessionStore) ActivateSession(ctx context.Context, id uuid.UUID, containerID, containerHost string, containerPort int, duration time.Duration) error {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-	sess, ok := s.ms.sessions[id]
+func (ms *MemStore) ActivateSession(ctx context.Context, id uuid.UUID, containerID, containerHost string, containerPort int, duration time.Duration) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	sess, ok := ms.sessions[id]
 	if !ok {
 		return ErrSessionNotProvisioning
 	}
@@ -219,10 +227,10 @@ func (s *memSessionStore) ActivateSession(ctx context.Context, id uuid.UUID, con
 	return nil
 }
 
-func (s *memSessionStore) TerminateSession(ctx context.Context, id uuid.UUID) error {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-	sess, ok := s.ms.sessions[id]
+func (ms *MemStore) TerminateSession(ctx context.Context, id uuid.UUID) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	sess, ok := ms.sessions[id]
 	if !ok {
 		return nil
 	}
@@ -232,12 +240,12 @@ func (s *memSessionStore) TerminateSession(ctx context.Context, id uuid.UUID) er
 	return nil
 }
 
-func (s *memSessionStore) ListExpiredRunningSessions(ctx context.Context) ([]models.Session, error) {
-	s.ms.mu.RLock()
-	defer s.ms.mu.RUnlock()
+func (ms *MemStore) ListExpiredRunningSessions(ctx context.Context) ([]models.Session, error) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	now := time.Now()
 	var out []models.Session
-	for _, sess := range s.ms.sessions {
+	for _, sess := range ms.sessions {
 		if sess.Status == models.SessionStatusRunning && sess.ExpiresAt != nil && now.After(*sess.ExpiresAt) {
 			out = append(out, *sess)
 		}
@@ -245,11 +253,11 @@ func (s *memSessionStore) ListExpiredRunningSessions(ctx context.Context) ([]mod
 	return out, nil
 }
 
-func (s *memSessionStore) ListRunningSessions(ctx context.Context) ([]models.Session, error) {
-	s.ms.mu.RLock()
-	defer s.ms.mu.RUnlock()
+func (ms *MemStore) ListRunningSessions(ctx context.Context) ([]models.Session, error) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	var out []models.Session
-	for _, sess := range s.ms.sessions {
+	for _, sess := range ms.sessions {
 		if sess.Status == models.SessionStatusRunning {
 			out = append(out, *sess)
 		}
@@ -257,10 +265,10 @@ func (s *memSessionStore) ListRunningSessions(ctx context.Context) ([]models.Ses
 	return out, nil
 }
 
-func (s *memSessionStore) UpdateLastActivity(ctx context.Context, id uuid.UUID) error {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-	sess, ok := s.ms.sessions[id]
+func (ms *MemStore) UpdateLastActivity(ctx context.Context, id uuid.UUID) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	sess, ok := ms.sessions[id]
 	if !ok {
 		return nil
 	}
@@ -269,10 +277,10 @@ func (s *memSessionStore) UpdateLastActivity(ctx context.Context, id uuid.UUID) 
 	return nil
 }
 
-func (s *memSessionStore) ExtendExpiry(ctx context.Context, id uuid.UUID, newExpiry, maxExpiry time.Time) error {
-	s.ms.mu.Lock()
-	defer s.ms.mu.Unlock()
-	sess, ok := s.ms.sessions[id]
+func (ms *MemStore) ExtendExpiry(ctx context.Context, id uuid.UUID, newExpiry, maxExpiry time.Time) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	sess, ok := ms.sessions[id]
 	if !ok || sess.Status != models.SessionStatusRunning {
 		return nil
 	}
@@ -284,12 +292,12 @@ func (s *memSessionStore) ExtendExpiry(ctx context.Context, id uuid.UUID, newExp
 	return nil
 }
 
-func (s *memSessionStore) ListIdleSessions(ctx context.Context, idleTimeout time.Duration) ([]models.Session, error) {
-	s.ms.mu.RLock()
-	defer s.ms.mu.RUnlock()
+func (ms *MemStore) ListIdleSessions(ctx context.Context, idleTimeout time.Duration) ([]models.Session, error) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
 	now := time.Now()
 	var out []models.Session
-	for _, sess := range s.ms.sessions {
+	for _, sess := range ms.sessions {
 		if sess.Status != models.SessionStatusRunning {
 			continue
 		}
@@ -304,30 +312,23 @@ func (s *memSessionStore) ListIdleSessions(ctx context.Context, idleTimeout time
 	return out, nil
 }
 
-// NewMemBridgeStore creates a *Store backed entirely by in-memory data.
-func NewMemBridgeStore(ms *MemStore) *Store {
-	return &Store{
-		Sessions: &memSessionStore{ms: ms},
-	}
-}
-
 // SnapshotSessions returns a copy of all sessions for persistence.
-func (m *MemStore) SnapshotSessions() []models.Session {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make([]models.Session, 0, len(m.sessions))
-	for _, s := range m.sessions {
+func (ms *MemStore) SnapshotSessions() []models.Session {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	out := make([]models.Session, 0, len(ms.sessions))
+	for _, s := range ms.sessions {
 		out = append(out, *s)
 	}
 	return out
 }
 
 // RestoreSession re-inserts a session from a snapshot file.
-func (m *MemStore) RestoreSession(s *models.Session) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (ms *MemStore) RestoreSession(s *models.Session) {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
 	if s.CreatedAt.IsZero() {
 		s.CreatedAt = time.Now()
 	}
-	m.sessions[s.ID] = s
+	ms.sessions[s.ID] = s
 }

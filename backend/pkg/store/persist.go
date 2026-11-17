@@ -92,7 +92,7 @@ func LoadSnapshot(path string, ms *MemStore, c *MemCache) error {
 		cacheRestored++
 	}
 	log.Info().Int("sessions", restored).Int("cache_keys", cacheRestored).
-		Time("snapshot_at", snap.SavedAt).Msg("restored session state from snapshot")
+		Time("snapshot_at", snap.SavedAt).Msg("snapshot: restored")
 	return nil
 }
 
@@ -102,7 +102,7 @@ func StartSnapshotSaver(ctx context.Context, path string, ms *MemStore, c *MemCa
 	// 0700: the directory holds sessions.json, which contains control tokens
 	// (VULN-26).
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		log.Error().Err(err).Str("dir", filepath.Dir(path)).Msg("snapshot: data dir unavailable, persistence disabled")
+		log.Warn().Err(err).Str("dir", filepath.Dir(path)).Msg("snapshot: no dir, disabled")
 		return
 	}
 	t := time.NewTicker(interval)
@@ -111,14 +111,14 @@ func StartSnapshotSaver(ctx context.Context, path string, ms *MemStore, c *MemCa
 		select {
 		case <-ctx.Done():
 			if err := WriteSnapshot(path, ms, c); err != nil {
-				log.Error().Err(err).Msg("snapshot: final write failed")
+				log.Error().Err(err).Msg("snapshot: final write")
 			} else {
-				log.Info().Str("path", path).Msg("snapshot: final write on shutdown")
+				log.Info().Str("path", path).Msg("snapshot: final write")
 			}
 			return
 		case <-t.C:
 			if err := WriteSnapshot(path, ms, c); err != nil {
-				log.Error().Err(err).Msg("snapshot: write failed")
+				log.Error().Err(err).Msg("snapshot: write")
 			}
 		}
 	}

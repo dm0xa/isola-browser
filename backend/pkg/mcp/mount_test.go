@@ -15,7 +15,7 @@ import (
 func TestMCPNotMountedWhenDisabled(t *testing.T) {
 	r := chi.NewRouter()
 	cfg := &config.Config{MCPEnabled: false, MCPTokens: []string{"secret"}}
-	Mount(r, cfg, Deps{API: api.New(store.NewMemBridgeStore(store.NewMemStore()), store.NewMemCache(), nil, cfg)})
+	Mount(r, cfg, Deps{API: api.New(store.NewMemStore(), store.NewMemCache(), nil, cfg)})
 	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -27,7 +27,7 @@ func TestMCPNotMountedWhenDisabled(t *testing.T) {
 func TestMCPUnauthorizedWithoutBearer(t *testing.T) {
 	r := chi.NewRouter()
 	cfg := &config.Config{MCPEnabled: true, MCPTokens: []string{"mount-test-token-32-characters-min"}}
-	st := store.NewMemBridgeStore(store.NewMemStore())
+	st := store.NewMemStore()
 	Mount(r, cfg, Deps{API: api.New(st, store.NewMemCache(), nil, cfg)})
 	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 	w := httptest.NewRecorder()
@@ -42,7 +42,7 @@ func TestMCPAcceptsAnyConfiguredToken(t *testing.T) {
 	const first = "mount-test-token-32-characters-aaa"
 	const second = "mount-test-token-32-characters-bbb"
 	cfg := &config.Config{MCPEnabled: true, MCPTokens: []string{first, second}}
-	st := store.NewMemBridgeStore(store.NewMemStore())
+	st := store.NewMemStore()
 	Mount(r, cfg, Deps{API: api.New(st, store.NewMemCache(), nil, cfg)})
 	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
 	req.Header.Set("Authorization", "Bearer "+second)

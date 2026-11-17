@@ -32,7 +32,7 @@ func graphFixtureWithStatus(t *testing.T, status string, streamer http.HandlerFu
 	t.Cleanup(srv.Close)
 
 	mem := store.NewMemStore()
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	cache := store.NewMemCache()
 	orch, err := orchestrator.New("unix:///nonexistent/docker.sock") // lazy — no docker needed
 	if err != nil {
@@ -42,7 +42,7 @@ func graphFixtureWithStatus(t *testing.T, status string, streamer http.HandlerFu
 
 	ctx := context.Background()
 	sid := uuid.New()
-	if err := st.Sessions.CreateSession(ctx, &models.Session{
+	if err := st.CreateSession(ctx, &models.Session{
 		ID:        sid,
 		UserID:    uuid.Nil,
 		Status:    models.SessionStatusProvisioning,
@@ -52,11 +52,11 @@ func graphFixtureWithStatus(t *testing.T, status string, streamer http.HandlerFu
 		t.Fatal(err)
 	}
 	if status == models.SessionStatusRunning {
-		if err := st.Sessions.ActivateSession(ctx, sid, "container-1", "127.0.0.1", 5900, 10*time.Minute); err != nil {
+		if err := st.ActivateSession(ctx, sid, "container-1", "127.0.0.1", 5900, 10*time.Minute); err != nil {
 			t.Fatal(err)
 		}
 	} else if status != models.SessionStatusProvisioning {
-		if err := st.Sessions.UpdateSessionStatus(ctx, sid, status, "", "", 0); err != nil {
+		if err := st.UpdateSessionStatus(ctx, sid, status, "", "", 0); err != nil {
 			t.Fatal(err)
 		}
 	}

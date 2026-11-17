@@ -70,7 +70,7 @@ type HandlerExt struct {
 
 // Handler holds dependencies for HTTP handlers.
 type Handler struct {
-	store *store.Store
+	store *store.MemStore
 	cache *store.MemCache
 	orch  *orchestrator.Orchestrator
 	cfg   *config.Config
@@ -94,7 +94,7 @@ type Handler struct {
 }
 
 // New creates a new Handler.
-func New(store *store.Store, cache *store.MemCache, orch *orchestrator.Orchestrator, cfg *config.Config) *Handler {
+func New(store *store.MemStore, cache *store.MemCache, orch *orchestrator.Orchestrator, cfg *config.Config) *Handler {
 	return &Handler{
 		store: store, cache: cache, orch: orch, cfg: cfg,
 		graphRenderTimeout: defaultGraphRenderTimeout,
@@ -345,7 +345,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	// Admission control: refuse once the configured concurrent-session cap is
 	// reached. The check and the insert are atomic, so simultaneous launches
 	// cannot overshoot the cap. 0 = unlimited.
-	if err := h.store.Sessions.CreateSessionIfCapacity(r.Context(), session, h.cfg.MaxSessions); err != nil {
+	if err := h.store.CreateSessionIfCapacity(r.Context(), session, h.cfg.MaxSessions); err != nil {
 		if errors.Is(err, store.ErrMaxSessionsReached) {
 			log.Printf("create session: refused, max sessions (%d) reached", h.cfg.MaxSessions)
 			// Tell a waiting client how long to back off before retrying; the UI
@@ -360,7 +360,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.cache.Set(r.Context(), controlTokenKey(session.ID.String()), sessionToken, provisioningTokenTTL(sessionDuration)); err != nil {
 		log.Printf("create session: failed to store session token: %v", err)
-		h.store.Sessions.TerminateSession(r.Context(), session.ID)
+		h.store.TerminateSession(r.Context(), session.ID)
 		respondError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
@@ -369,7 +369,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("create session: goroutine panic for %s: %v", session.ID.String(), r)
-				h.store.Sessions.UpdateSessionStatus(context.Background(), session.ID, models.SessionStatusError, "", "", 0)
+				h.store.UpdateSessionStatus(context.Background(), session.ID, models.SessionStatusError, "", "", 0)
 			}
 		}()
 
@@ -438,18 +438,15 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 			})
 			if err != nil {
 				log.Printf("create session: orchestrator error: %v", err)
-				if err := h.store.Sessions.UpdateSessionStatus(bgCtx, session.ID, models.SessionStatusError, "", "", 0); err != nil {
+				if err := h.store.UpdateSessionStatus(bgCtx, session.ID, models.SessionStatusError, "", "", 0); err != nil {
 					log.Printf("create session: failed to update error status: %v", err)
 				}
 				return
 			}
 		}
 
-		// The owner can delete the session while `docker run` is in flight.
-		// DeleteSession then sees an empty ContainerID and cannot stop what it
-		// does not know about, so the container we just started is ours to
-		// reap before it becomes an untracked sandbox.
-		if cur, gerr := h.store.Sessions.GetSession(bgCtx, session.ID); gerr != nil || cur == nil || cur.Status != models.SessionStatusProvisioning {
+		// If the owner deleted the session mid-launch, reap the container ourselves — DeleteSession cannot.
+		if cur, gerr := h.store.GetSession(bgCtx, session.ID); gerr != nil || cur == nil || cur.Status != models.SessionStatusProvisioning {
 			log.Printf("create session: %s left provisioning during creation, tearing down container", session.ID)
 			if terr := h.orch.TerminateSession(bgCtx, info.ContainerID); terr != nil {
 				log.Printf("create session: terminate cancelled container: %v", terr)
@@ -469,8 +466,8 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 				failSess.ContainerID = info.ContainerID
 				failSess.ContainerHost = info.Host
 				failSess.ContainerPort = info.Port
-				h.finalizeSession(bgCtx, &failSess)
-				h.store.Sessions.UpdateSessionStatus(bgCtx, session.ID, models.SessionStatusError, "", "", 0)
+				h.orch.FinalizeRunningSession(bgCtx, h.store, h.cache, &failSess)
+				h.store.UpdateSessionStatus(bgCtx, session.ID, models.SessionStatusError, "", "", 0)
 				return
 			}
 		}
@@ -508,7 +505,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Activate session: mark running + set expiry to NOW + sessionDuration
-		if err := h.store.Sessions.ActivateSession(bgCtx, session.ID, info.ContainerID, info.Host, info.Port, sessionDuration); err != nil {
+		if err := h.store.ActivateSession(bgCtx, session.ID, info.ContainerID, info.Host, info.Port, sessionDuration); err != nil {
 			// Clean up the cache keys we just set. Activation is refused when
 			// the row left provisioning (deleted mid-create), so the container
 			// has no owner left: stop it here rather than leak it.
@@ -656,7 +653,7 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.store.Sessions.GetSession(r.Context(), id)
+	session, err := h.store.GetSession(r.Context(), id)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "internal_error")
 		return
@@ -771,7 +768,7 @@ func (h *Handler) DeleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.store.Sessions.GetSession(r.Context(), id)
+	session, err := h.store.GetSession(r.Context(), id)
 	if err != nil || session == nil {
 		respondError(w, http.StatusNotFound, "session_not_found")
 		return
@@ -828,7 +825,7 @@ func (h *Handler) ExtendSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.store.Sessions.GetSession(r.Context(), id)
+	session, err := h.store.GetSession(r.Context(), id)
 	if err != nil || session == nil || session.Status != models.SessionStatusRunning {
 		respondError(w, http.StatusNotFound, "session_not_found")
 		return
@@ -864,7 +861,7 @@ func (h *Handler) ExtendSession(w http.ResponseWriter, r *http.Request) {
 		newExpiry = maxExpiry
 	}
 
-	if err := h.store.Sessions.ExtendExpiry(r.Context(), id, newExpiry, maxExpiry); err != nil {
+	if err := h.store.ExtendExpiry(r.Context(), id, newExpiry, maxExpiry); err != nil {
 		respondError(w, http.StatusInternalServerError, "extend_failed")
 		return
 	}
@@ -1166,7 +1163,7 @@ func (h *Handler) ToggleAudio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.store.Sessions.GetSession(r.Context(), id)
+	session, err := h.store.GetSession(r.Context(), id)
 	if err != nil || session == nil || session.Status != models.SessionStatusRunning {
 		ss := "nil"
 		if session != nil {
@@ -1246,7 +1243,7 @@ func (h *Handler) CreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.store.Sessions.GetSession(r.Context(), id)
+	session, err := h.store.GetSession(r.Context(), id)
 	if err != nil || session == nil || session.Status != models.SessionStatusRunning {
 		respondError(w, http.StatusNotFound, "session_not_found")
 		return
@@ -1306,7 +1303,7 @@ func (h *Handler) ListShares(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.store.Sessions.GetSession(r.Context(), id)
+	session, err := h.store.GetSession(r.Context(), id)
 	if err != nil || session == nil {
 		respondError(w, http.StatusNotFound, "session_not_found")
 		return
@@ -1362,7 +1359,7 @@ func (h *Handler) RevokeShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.store.Sessions.GetSession(r.Context(), id)
+	session, err := h.store.GetSession(r.Context(), id)
 	if err != nil || session == nil {
 		respondError(w, http.StatusNotFound, "session_not_found")
 		return
@@ -1410,7 +1407,7 @@ func (h *Handler) GetShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.store.Sessions.GetSession(r.Context(), id)
+	session, err := h.store.GetSession(r.Context(), id)
 	if err != nil || session == nil {
 		respondError(w, http.StatusNotFound, "session_not_found")
 		return
@@ -1786,7 +1783,7 @@ func (h *Handler) resolveSession(w http.ResponseWriter, r *http.Request) (*model
 		respondError(w, http.StatusBadRequest, "invalid_session_id")
 		return nil, false
 	}
-	session, err := h.store.Sessions.GetSession(r.Context(), id)
+	session, err := h.store.GetSession(r.Context(), id)
 	if err != nil || session == nil {
 		respondError(w, http.StatusNotFound, "session_not_found")
 		return nil, false

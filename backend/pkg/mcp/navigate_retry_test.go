@@ -34,8 +34,8 @@ func TestNavigateStreamerRetries503(t *testing.T) {
 	sessionID := uuid.New().String()
 	_ = cache.Set(context.Background(), sessionAddrKey(sessionID), srv.Listener.Addr().String(), 0)
 	mem := store.NewMemStore()
-	st := store.NewMemBridgeStore(mem)
-	if err := st.Sessions.CreateSession(context.Background(), &models.Session{
+	st := mem
+	if err := st.CreateSession(context.Background(), &models.Session{
 		ID: uuid.MustParse(sessionID), Status: models.SessionStatusRunning,
 	}); err != nil {
 		t.Fatal(err)

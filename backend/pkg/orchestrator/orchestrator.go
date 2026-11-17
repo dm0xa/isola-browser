@@ -587,7 +587,7 @@ func sessionCacheKeys(sid string) []string {
 }
 
 // FinalizeRunningSession stops the container, clears cache keys, runs hooks, and marks terminated.
-func (o *Orchestrator) FinalizeRunningSession(ctx context.Context, st *store.Store, cache *store.MemCache, sess *models.Session) {
+func (o *Orchestrator) FinalizeRunningSession(ctx context.Context, st *store.MemStore, cache *store.MemCache, sess *models.Session) {
 	if sess == nil {
 		return
 	}
@@ -606,31 +606,22 @@ func (o *Orchestrator) FinalizeRunningSession(ctx context.Context, st *store.Sto
 		o.onSessionCleanup(ctx, sess)
 	}
 
-	if err := st.Sessions.TerminateSession(ctx, sess.ID); err != nil {
-		log.Warn().Err(err).Str("session_id", sid).Msg("finalize: db terminate failed")
+	if err := st.TerminateSession(ctx, sess.ID); err != nil {
+		log.Warn().Err(err).Str("session_id", sid).Msg("finalize: db")
 	}
 }
 
-// FinalizeIfContainerGone finalizes a running session whose container the
-// runtime positively reports as stopped or absent.
-//
-// It is the relay's counterpart to the health checker. A refused dial to the
-// container's streamer port is ground truth that the endpoint is gone *now*,
-// while the health checker needs up to containerMissLimit rounds of its 15s
-// ticker to agree — and every one of those seconds is a viewer reconnecting into
-// nothing. The probe still gates the verdict: a container the runtime reports as
-// running, or a runtime that cannot answer, opens no verdict at all, so a
-// transient refusal (VM hiccup, daemon restart) cannot destroy a live sandbox.
-//
-// Returns true when this call finalized the session.
-func (o *Orchestrator) FinalizeIfContainerGone(ctx context.Context, st *store.Store, cache *store.MemCache, sessionID uuid.UUID) bool {
+// FinalizeIfContainerGone: the relay's refused dial is ground truth now, the
+// health checker needs rounds to agree. The probe still gates the verdict —
+// a runtime that cannot answer opens no verdict.
+func (o *Orchestrator) FinalizeIfContainerGone(ctx context.Context, st *store.MemStore, cache *store.MemCache, sessionID uuid.UUID) bool {
 	sid := sessionID.String()
 	if _, busy := o.reaping.LoadOrStore(sid, struct{}{}); busy {
 		return false
 	}
 	defer o.reaping.Delete(sid)
 
-	sess, err := st.Sessions.GetSession(ctx, sessionID)
+	sess, err := st.GetSession(ctx, sessionID)
 	if err != nil || sess == nil || sess.Status != models.SessionStatusRunning || sess.ContainerID == "" {
 		return false
 	}
@@ -870,7 +861,7 @@ func (o *Orchestrator) containerEndpoints(ctx context.Context, containerID strin
 }
 
 // StartReaper periodically terminates expired sessions.
-func (o *Orchestrator) StartReaper(ctx context.Context, st *store.Store, cache *store.MemCache, interval time.Duration) {
+func (o *Orchestrator) StartReaper(ctx context.Context, st *store.MemStore, cache *store.MemCache, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -880,7 +871,7 @@ func (o *Orchestrator) StartReaper(ctx context.Context, st *store.Store, cache *
 			log.Info().Msg("reaper stopping")
 			return
 		case <-ticker.C:
-			sessions, err := st.Sessions.ListExpiredRunningSessions(ctx)
+			sessions, err := st.ListExpiredRunningSessions(ctx)
 			if err != nil {
 				log.Error().Err(err).Msg("reaper: failed to list expired sessions")
 				continue
@@ -895,7 +886,7 @@ func (o *Orchestrator) StartReaper(ctx context.Context, st *store.Store, cache *
 }
 
 // StartIdleReaper terminates sessions that have been inactive for the given duration.
-func (o *Orchestrator) StartIdleReaper(ctx context.Context, st *store.Store, cache *store.MemCache, idleTimeout time.Duration, interval time.Duration) {
+func (o *Orchestrator) StartIdleReaper(ctx context.Context, st *store.MemStore, cache *store.MemCache, idleTimeout time.Duration, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -905,7 +896,7 @@ func (o *Orchestrator) StartIdleReaper(ctx context.Context, st *store.Store, cac
 			log.Info().Msg("idle reaper stopping")
 			return
 		case <-ticker.C:
-			sessions, err := st.Sessions.ListIdleSessions(ctx, idleTimeout)
+			sessions, err := st.ListIdleSessions(ctx, idleTimeout)
 			if err != nil {
 				log.Error().Err(err).Msg("idle reaper: failed to list idle sessions")
 				continue
@@ -920,7 +911,7 @@ func (o *Orchestrator) StartIdleReaper(ctx context.Context, st *store.Store, cac
 }
 
 // StartHealthChecker periodically probes running containers.
-func (o *Orchestrator) StartHealthChecker(ctx context.Context, st *store.Store, cache *store.MemCache, interval time.Duration) {
+func (o *Orchestrator) StartHealthChecker(ctx context.Context, st *store.MemStore, cache *store.MemCache, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -930,7 +921,7 @@ func (o *Orchestrator) StartHealthChecker(ctx context.Context, st *store.Store, 
 			log.Info().Msg("health checker stopping")
 			return
 		case <-ticker.C:
-			sessions, err := st.Sessions.ListRunningSessions(ctx)
+			sessions, err := st.ListRunningSessions(ctx)
 			if err != nil {
 				log.Error().Err(err).Msg("health checker: failed to list running sessions")
 				continue
@@ -1019,27 +1010,14 @@ func (o *Orchestrator) dockerReachable(ctx context.Context) bool {
 	return false
 }
 
-// ReconcileRestoredSessions finalizes restored sessions that no container backs
-// any more. It runs once at startup, before traffic is served.
-//
-// The periodic health checker reaches the same verdict, but it deliberately
-// demands containerMissLimit consecutive misses before acting, so a single
-// false negative cannot kill a live session. A row restored from the snapshot
-// deserves none of that benefit of the doubt: it predates this process, and
-// until it is finalized it occupies a slot against ISOLA_MAX_SESSIONS (admission
-// counts provisioning + running sessions). So this acts on the first answer —
-// the mirror image of CleanupOrphanContainers, which removes the opposite
-// leftover (containers with no session row).
-//
-// Conservative in exactly one direction: if the runtime cannot be reached at
-// all, nothing can be verified and every restored row is left alone for the
-// health checker and the store reaper.
-func (o *Orchestrator) ReconcileRestoredSessions(ctx context.Context, st *store.Store, cache *store.MemCache) {
-	if st == nil || st.Sessions == nil {
+// ReconcileRestoredSessions acts on the first answer at startup: a restored row
+// predates this process and occupies a slot. If the runtime is unreachable, leave it.
+func (o *Orchestrator) ReconcileRestoredSessions(ctx context.Context, st *store.MemStore, cache *store.MemCache) {
+	if st == nil {
 		return
 	}
 
-	sessions, err := st.Sessions.ListActiveSessions(ctx)
+	sessions, err := st.ListActiveSessions(ctx)
 	if err != nil {
 		log.Warn().Err(err).Msg("startup reconcile: list active sessions failed")
 		return
@@ -1163,9 +1141,9 @@ func (o *Orchestrator) RemoveContainerByName(ctx context.Context, name string) {
 }
 
 // CleanupOrphanContainers removes session containers that are not tracked as active.
-func (o *Orchestrator) CleanupOrphanContainers(ctx context.Context, st *store.Store, cache *store.MemCache) {
+func (o *Orchestrator) CleanupOrphanContainers(ctx context.Context, st *store.MemStore, cache *store.MemCache) {
 	active := make(map[string]bool)
-	sessions, err := st.Sessions.ListActiveSessions(ctx)
+	sessions, err := st.ListActiveSessions(ctx)
 	if err != nil {
 		log.Warn().Err(err).Msg("orphan sweep: list active sessions failed")
 		return
@@ -1188,7 +1166,7 @@ func (o *Orchestrator) CleanupOrphanContainers(ctx context.Context, st *store.St
 		_ = o.TerminateSession(ctx, c.ID)
 		if c.SessionID != "" {
 			if id, err := uuid.Parse(c.SessionID); err == nil {
-				_ = st.Sessions.TerminateSession(ctx, id)
+				_ = st.TerminateSession(ctx, id)
 				cache.Del(ctx, sessionCacheKeys(c.SessionID)...)
 			}
 		}
@@ -1196,7 +1174,7 @@ func (o *Orchestrator) CleanupOrphanContainers(ctx context.Context, st *store.St
 }
 
 // StartOrphanCleaner periodically removes containers not tied to an active session.
-func (o *Orchestrator) StartOrphanCleaner(ctx context.Context, st *store.Store, cache *store.MemCache, interval time.Duration) {
+func (o *Orchestrator) StartOrphanCleaner(ctx context.Context, st *store.MemStore, cache *store.MemCache, interval time.Duration) {
 	o.CleanupOrphanContainers(ctx, st, cache)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

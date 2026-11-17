@@ -54,7 +54,7 @@ func TestMCPCreateSessionAdvertisesTor(t *testing.T) {
 	const token = "mcp-tor-test-token-32-characters!!"
 	mem := store.NewMemStore()
 	t.Cleanup(func() { mem.Close() })
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	cache := store.NewMemCache()
 	orch, err := orchestrator.New("unix:///nonexistent/docker.sock") // lazy — no docker needed
 	if err != nil {
@@ -138,7 +138,7 @@ func TestMCPCreateSessionRequestBypassesAPITokenGate(t *testing.T) {
 
 	mem := store.NewMemStore()
 	t.Cleanup(func() { mem.Close() })
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	cache := store.NewMemCache()
 	orch, err := orchestrator.New("unix:///nonexistent/docker.sock")
 	if err != nil {

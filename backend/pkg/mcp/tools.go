@@ -221,7 +221,7 @@ func (s *Service) toolCreateSession(ctx context.Context, _ *mcp.CallToolRequest,
 		// was passed, so an agent can confirm what the session actually uses.
 		torCountry := p.TorCountry
 		if id, perr := parseUUID(resp.ID); perr == nil {
-			if sess, gerr := s.deps.Store.Sessions.GetSession(ctx, id); gerr == nil && sess != nil {
+			if sess, gerr := s.deps.Store.GetSession(ctx, id); gerr == nil && sess != nil {
 				torCountry = sess.TorCountry
 			}
 		}
@@ -644,7 +644,7 @@ func (s *Service) ensureSession(ctx context.Context, sessionID string) error {
 	if err != nil {
 		return fmt.Errorf("invalid session_id")
 	}
-	sess, err := s.deps.Store.Sessions.GetSession(ctx, id)
+	sess, err := s.deps.Store.GetSession(ctx, id)
 	if err != nil || sess == nil {
 		return fmt.Errorf("session not found")
 	}

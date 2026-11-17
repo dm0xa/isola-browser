@@ -97,7 +97,7 @@ func Run(opts Options) error {
 	// In-memory session store and cache — no Postgres, no Redis.
 	memStore := store.NewMemStore()
 	defer memStore.Close()
-	st := store.NewMemBridgeStore(memStore)
+	st := memStore
 	cache := store.NewMemCache()
 
 	// Restore session routing so viewers reconnect seamlessly after a restart.
@@ -204,7 +204,7 @@ func Run(opts Options) error {
 	if cfg.WarmPoolEnabled {
 		warmPool = orchestrator.NewWarmPool(orch, cfg)
 		warmPool.SetActiveContainers(func(ctx context.Context) (map[string]bool, error) {
-			sessions, err := st.Sessions.ListActiveSessions(ctx)
+			sessions, err := st.ListActiveSessions(ctx)
 			if err != nil {
 				return nil, err
 			}

@@ -193,7 +193,7 @@ func TestMCPAllToolsAgainstFakeStreamer(t *testing.T) {
 	defer streamer.Close()
 
 	mem := store.NewMemStore()
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	cache := store.NewMemCache()
 	orch, err := orchestrator.New("unix:///nonexistent/docker.sock")
 	if err != nil {
@@ -210,7 +210,7 @@ func TestMCPAllToolsAgainstFakeStreamer(t *testing.T) {
 
 	sessionID := uuid.New().String()
 	sid, _ := uuid.Parse(sessionID)
-	if err := st.Sessions.CreateSession(context.Background(), &models.Session{
+	if err := st.CreateSession(context.Background(), &models.Session{
 		ID: sid, Status: models.SessionStatusRunning, TargetURL: "https://example.com",
 	}); err != nil {
 		t.Fatal(err)
@@ -384,7 +384,7 @@ func TestMCPAllToolsAgainstFakeStreamer(t *testing.T) {
 	if closeOut != "terminated" {
 		t.Fatalf("close_session = %q", closeOut)
 	}
-	row, _ := st.Sessions.GetSession(context.Background(), sid)
+	row, _ := st.GetSession(context.Background(), sid)
 	if row != nil && row.Status == models.SessionStatusRunning {
 		t.Fatalf("session still running after close")
 	}
@@ -393,7 +393,7 @@ func TestMCPAllToolsAgainstFakeStreamer(t *testing.T) {
 func TestMCP_CreateSessionRequiresURL(t *testing.T) {
 	const token = "integration-test-token-32chars-minimum!!"
 	mem := store.NewMemStore()
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	cache := store.NewMemCache()
 	orch, _ := orchestrator.New("unix:///nonexistent/docker.sock")
 	cfg := &config.Config{
@@ -440,8 +440,8 @@ func TestMCP_HTTPRoutes(t *testing.T) {
 	r := chi.NewRouter()
 	cfg := &config.Config{MCPEnabled: true, MCPTokens: []string{token}}
 	Mount(r, cfg, Deps{
-		API:   api.New(store.NewMemBridgeStore(store.NewMemStore()), store.NewMemCache(), nil, cfg),
-		Store: store.NewMemBridgeStore(store.NewMemStore()),
+		API:   api.New(store.NewMemStore(), store.NewMemCache(), nil, cfg),
+		Store: store.NewMemStore(),
 		Cache: store.NewMemCache(),
 		Cfg:   cfg,
 	})

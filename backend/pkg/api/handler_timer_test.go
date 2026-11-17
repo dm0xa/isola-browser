@@ -19,7 +19,7 @@ func newTestHandler(t *testing.T, cfg *config.Config) *Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(store.NewMemBridgeStore(mem), store.NewMemCache(), orch, cfg)
+	return New(mem, store.NewMemCache(), orch, cfg)
 }
 
 // TestSessionDurationTimerFlag pins the contract that session.timer: false

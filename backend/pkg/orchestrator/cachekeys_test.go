@@ -49,7 +49,7 @@ func TestFinalizeRunningSessionClearsEveryCacheKey(t *testing.T) {
 
 	ms := store.NewMemStore()
 	defer ms.Close()
-	st := store.NewMemBridgeStore(ms)
+	st := ms
 	cache := store.NewMemCache()
 	defer cache.Close()
 

@@ -23,7 +23,7 @@ func TestAbandonSessionTerminatesAfterCancelledContext(t *testing.T) {
 
 	mem := store.NewMemStore()
 	t.Cleanup(func() { mem.Close() })
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	cache := store.NewMemCache()
 	orch, err := orchestrator.New("unix:///nonexistent/docker.sock") // lazy — no docker needed
 	if err != nil {
@@ -31,7 +31,7 @@ func TestAbandonSessionTerminatesAfterCancelledContext(t *testing.T) {
 	}
 
 	id := uuid.New()
-	if err := st.Sessions.CreateSession(context.Background(), &models.Session{
+	if err := st.CreateSession(context.Background(), &models.Session{
 		ID: id, Status: models.SessionStatusProvisioning, TargetURL: "https://example.com",
 	}); err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestAbandonSessionTerminatesAfterCancelledContext(t *testing.T) {
 	cancel()
 	svc.abandonSession(ctx, id.String())
 
-	row, err := st.Sessions.GetSession(context.Background(), id)
+	row, err := st.GetSession(context.Background(), id)
 	if err != nil {
 		t.Fatal(err)
 	}

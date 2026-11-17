@@ -9,7 +9,7 @@ import (
 // Deps wires the MCP server into the existing backend.
 type Deps struct {
 	API   *api.Handler
-	Store *store.Store
+	Store *store.MemStore
 	Cache *store.MemCache
 	Cfg   *config.Config
 }

@@ -24,7 +24,7 @@ import (
 // id is never sufficient" (docs/security.md).
 func TestGetSessionNeverLeaksControlTokenToNonOwner(t *testing.T) {
 	mem := store.NewMemStore()
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	cache := store.NewMemCache()
 	orch, err := orchestrator.New("unix:///nonexistent/docker.sock") // lazy — no docker needed
 	if err != nil {
@@ -34,7 +34,7 @@ func TestGetSessionNeverLeaksControlTokenToNonOwner(t *testing.T) {
 
 	ctx := context.Background()
 	sid := uuid.New()
-	if err := st.Sessions.CreateSession(ctx, &models.Session{
+	if err := st.CreateSession(ctx, &models.Session{
 		ID:        sid,
 		UserID:    uuid.Nil, // anonymous session
 		Status:    models.SessionStatusProvisioning,
@@ -43,7 +43,7 @@ func TestGetSessionNeverLeaksControlTokenToNonOwner(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.Sessions.ActivateSession(ctx, sid, "container-1", "127.0.0.1", 5900, 10*time.Minute); err != nil {
+	if err := st.ActivateSession(ctx, sid, "container-1", "127.0.0.1", 5900, 10*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	const controlToken = "the-real-control-token"

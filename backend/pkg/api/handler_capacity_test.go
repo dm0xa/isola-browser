@@ -16,11 +16,11 @@ import (
 	"github.com/dm0xa/isola-browser/backend/pkg/store"
 )
 
-func newCapacityTestHandler(t *testing.T, cfg *config.Config) (*Handler, *store.Store) {
+func newCapacityTestHandler(t *testing.T, cfg *config.Config) (*Handler, *store.MemStore) {
 	t.Helper()
 	mem := store.NewMemStore()
 	t.Cleanup(func() { mem.Close() })
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	orch, err := orchestrator.New("unix:///nonexistent/docker.sock") // lazy — no docker needed
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestCreateSessionRefusedAtMaxSessions(t *testing.T) {
 
 	// Seed one active session directly: a row created through the handler would
 	// be raced by its own provisioning goroutine (no docker in tests).
-	if err := st.Sessions.CreateSession(context.Background(), &models.Session{
+	if err := st.CreateSession(context.Background(), &models.Session{
 		ID:        uuid.New(),
 		Status:    models.SessionStatusRunning,
 		TargetURL: "https://example.com",
@@ -130,7 +130,7 @@ func TestCreateSessionAllowsConcurrentAnonymousSessions(t *testing.T) {
 		}
 	}
 
-	row, err := st.Sessions.GetSession(context.Background(), firstID)
+	row, err := st.GetSession(context.Background(), firstID)
 	if err != nil {
 		t.Fatal(err)
 	}

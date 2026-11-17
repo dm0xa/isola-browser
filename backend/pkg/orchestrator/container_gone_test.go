@@ -66,7 +66,7 @@ exit 1`,
 			stubDocker(t, tc.docker)
 
 			ctx := context.Background()
-			st := store.NewMemBridgeStore(store.NewMemStore())
+			st := store.NewMemStore()
 			cache := store.NewMemCache()
 			orch, err := New("unix:///nonexistent/docker.sock")
 			if err != nil {
@@ -74,7 +74,7 @@ exit 1`,
 			}
 
 			sid := uuid.New()
-			if err := st.Sessions.CreateSession(ctx, &models.Session{
+			if err := st.CreateSession(ctx, &models.Session{
 				ID:        sid,
 				UserID:    uuid.Nil,
 				Status:    models.SessionStatusProvisioning,
@@ -83,7 +83,7 @@ exit 1`,
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if err := st.Sessions.ActivateSession(ctx, sid, "0b132d730c9b", "127.0.0.1", 5900, 10*time.Minute); err != nil {
+			if err := st.ActivateSession(ctx, sid, "0b132d730c9b", "127.0.0.1", 5900, 10*time.Minute); err != nil {
 				t.Fatal(err)
 			}
 
@@ -91,7 +91,7 @@ exit 1`,
 				t.Fatalf("FinalizeIfContainerGone() = %v, want %v", got, tc.wantFinalize)
 			}
 
-			sess, err := st.Sessions.GetSession(ctx, sid)
+			sess, err := st.GetSession(ctx, sid)
 			if err != nil {
 				t.Fatal(err)
 			}

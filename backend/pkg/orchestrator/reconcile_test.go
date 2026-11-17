@@ -81,9 +81,9 @@ func seedRestored(t *testing.T, ms *store.MemStore, status, containerID string) 
 	return id
 }
 
-func activeIDs(t *testing.T, st *store.Store) map[uuid.UUID]bool {
+func activeIDs(t *testing.T, st *store.MemStore) map[uuid.UUID]bool {
 	t.Helper()
-	sessions, err := st.Sessions.ListActiveSessions(context.Background())
+	sessions, err := st.ListActiveSessions(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestReconcileRestoredSessionsDropsUnbackedSessions(t *testing.T) {
 
 	ms := store.NewMemStore()
 	defer ms.Close()
-	st := store.NewMemBridgeStore(ms)
+	st := ms
 	cache := store.NewMemCache()
 	defer cache.Close()
 
@@ -129,7 +129,7 @@ func TestReconcileRestoredSessionsDropsUnbackedSessions(t *testing.T) {
 
 	// Finalized rows are terminated, not deleted outright (the store keeps them
 	// briefly for the viewer/timer paths, then reaps them).
-	if s, err := st.Sessions.GetSession(context.Background(), gone); err != nil {
+	if s, err := st.GetSession(context.Background(), gone); err != nil {
 		t.Fatalf("get gone session: %v", err)
 	} else if s.Status != models.SessionStatusTerminated {
 		t.Errorf("gone session status = %q, want %q", s.Status, models.SessionStatusTerminated)
@@ -144,7 +144,7 @@ func TestReconcileRestoredSessionsKeepsStateWhenRuntimeDown(t *testing.T) {
 
 	ms := store.NewMemStore()
 	defer ms.Close()
-	st := store.NewMemBridgeStore(ms)
+	st := ms
 	cache := store.NewMemCache()
 	defer cache.Close()
 
@@ -169,7 +169,7 @@ func TestReconcileRestoredSessionsNoopWithoutSessions(t *testing.T) {
 
 	ms := store.NewMemStore()
 	defer ms.Close()
-	st := store.NewMemBridgeStore(ms)
+	st := ms
 	cache := store.NewMemCache()
 	defer cache.Close()
 

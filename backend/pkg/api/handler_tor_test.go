@@ -73,7 +73,7 @@ func TestCreateSessionTorCountry(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			sess, err := st.Sessions.GetSession(context.Background(), id)
+			sess, err := st.GetSession(context.Background(), id)
 			if err != nil || sess == nil {
 				t.Fatalf("session row missing (err=%v)", err)
 			}

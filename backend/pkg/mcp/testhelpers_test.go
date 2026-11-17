@@ -18,14 +18,14 @@ func newStreamerService(t *testing.T, sessionID, addr string) *Service {
 
 	mem := store.NewMemStore()
 	t.Cleanup(func() { mem.Close() })
-	st := store.NewMemBridgeStore(mem)
+	st := mem
 	cache := store.NewMemCache()
 
 	sid, err := uuid.Parse(sessionID)
 	if err != nil {
 		t.Fatalf("session id: %v", err)
 	}
-	if err := st.Sessions.CreateSession(context.Background(), &models.Session{
+	if err := st.CreateSession(context.Background(), &models.Session{
 		ID: sid, Status: models.SessionStatusRunning, TargetURL: "https://example.com",
 	}); err != nil {
 		t.Fatalf("seed session: %v", err)

@@ -296,7 +296,7 @@ func (s *Service) waitSessionRunning(ctx context.Context, sessionID string) erro
 		return err
 	}
 	for time.Now().Before(deadline) {
-		sess, err := s.deps.Store.Sessions.GetSession(ctx, id)
+		sess, err := s.deps.Store.GetSession(ctx, id)
 		if err != nil || sess == nil {
 			return fmt.Errorf("session not found")
 		}
