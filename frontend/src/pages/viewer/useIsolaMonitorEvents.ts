@@ -4,7 +4,7 @@ import { mergeConsoleEntry } from '../../lib/consoleEntries';
 import { cookieFromWire, mergeCookieEntry } from '../../lib/cookieEntries';
 import { getNetworkLogMaxEntries } from '../../lib/config';
 import type { DocumentHeaders } from '../../lib/intel';
-import { mergeNetEntry } from '../../lib/netEntries';
+import { mergeNetEntryInPlace } from '../../lib/netEntries';
 
 export function useIsolaMonitorEvents(
   netEntriesRef: MutableRefObject<NetEntry[]>,
@@ -16,14 +16,45 @@ export function useIsolaMonitorEvents(
   setDocHeaders: Dispatch<SetStateAction<Record<string, DocumentHeaders>>>,
 ) {
   useEffect(() => {
+    // One render per burst, not per event. A page load emits ~4 snapshots per
+    // request (requestWillBeSent, responseReceived, finished, hash), and each
+    // one used to copy the whole list and repaint the panel — several hundred
+    // state updates in a few seconds while the H.264 stream is also decoding.
+    // The refs stay authoritative; this publishes them at most every 50 ms.
+    const pending = { net: false, console: false, cookie: false };
+    let flushTimer: number | null = null;
+    const flush = () => {
+      flushTimer = null;
+      if (pending.net) {
+        pending.net = false;
+        setNetEntries(netEntriesRef.current.slice());
+      }
+      if (pending.console) {
+        pending.console = false;
+        setConsoleEntries(consoleRef.current.slice());
+      }
+      if (pending.cookie) {
+        pending.cookie = false;
+        setCookieEntries(cookieRef.current.slice());
+      }
+    };
+    const schedule = (kind: 'net' | 'console' | 'cookie') => {
+      pending[kind] = true;
+      if (flushTimer === null) flushTimer = window.setTimeout(flush, 50);
+    };
+    const flushNow = () => {
+      if (flushTimer !== null) window.clearTimeout(flushTimer);
+      flush();
+    };
+
     const onNet = (e: Event) => {
       const entry = (e as CustomEvent<NetEntry>).detail;
       if (!entry) return;
       const max = getNetworkLogMaxEntries();
-      const next = mergeNetEntry(netEntriesRef.current, entry);
-      if (next.length > max) next.splice(0, next.length - max);
-      netEntriesRef.current = next;
-      setNetEntries(next);
+      const list = netEntriesRef.current;
+      mergeNetEntryInPlace(list, entry);
+      if (list.length > max) list.splice(0, list.length - max);
+      schedule('net');
     };
     const onConsole = (e: Event) => {
       const d = (e as CustomEvent).detail;
@@ -32,7 +63,7 @@ export function useIsolaMonitorEvents(
       const next = mergeConsoleEntry(consoleRef.current, entry);
       if (next.length > 300) next.splice(0, next.length - 300);
       consoleRef.current = next;
-      setConsoleEntries(next);
+      schedule('console');
     };
     const onCookie = (e: Event) => {
       const d = (e as CustomEvent).detail;
@@ -42,7 +73,7 @@ export function useIsolaMonitorEvents(
       let next = mergeCookieEntry(cookieRef.current, entry);
       if (next.length > 200) next = next.slice(next.length - 200);
       cookieRef.current = next;
-      setCookieEntries(next);
+      schedule('cookie');
     };
     const onNetInit = (e: Event) => {
       const entries = (e as CustomEvent<NetEntry[]>).detail;
@@ -50,6 +81,11 @@ export function useIsolaMonitorEvents(
       const max = getNetworkLogMaxEntries();
       const trimmed = entries.length > max ? entries.slice(entries.length - max) : entries;
       netEntriesRef.current = trimmed;
+      pending.net = false;
+      if (flushTimer !== null) {
+        window.clearTimeout(flushTimer);
+        flushTimer = null;
+      }
       setNetEntries(trimmed);
     };
     const onHeaders = (e: Event) => {
@@ -59,10 +95,15 @@ export function useIsolaMonitorEvents(
     };
     const onNetClear = () => {
       netEntriesRef.current = [];
-      setNetEntries([]);
       consoleRef.current = [];
-      setConsoleEntries([]);
       cookieRef.current = [];
+      pending.net = pending.console = pending.cookie = false;
+      if (flushTimer !== null) {
+        window.clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      setNetEntries([]);
+      setConsoleEntries([]);
       setCookieEntries([]);
       setDocHeaders({});
     };
@@ -73,6 +114,9 @@ export function useIsolaMonitorEvents(
     window.addEventListener('isola-cookie', onCookie);
     window.addEventListener('isola-headers', onHeaders);
     return () => {
+      // Publish whatever the last burst left pending, so a panel remount does
+      // not lose the tail of a capture.
+      flushNow();
       window.removeEventListener('isola-net', onNet);
       window.removeEventListener('isola-net-init', onNetInit);
       window.removeEventListener('isola-net-clear', onNetClear);

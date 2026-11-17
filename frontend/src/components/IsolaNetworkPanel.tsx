@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { cookieDomainLabel, cookieExpiryLabel } from '../lib/cookieEntries';
+import { getNetworkLogMaxEntries } from '../lib/config';
 import {
   formatProbeData,
   postureGradeClass,
@@ -118,15 +119,29 @@ function shannon(s: string): number {
   return h;
 }
 
-export function analyze(url: string): { host: string; path: string; flags: NetFlags } {
+export interface AnalyzedURL {
+  host: string;
+  path: string;
+  /** Last path segment (or hostname), the short label the graph draws. */
+  label: string;
+  flags: NetFlags;
+}
+
+export function analyze(url: string): AnalyzedURL {
   let host = '';
   let path: string;
+  let label = url.slice(0, 60);
   let scheme = 'https:';
   let port = '';
   try {
     const u = new URL(url);
     host = u.hostname;
     path = u.pathname + u.search;
+    // Same parse, one extra slice: deriving the label in buildGraph meant a
+    // second `new URL()` for every resource after this one had already parsed
+    // the same string.
+    const parts = u.pathname.split('/').filter(Boolean);
+    label = parts.pop() || u.hostname;
     scheme = u.protocol;
     port = u.port;
   } catch {
@@ -147,7 +162,7 @@ export function analyze(url: string): { host: string; path: string; flags: NetFl
     })(),
     oddPort: port !== '' && port !== '80' && port !== '443',
   };
-  return { host, path, flags };
+  return { host, path, label, flags };
 }
 
 function fmtSize(b?: number): string {
@@ -497,10 +512,26 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
     [consoleEntries, tabFilter],
   );
 
-  const analyzed = useMemo(
-    () => tabFiltered.map((e) => ({ e, ...analyze(e.url) })),
-    [tabFiltered],
-  );
+  // analyze() parses the URL and runs the flag regexes. The snapshot is
+  // republished on every capture burst, so without this cache a page load
+  // re-analysed the whole 1000-row window tens of times per second. Keyed by
+  // URL because a request is republished as its status/size/hash arrive.
+  const analyzeCacheRef = useRef(new Map<string, AnalyzedURL>());
+  const analyzed = useMemo(() => {
+    const cache = analyzeCacheRef.current;
+    // Grow the cache to twice the capture window before dropping it: clearing
+    // at a fixed 5000 re-parsed every URL on every publish once the operator
+    // configured the 10000-entry cap.
+    if (cache.size > getNetworkLogMaxEntries() * 2) cache.clear();
+    return tabFiltered.map((e) => {
+      let info = cache.get(e.url);
+      if (!info) {
+        info = analyze(e.url);
+        cache.set(e.url, info);
+      }
+      return { e, ...info };
+    });
+  }, [tabFiltered]);
   const visible = useMemo(() => {
     const q = filter.trim().toLowerCase();
     return analyzed.filter(({ e, host, flags }) => {

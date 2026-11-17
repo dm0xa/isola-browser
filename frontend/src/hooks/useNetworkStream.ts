@@ -5,7 +5,7 @@ import { mergeConsoleEntry } from '../lib/consoleEntries';
 import { cookieFromWire, mergeCookieEntry } from '../lib/cookieEntries';
 import type { DocumentHeaders } from '../lib/intel';
 import { getNetworkLogMaxEntries } from '../lib/config';
-import { mergeNetEntry } from '../lib/netEntries';
+import { mergeNetEntryInPlace } from '../lib/netEntries';
 
 // Console and cookie caps mirror the in-viewer panel so a long-lived tab cannot
 // grow unbounded. The network cap is configurable (session.network_log_max_entries)
@@ -80,11 +80,41 @@ export function useNetworkStream(wsUrl: string | null) {
     aliveRef.current = true;
     failuresRef.current = 0;
 
+    // One publish per burst instead of one per wire message: the streamer
+    // republishes each request up to four times as status/size/hash arrive, and
+    // every publish re-renders the whole capture (measured 2.3 ms per update at
+    // the 1000-entry cap). Refs stay authoritative; the snapshot is published
+    // at most every 50 ms.
+    let publishTimer: number | null = null;
+    const dirty = { entries: false, console: false, cookie: false };
+    const publish = () => {
+      publishTimer = null;
+      if (!aliveRef.current) return;
+      const d = { ...dirty };
+      dirty.entries = dirty.console = dirty.cookie = false;
+      if (!d.entries && !d.console && !d.cookie) return;
+      setSnapshot((p) => ({
+        ...p,
+        entries: d.entries ? netRef.current.slice() : p.entries,
+        consoleEntries: d.console ? consoleRef.current.slice() : p.consoleEntries,
+        cookieEntries: d.cookie ? cookieRef.current.slice() : p.cookieEntries,
+      }));
+    };
+    const schedulePublish = (kind: 'entries' | 'console' | 'cookie') => {
+      dirty[kind] = true;
+      if (publishTimer === null) publishTimer = window.setTimeout(publish, 50);
+    };
+
     const clearBuffers = () => {
       netRef.current = [];
       consoleRef.current = [];
       cookieRef.current = [];
       docHeadersRef.current = {};
+      dirty.entries = dirty.console = dirty.cookie = false;
+      if (publishTimer !== null) {
+        window.clearTimeout(publishTimer);
+        publishTimer = null;
+      }
       setSnapshot(EMPTY);
     };
 
@@ -133,10 +163,10 @@ export function useNetworkStream(wsUrl: string | null) {
           case 'net': {
             if (!msg.e) return;
             const max = getNetworkLogMaxEntries();
-            let next = mergeNetEntry(netRef.current, msg.e);
-            if (next.length > max) next = next.slice(next.length - max);
-            netRef.current = next;
-            setSnapshot((p) => ({ ...p, entries: next }));
+            const list = netRef.current;
+            mergeNetEntryInPlace(list, msg.e);
+            if (list.length > max) list.splice(0, list.length - max);
+            schedulePublish('entries');
             break;
           }
           case 'net_init': {
@@ -145,6 +175,9 @@ export function useNetworkStream(wsUrl: string | null) {
             const entries =
               msg.entries.length > max ? msg.entries.slice(msg.entries.length - max) : msg.entries;
             netRef.current = entries;
+            // The replay is a bulk replace; publish it now rather than behind a
+            // 50 ms timer so the first paint of a pop-out is not blank.
+            dirty.entries = false;
             setSnapshot((p) => ({ ...p, entries }));
             break;
           }
@@ -160,7 +193,7 @@ export function useNetworkStream(wsUrl: string | null) {
             const next = mergeConsoleEntry(consoleRef.current, entry);
             if (next.length > MAX_CONSOLE) next.splice(0, next.length - MAX_CONSOLE);
             consoleRef.current = next;
-            setSnapshot((p) => ({ ...p, consoleEntries: next }));
+            schedulePublish('console');
             break;
           }
           case 'cookie': {
@@ -169,7 +202,7 @@ export function useNetworkStream(wsUrl: string | null) {
             let next = mergeCookieEntry(cookieRef.current, entry);
             if (next.length > MAX_COOKIE) next = next.slice(next.length - MAX_COOKIE);
             cookieRef.current = next;
-            setSnapshot((p) => ({ ...p, cookieEntries: next }));
+            schedulePublish('cookie');
             break;
           }
           case 'headers': {

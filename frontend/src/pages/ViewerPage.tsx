@@ -18,6 +18,10 @@ import { ViewerDebugOverlay } from './viewer/ViewerDebugOverlay';
 import { buildDebugInfo, copyTextToClipboard, formatDebugInfo } from './viewer/debugInfo';
 import { captureResolutionFor, parseResolution } from '../lib/resolution';
 
+// Hoisted: a fresh object identity per render defeated the memoised shell (it
+// is rebuilt on every 1 Hz metrics publish otherwise).
+const CONTAINER_STYLE: React.CSSProperties = { width: '100%', height: '100%' };
+
 export default function ViewerPage() {
   const CONNECTING_STALL_TIMEOUT_MS = 12000;
   const RECOVERABLE_ERROR_RETRY_MS = 1000;
@@ -827,7 +831,7 @@ export default function ViewerPage() {
   }, [captureEmptyTotal]);
   const captureStallVisible = isola.metrics.captureFallback
     || (isola.metrics.captureHealthOk && isola.metrics.captureEmptyWindow >= 5 && captureEmptiesFresh);
-  const containerStyle = { width: '100%', height: '100%' };
+  const containerStyle = CONTAINER_STYLE;
 
   // Total load time — from page mount to first decoded frame. Captured
   // exactly once per session (the first time isFirstFrame becomes true)

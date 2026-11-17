@@ -182,6 +182,36 @@ const GRAPH_PALETTE: Record<'dark' | 'light', GraphPalette> = {
   },
 };
 
+type EntryFacts = {
+  host: string;
+  label: string;
+  cls: ResourceClass;
+  flagged: boolean;
+  page: string;
+};
+
+// A capture snapshot keeps the identity of every row it did not touch: the
+// reader replaces only the updated entry object. buildGraph runs twice per
+// publish (full capture for the legend, filtered view for the canvas), so
+// memoising the per-entry parse removes a URL parse and a class check for every
+// unchanged row in both passes.
+const entryFactsCache = new WeakMap<NetEntry, EntryFacts>();
+
+function entryFacts(e: NetEntry): EntryFacts {
+  const cached = entryFactsCache.get(e);
+  if (cached) return cached;
+  const analyzed = analyze(e.url);
+  const facts: EntryFacts = {
+    host: analyzed.host,
+    label: analyzed.label,
+    cls: classifyResource(e.t || '', e.url),
+    flagged: Object.values(analyzed.flags).some(Boolean),
+    page: (e.oh || '').trim(),
+  };
+  entryFactsCache.set(e, facts);
+  return facts;
+}
+
 export function buildGraph(
   entries: NetEntry[],
   pinnedHost?: string,
@@ -197,16 +227,9 @@ export function buildGraph(
   // One parse per entry: the host, the resource class, the warning flags and
   // the page the request belongs to. The streamer stamps `oh` (the tab's
   // main-frame document host) when it captures the request; an iframe document
-  // inherits its parent page, so only real navigations create pages.
-  const facts = entries.map((e) => {
-    const { host, flags } = analyze(e.url);
-    return {
-      host,
-      cls: classifyResource(e.t || '', e.url),
-      flagged: Object.values(flags).some(Boolean),
-      page: (e.oh || '').trim(),
-    };
-  });
+  // inherits its parent page, so only real navigations create pages. The parse
+  // is memoised per entry object (see entryFactsCache).
+  const facts = entries.map(entryFacts);
 
   // The origin is decided over the whole capture, never the filtered slice:
   // narrowing to one type must not make a CDN host look like the opened page.
@@ -251,9 +274,8 @@ export function buildGraph(
 
     const rid = resourceId(e.url);
     if (!nodes.has(rid)) {
-      const path = (() => { try { const u = new URL(e.url); const parts = u.pathname.split('/').filter(Boolean); return parts.pop() || u.hostname; } catch { return e.url.slice(0, 60); } })();
       const resource: GraphNode = {
-        id: rid, kind: 'resource', label: path, host, fullUrl: e.url, resourceClass: rClass,
+        id: rid, kind: 'resource', label: facts[idx].label, host, fullUrl: e.url, resourceClass: rClass,
         count: 1, flagged: entryFlagged, failed: entryFailed,
         lastTs: e.ts,
         sha1: e.h,
@@ -1092,10 +1114,49 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   const minimapDragRef = useRef(false);
 
   const viewRef = useRef<View>(view);
+
+  // Pan/pinch emit one state update per pointer event (~120/s on a trackpad)
+  // and each one re-renders every node and edge in the graph. Keep the ref
+  // current for hit testing and commit at most one render per frame.
+  const pendingVRef = useRef<View | null>(null);
+  const vRafRef = useRef<number | null>(null);
+  const queueV = useCallback((v: View) => {
+    viewRef.current = v;
+    pendingVRef.current = v;
+    if (vRafRef.current !== null) return;
+    vRafRef.current = requestAnimationFrame(() => {
+      vRafRef.current = null;
+      const pending = pendingVRef.current;
+      pendingVRef.current = null;
+      if (pending) setView(pending);
+    });
+  }, []);
+
+  // An immediate commit (fit, zoom button, minimap jump, keyboard pan) must win
+  // over a pan frame still waiting for its animation callback, otherwise the
+  // queued value lands afterwards and reverts the user's action.
   const setV = useCallback((v: View) => {
     viewRef.current = v;
+    pendingVRef.current = null;
+    if (vRafRef.current !== null) {
+      cancelAnimationFrame(vRafRef.current);
+      vRafRef.current = null;
+    }
     setView(v);
   }, []);
+
+  useEffect(
+    () => () => {
+      if (vRafRef.current !== null) cancelAnimationFrame(vRafRef.current);
+      vRafRef.current = null;
+    },
+    [],
+  );
+
+  // The container's viewport rect is stable for the duration of a drag, so it
+  // is measured by the ResizeObserver instead of forcing a synchronous layout
+  // on every pointer/wheel event.
+  const rectRef = useRef<DOMRect | null>(null);
 
   const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const panRef = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null);
@@ -1107,14 +1168,25 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    const measure = () => {
+      rectRef.current = el.getBoundingClientRect();
+    };
+    measure();
     const ro = new ResizeObserver((entries) => {
       for (const e of entries) {
         const cr = e.contentRect;
         setSize({ w: cr.width, h: cr.height });
       }
+      measure();
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    window.addEventListener('scroll', measure, { passive: true });
+    window.addEventListener('resize', measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('scroll', measure);
+      window.removeEventListener('resize', measure);
+    };
   }, []);
 
   useEffect(() => {
@@ -1123,23 +1195,29 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
 
   const groupByType = !onlyFailed && typeFilter.size !== 1;
 
-  const { layout, graph, viewGraph, fullGraph } = useMemo(() => {
-    // `fullGraph` keeps every captured type so the legend's counts stay stable
-    // while `graph` is what the current filter / failed spotlight draws.
-    const full = buildGraph(entries, originHost);
+  // `fullGraph` keeps every captured type so the legend's counts stay stable
+  // while `graph` is what the current filter / failed spotlight draws. It is a
+  // separate memo because building it parses every URL in the capture: folding
+  // it into the filtered build below re-parsed the whole capture on every
+  // filter click, expansion toggle and resize for a graph that never changed.
+  const fullGraph = useMemo(() => buildGraph(entries, originHost), [entries, originHost]);
+
+  const { graph, viewGraph } = useMemo(() => {
     const source = onlyFailed ? entries.filter((e) => e.f) : entries;
     const g = buildGraph(source, originHost, typeFilter);
     // A single-type facet is already an explicit “show only this kind” drill
     // down, and a failed spotlight is a filtered leaf view: both bypass the
     // summary grouping. Every other view is summary-first.
     const shaped = !onlyFailed && typeFilter.size !== 1 ? applyExpansion(g, expansion) : g;
-    return {
-      graph: g,
-      viewGraph: shaped,
-      fullGraph: full,
-      layout: layoutGraph(shaped, size.w, size.h, direction),
-    };
-  }, [entries, originHost, size.w, size.h, direction, typeFilter, onlyFailed, expansion]);
+    return { graph: g, viewGraph: shaped };
+  }, [entries, originHost, typeFilter, onlyFailed, expansion]);
+
+  // Layout is a pure function of the shaped graph and the canvas size. It is
+  // keyed separately so panning and zooming (view state) never recompute it.
+  const layout = useMemo(
+    () => layoutGraph(viewGraph, size.w, size.h, direction),
+    [viewGraph, size.w, size.h, direction],
+  );
 
   // Opening a page (or navigating to another origin) starts from the same
   // summary: the opened page's host is expanded, every type group is closed.
@@ -1301,17 +1379,21 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     });
   }, [setV, size.w, size.h]);
 
-  const zoomAt = useCallback((factor: number, ax: number, ay: number) => {
+  const zoomAt = useCallback((factor: number, ax: number, ay: number, queued = false) => {
     const v = viewRef.current;
     const nz = clampZ(v.z * factor);
     if (nz === v.z) return;
     userAdjustedRef.current = true;
-    setV({
+    const next = {
       z: nz,
       x: ax - (ax - v.x) * (nz / v.z),
       y: ay - (ay - v.y) * (nz / v.z),
-    });
-  }, [setV]);
+    };
+    // Wheel and minimap drag emit dozens of events per gesture; buttons and
+    // keys are single events and should land immediately.
+    if (queued) queueV(next);
+    else setV(next);
+  }, [queueV, setV]);
 
   // Numbers for the exported image's caption. They describe the graph the user
   // is looking at (filters included), not the raw capture.
@@ -1428,9 +1510,9 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const rect = el.getBoundingClientRect();
+      const rect = rectRef.current ?? el.getBoundingClientRect();
       const factor = Math.exp(-e.deltaY * 0.0016);
-      zoomAt(factor, e.clientX - rect.left, e.clientY - rect.top);
+      zoomAt(factor, e.clientX - rect.left, e.clientY - rect.top, true);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
@@ -1450,7 +1532,8 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   }, []);
 
   const localPos = (e: React.PointerEvent) => {
-    const rect = containerRef.current!.getBoundingClientRect();
+    const el = containerRef.current!;
+    const rect = rectRef.current ?? el.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   };
 
@@ -1487,6 +1570,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     if ((e.target as Element).closest('[data-graph-tooltip]')) return;
     if ((e.target as Element).closest('[data-node]') && e.pointerType === 'mouse') return;
     const el = containerRef.current!;
+    rectRef.current = el.getBoundingClientRect();
     el.focus({ preventScroll: true });
     el.setPointerCapture(e.pointerId);
     const p = localPos(e);
@@ -1523,11 +1607,11 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
       const mx = (a.x + b.x) / 2;
       const my = (a.y + b.y) / 2;
       userAdjustedRef.current = true;
-      setV({ z: nz, x: mx - wx * nz, y: my - wy * nz });
+      queueV({ z: nz, x: mx - wx * nz, y: my - wy * nz });
     } else if (panRef.current) {
       const d = panRef.current;
       userAdjustedRef.current = true;
-      setV({ z: viewRef.current.z, x: d.px + (p.x - d.sx), y: d.py + (p.y - d.sy) });
+      queueV({ z: viewRef.current.z, x: d.px + (p.x - d.sx), y: d.py + (p.y - d.sy) });
     }
   };
 
@@ -2116,10 +2200,6 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
   // elements to the DOM after "expand all", all re-created on every event.
   const minimapGeom = useMemo(() => {
     if (tiny || layout.nodes.length === 0) return null;
-    const overflowX = layout.totalW * view.z > size.w * 1.02;
-    const overflowY = layout.totalH * view.z > size.h * 1.02;
-    if (!overflowX && !overflowY) return null;
-
     const mmW = 152;
     const mmH = 100;
     const pad = 6;
@@ -2130,11 +2210,22 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
     const offX = (mmW - layout.totalW * scale) / 2;
     const offY = (mmH - layout.totalH * scale) / 2;
     return { mmW, mmH, scale, offX, offY };
-  }, [tiny, layout, view.z, size.w, size.h]);
+  }, [tiny, layout]);
+
+  // Whether the minimap is needed depends on the zoom level, but the painted
+  // node boxes and the mapping do not: gating the geometry on view.z made every
+  // wheel step repaint one rect per node (a thousand at the default capture
+  // cap) for a picture that had not changed.
+  const minimapVisible =
+    minimapGeom &&
+    !tiny &&
+    (layout.totalW * view.z > size.w * 1.02 || layout.totalH * view.z > size.h * 1.02)
+      ? minimapGeom
+      : null;
 
   const minimapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
-    const g = minimapGeom;
+    const g = minimapVisible;
     const canvas = minimapCanvasRef.current;
     if (!g || !canvas) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -2163,10 +2254,10 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
       );
     }
     ctx.globalAlpha = 1;
-  }, [minimapGeom, layout, viewGraph.originId, pal, accentOf]);
+  }, [minimapVisible, layout, viewGraph.originId, pal, accentOf]);
 
   const minimap = (() => {
-    const g = minimapGeom;
+    const g = minimapVisible;
     if (!g) return null;
     const { mmW, mmH, scale, offX, offY } = g;
     const viewX = offX + (-view.x / view.z) * scale;
@@ -2181,7 +2272,9 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
       const wx = (e.clientX - rect.left - offX) / scale;
       const wy = (e.clientY - rect.top - offY) / scale;
       userAdjustedRef.current = true;
-      setV({
+      // Dragging the minimap viewport emits a pointermove per frame budget,
+      // each re-rendering the whole graph; coalesce like canvas panning.
+      queueV({
         z: viewRef.current.z,
         x: size.w / 2 - wx * viewRef.current.z,
         y: size.h / 2 - wy * viewRef.current.z,

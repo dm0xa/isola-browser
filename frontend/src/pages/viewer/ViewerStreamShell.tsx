@@ -24,7 +24,10 @@ export type ViewerStreamShellProps = {
   theme: 'dark' | 'light';
 };
 
-export function ViewerStreamShell(props: ViewerStreamShellProps) {
+// Memoised: the shell renders the canvas host, the panel and the logo styles,
+// none of which read stream metrics. Without this every 1 Hz metrics publish
+// re-rendered the open panel (measured 37 ms at the 1000-entry cap).
+export const ViewerStreamShell = React.memo(function ViewerStreamShell(props: ViewerStreamShellProps) {
   const {
     shellRef, canvasRef, containerStyle, networkCaptureEnabled, netPanel, netEntries,
     consoleEntries, cookieEntries, docHeaders, onIntel, intelDisabled, netTab, setNetTab, setNetPanel, openNetworkPopOut,
@@ -92,4 +95,4 @@ export function ViewerStreamShell(props: ViewerStreamShellProps) {
       `}</style>
     </>
   );
-}
+});
