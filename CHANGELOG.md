@@ -5,6 +5,15 @@ Notable changes to isola, in
 publishes the section matching the tag.
 
 ## [Unreleased]
+### Changed
+
+- Logs read like events now: one short line each, and no repeat noise from
+  retries, ABR steps, blocked navigations or `x264` stats.
+
+### Removed
+
+- Internal cleanup: the session store's pass-through wrappers are gone and
+  stale comments were trimmed. Behavior is unchanged.
 
 ## [1.6.3] - 2026-11-17
 
