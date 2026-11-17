@@ -138,6 +138,13 @@ func (o *Orchestrator) noteContainerMiss(sessionID string) int {
 // only. Runs once; empty result means "unknown" and containers stay permissive.
 func (o *Orchestrator) proxyIPOnBrowserNet() string {
 	o.proxyIPOnce.Do(func() {
+		// Only a process that is itself a container can hold an address on
+		// browser-net. On a host install (LaunchAgent, systemd unit) the inspect
+		// below can never succeed — the hostname is the machine's, not a
+		// container ID — and it cost 152 ms on the first create.
+		if !runningInContainer() {
+			return
+		}
 		hostname, err := os.Hostname()
 		if err != nil {
 			return
@@ -158,6 +165,18 @@ func (o *Orchestrator) proxyIPOnBrowserNet() string {
 		}
 	})
 	return o.proxyIP
+}
+
+// runningInContainer reports whether this process appears to run inside a
+// container. Docker and Podman both leave a marker file at the root; a host
+// install has neither.
+func runningInContainer() bool {
+	for _, marker := range []string{"/.dockerenv", "/run/.containerenv"} {
+		if _, err := os.Stat(marker); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // New creates a new Orchestrator.
@@ -497,29 +516,30 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 	host := ""
 	port := 0
 	cdpPort := 0
-	if hp59, errHP := o.getHostPort(ctx, containerID, "5900/tcp"); errHP == nil && hp59 > 0 {
-		if hp9223, errCDP := o.getHostPort(ctx, containerID, "9223/tcp"); errCDP == nil && hp9223 > 0 {
-			if hostReachable(ctx, "127.0.0.1", hp59) {
-				host = "127.0.0.1"
-				port = hp59
-				cdpPort = hp9223
-				log.Info().Str("container_id", containerID).
-					Int("stream_port", port).Int("cdp_port", cdpPort).
-					Msg("container ready, using published host ports")
-			} else {
-				log.Info().Str("container_id", containerID).
-					Int("stream_port", hp59).
-					Msg("published host port unreachable from this backend, falling back to browser-net address")
-			}
+	hp59, hp9223, containerIP, endpointErr := o.containerEndpoints(ctx, containerID)
+	if endpointErr != nil {
+		log.Warn().Err(endpointErr).Str("container_id", containerID).
+			Msg("container endpoint discovery failed, falling back to browser-net address")
+	}
+	if endpointErr == nil && hp59 > 0 && hp9223 > 0 {
+		if hostReachable(ctx, "127.0.0.1", hp59) {
+			host = "127.0.0.1"
+			port = hp59
+			cdpPort = hp9223
+			log.Info().Str("container_id", containerID).
+				Int("stream_port", port).Int("cdp_port", cdpPort).
+				Msg("container ready, using published host ports")
+		} else {
+			log.Info().Str("container_id", containerID).
+				Int("stream_port", hp59).
+				Msg("published host port unreachable from this backend, falling back to browser-net address")
 		}
 	}
 	if host == "" {
-		ip, err := o.GetContainerIP(ctx, containerID)
-		if err != nil {
-			log.Error().Err(err).Str("container_id", containerID).Msg("failed to get container IP")
-			return nil, err
+		if containerIP == "" {
+			return nil, fmt.Errorf("no IP found for container %s", containerID)
 		}
-		host = ip
+		host = containerIP
 		port = 5900
 		cdpPort = 9223
 		log.Info().Str("container_id", containerID).Str("ip", host).Msg("container ready, using browser-net address")
@@ -639,12 +659,23 @@ func (o *Orchestrator) FinalizeIfContainerGone(ctx context.Context, st *store.St
 
 // TerminateSession stops and removes a browser-node container.
 func (o *Orchestrator) TerminateSession(ctx context.Context, containerID string) error {
+	// The reapers call this with the process-lifetime context, and `docker stop`
+	// has no deadline of its own: a paused VM or a wedged daemon would park that
+	// reaper goroutine forever and stall every session queued behind it.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	log.Info().Str("container_id", containerID).Msg("terminating container")
 
 	cmd := o.dockerCmd(ctx, "stop", "-t", "3", containerID)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Warn().Err(err).Str("output", string(out)).Str("container_id", containerID).Msg("docker stop failed, force-removing")
+	} else {
+		// Containers run with --rm, so a successful stop already removed it.
+		// `rm -f` on a vanished container is safe but costs another CLI spawn
+		// (~35 ms measured) on every session teardown.
+		return nil
 	}
 
 	// Force remove to ensure cleanup (safe even if already removed via --rm)
@@ -695,11 +726,13 @@ func (o *Orchestrator) WaitForStream(ctx context.Context, host string, port int,
 	_ = streamMode
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	deadline := time.Now().Add(timeout)
-	retryInterval := 200 * time.Millisecond
-	const maxRetries = 60
+	// A fixed 100 ms poll: the streamer binds its health endpoint in ~10 ms once
+	// it starts, so the old 200ms→1s backoff only added quantization delay
+	// (measured median 140 ms per launch) to the create path.
+	const retryInterval = 100 * time.Millisecond
 
-	for attempt := 0; ; attempt++ {
-		if time.Now().After(deadline) || attempt >= maxRetries {
+	for attempt := 1; ; attempt++ {
+		if time.Now().After(deadline) {
 			return fmt.Errorf("stream not ready at %s after %v (%d attempts)", addr, timeout, attempt)
 		}
 
@@ -712,10 +745,6 @@ func (o *Orchestrator) WaitForStream(ctx context.Context, host string, port int,
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(retryInterval):
-		}
-		retryInterval *= 2
-		if retryInterval > 1*time.Second {
-			retryInterval = 1 * time.Second
 		}
 	}
 }
@@ -815,6 +844,29 @@ func (o *Orchestrator) getHostPort(ctx context.Context, containerID, portKey str
 		return 0, fmt.Errorf("parse host port %s for %s: %w", raw, containerID, err)
 	}
 	return p, nil
+}
+
+// containerEndpoints reads both published host ports and the browser-net IP in
+// a single `docker inspect`. Cold create used to spawn three inspects here
+// (5900, 9223, and the IP) and each one is a separate CLI process on the
+// create→first-frame path. The template prints one line with `|` separators so
+// an absent mapping leaves an empty field instead of shifting positions.
+func (o *Orchestrator) containerEndpoints(ctx context.Context, containerID string) (streamPort, cdpPort int, ip string, err error) {
+	const tpl = `{{with index .NetworkSettings.Ports "5900/tcp"}}{{if .}}{{(index . 0).HostPort}}{{end}}{{end}}|` +
+		`{{with index .NetworkSettings.Ports "9223/tcp"}}{{if .}}{{(index . 0).HostPort}}{{end}}{{end}}|` +
+		`{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}`
+	cmd := o.dockerCmd(ctx, "inspect", "-f", tpl, containerID)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, 0, "", fmt.Errorf("docker inspect endpoints: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	parts := strings.Split(strings.TrimSpace(string(out)), "|")
+	if len(parts) != 3 {
+		return 0, 0, "", fmt.Errorf("docker inspect endpoints: unexpected output %q", strings.TrimSpace(string(out)))
+	}
+	streamPort, _ = strconv.Atoi(strings.TrimSpace(parts[0]))
+	cdpPort, _ = strconv.Atoi(strings.TrimSpace(parts[1]))
+	return streamPort, cdpPort, strings.TrimSpace(parts[2]), nil
 }
 
 // StartReaper periodically terminates expired sessions.
