@@ -1,8 +1,14 @@
 package api
 
 // getOpenAPISpec returns the OpenAPI 3.0.3 specification as a byte slice.
+// The literal is built once: GET /api/openapi.json is unauthenticated and
+// exempt from the rate limiter, so converting 28 KB of string per request
+// allocated and copied the whole document on every hit.
 func getOpenAPISpec() []byte {
-	return []byte(`{
+	return openAPISpec
+}
+
+var openAPISpec = []byte(`{
   "openapi": "3.0.3",
   "info": {
     "title": "Isola Remote Browser API",
@@ -461,4 +467,3 @@ func getOpenAPISpec() []byte {
     }
   }
 }`)
-}
