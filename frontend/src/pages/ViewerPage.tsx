@@ -17,6 +17,7 @@ import { ViewerStreamShell } from './viewer/ViewerStreamShell';
 import { ViewerDebugOverlay } from './viewer/ViewerDebugOverlay';
 import { buildDebugInfo, copyTextToClipboard, formatDebugInfo } from './viewer/debugInfo';
 import { captureResolutionFor, parseResolution } from '../lib/resolution';
+import { sessionErrorDetail } from './viewer/viewerUtils';
 
 // Hoisted: a fresh object identity per render defeated the memoised shell (it
 // is rebuilt on every 1 Hz metrics publish otherwise).
@@ -1037,7 +1038,7 @@ export default function ViewerPage() {
           </p>
           <p className="text-sm font-mono text-red-600 dark:text-[#f87171] mb-2">{errorText}</p>
           <p className="text-xs font-mono text-zinc-500 dark:text-[#6b7280] mb-10 max-w-sm text-center">
-            {sessionError ? 'The browser session you are looking for does not exist or has expired.' : 'The browser encountered an unexpected problem.'}
+            {sessionErrorDetail(sessionError || '')}
           </p>
           <div className="flex items-center">
             <Link
