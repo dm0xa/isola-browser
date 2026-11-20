@@ -6,6 +6,13 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- A sandbox that fails to start is no longer reported as an expired session;
+  the viewer points you at the isola log for the real reason.
+- Troubleshooting covers a macOS launchd install that cannot find Docker's
+  socket.
+
 ## [1.6.4] - 2026-11-17
 
 ### Changed
