@@ -55,6 +55,28 @@ See [Security](security.md) for the full hardening list.
 4. The viewer opens `/ws/{sessionId}` (`channel=isola`) for video and a second socket with `channel=input` for input. The relay forwards both to the container's streamer.
 5. On end/expiry, the orchestrator terminates the container and the session record is removed.
 
+## Resource Capture
+
+Opt-in and off by default. A record is started at runtime (`POST /capture/start`
+to the streamer, proxied by `POST /api/sessions/{id}/capture/start`), because a
+warm container's environment is baked before its session exists.
+
+1. The streamer already reads a finished response body to compute the SHA-1 the
+   viewer shows. While a record is active it computes SHA-256 from the same
+   bytes and writes them to `/home/isolauser/capture/<session_id>/files/…`
+   (content-addressed, tmp+rename) plus an append-only manifest. Nothing is
+   re-fetched, and no extra CDP calls are made.
+2. The control plane polls that manifest every 10 seconds, pulls new blobs over
+   the loopback-published streamer port, re-verifies each SHA-256 and writes
+   them to `$ISOLA_DATA_DIR/captures/<session_id>/`. A final pull runs in
+   `FinalizeRunningSession` *before* the container is stopped.
+3. No host volume is mounted into the sandbox and the read-only rootfs is
+   unchanged: data leaves through the same HTTP proxy path as intel and the
+   resource graph.
+4. After the session is gone, the archive is served by the control plane under
+   an archive key minted at start, never on the isola origin and always as an
+   attachment.
+
 ## The Streaming Path
 
 - **Video** — Electron compositor → `isola-streamer` → ffmpeg H.264 (Annex-B) over WebSocket → browser `WebCodecs VideoDecoder` → canvas (with an MSE fallback). Encoder bitrate scales with capture resolution.

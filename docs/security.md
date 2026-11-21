@@ -58,7 +58,7 @@ For a host reachable from the internet: set `ISOLA_API_TOKEN` and `RATE_LIMITING
 
 ## What This Does and Does Not Protect Against
 
-- Isola **does** isolate sessions from each other, from your host's network, and from persistent state: nothing installed or logged in a session survives it.
+- Isola **does** isolate sessions from each other, from your host's network, and from persistent state: nothing installed or logged in a session survives it. The one deliberate exception is resource capture (`capture.enabled`): an operator-started record writes response bodies to the host under `capture.dir` and keeps them after the session ends. Captured bytes are untrusted — the API only serves them as attachments outside the app origin, and the viewer previews HTML as source.
 - Containers share the host kernel. This is strong isolation, not a virtual machine; a kernel-level container escape is out of scope. Run Isola on a host you are prepared to dedicate to it, and keep Docker and the kernel patched.
 - The container's own mount table (`mountinfo`) lists the engine's host-side storage paths (an overlay `lowerdir`/`upperdir` under the runtime's data dir). That is inherent to how the runtime composes the root filesystem, discloses nothing reachable, and is not treated as a boundary.
 - Tor routing (`tor_enabled`) changes where traffic goes, not how strongly the sandbox is isolated. Exit-country pinning (`tor.exit_country` / a session's `tor_country`) is stricter still: it is applied with `StrictNodes`, so a country with no reachable exit fails the session instead of egressing elsewhere — and because it narrows the pool of exits, it reduces the anonymity Tor otherwise provides. Treat it as a routing control, not a privacy upgrade.

@@ -6,6 +6,18 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Added
+
+- **Record**: an opt-in viewer control (`ISOLA_CAPTURE_ENABLED=true`) that saves
+  every response body the sandbox downloads — scripts, styles, documents,
+  images, fonts, XHR/fetch — with URL, status, MIME type, sizes, SHA-256 and
+  timestamps, deduplicated by content hash. Archives are written to
+  `<ISOLA_DATA_DIR>/captures/<session_id>/`, survive the session, and can be
+  reviewed, downloaded individually or as a zip. Bodies are pulled to the host
+  while the session runs, with a final pull before the container stops. See
+  [Configuration → capture](docs/configuration.md#capture) and
+  [API → Resource capture](docs/api.md#resource-capture).
+
 ### Fixed
 
 - The warm pool now serves ordinary launches. The launcher sent a resolution

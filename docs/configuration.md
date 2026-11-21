@@ -148,6 +148,33 @@ Controls what the landing page offers.
 
 If `mcp.enabled` is true but no token is set, or any token is shorter than 32 characters, the process **fails at startup**. Generate tokens with `openssl rand -hex 32`. See [Automation → MCP](automation.md#mcp-model-context-protocol).
 
+### `capture`
+
+Opt-in resource archives behind the viewer's **Record** button. While a record is
+running, the streamer keeps every decoded response body it already reads to
+compute a hash — documents, scripts, stylesheets, fonts, images, XHR/fetch — and
+the control plane pulls those bytes to the host. Media (`Media` responses),
+WebSocket/SSE frames, POST bodies and worker/OOPIF traffic are not captured.
+Archives live under `<dir>/<session_id>/` (`meta.json` plus content-addressed
+`blobs/`), deduped by SHA-256 within one record, and survive the session.
+
+| Key | Default | Env | Meaning |
+| :--- | :--- | :--- | :--- |
+| `capture.enabled` | `false` | `ISOLA_CAPTURE_ENABLED` | Expose the Record button and the capture API. Off by default because archives write real bytes to host disk. `GET /api/config` reports `capture_enabled`. |
+| `capture.dir` | `<ISOLA_DATA_DIR>/captures` | `ISOLA_CAPTURE_DIR` | Root of the archive tree. |
+| `capture.max_file_bytes` | `8388608` | `ISOLA_CAPTURE_MAX_FILE_BYTES` | Largest single body, checked after decompression. Larger resources are listed as `too_large` with no stored bytes. Also raises the streamer's body-read gate while a record is active. |
+| `capture.max_record_bytes` | `268435456` | `ISOLA_CAPTURE_MAX_RECORD_BYTES` | Per-record budget. When it is reached the record stops appending, is marked `truncated`, and the session keeps running. |
+| `capture.total_quota_bytes` | `2147483648` | `ISOLA_CAPTURE_TOTAL_QUOTA_BYTES` | Quota across all archives, enforced at startup and hourly. Oldest ended archives are evicted first. |
+| `capture.retention_days` | `30` | `ISOLA_CAPTURE_RETENTION_DAYS` | Delete archives whose recording ended longer ago than this. `0` disables age-based deletion. |
+
+The streamer writes inside the container's `/home/isolauser` tmpfs (512 MB) and
+the control plane pulls manifests and blobs while the session runs, with one
+last pull before the container is stopped. A hard container death between pulls
+leaves the archive marked incomplete (`tombstone`), with a manifest row per
+request whose bytes were never pulled. Capture is read-only observation: it
+does not slow navigation beyond the existing SHA-1 body read and creates no
+additional CDP calls.
+
 ### `logging`
 
 | Key | Default | Env | Meaning |

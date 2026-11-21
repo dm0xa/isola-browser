@@ -79,7 +79,27 @@ docker compose logs -f
 2. The settings gear beside **Open →** holds resolution, browser and the **Tor** toggle. Turn Tor on and the choice is visible without reopening the menu: a purple `Tor` chip appears beside the backend status dot in the footer and a purple halo appears behind the logo. The preference is remembered for the next launch.
 3. The viewer shows the live page with a toolbar for the session controls: **End**, **extend**, resolution, audio, and a share link. A session launched through Tor carries a `Tor · <exit>` badge after its short id; hovering it names the pinned exit countries when `tor_country` is set.
 4. Sessions are time-limited (see `session` [in Configuration](configuration.md#session)). The default session is 10 minutes, extendable in 5-minute steps up to a 30-minute maximum.
-5. Closing a session destroys its container. Nothing persists.
+5. Closing a session destroys its container. Nothing persists — unless you
+   recorded its downloads (below).
+
+### Optional: Record a session's downloads
+
+Set `ISOLA_CAPTURE_ENABLED=true` and restart isola, then choose **Record
+resources** from the viewer's menu. Every response body the sandbox downloads is
+saved with its URL, status, MIME type, size, hash and timestamps; identical
+bodies are stored once.
+
+- The chip shows `REC mm:ss · X MB` while recording. Stop it from the same menu,
+  or let it stop when the session ends.
+- **Review** opens the archive at `/session/<id>/captures`: one row per stored
+  file, with the URLs that served it and a version badge when a URL changed
+  during the recording. Download single files, the whole archive as a zip, or
+  preview text and images (HTML is shown as source, never executed).
+- Archives live under `<ISOLA_DATA_DIR>/captures/<session_id>/` and outlive the
+  session. The one-time archive key is kept in the browser's `localStorage`;
+  without it, archives are still served to an operator bearing the create token.
+- Media (`Media` responses), WebSocket/SSE frames, POST bodies and worker
+  requests are not captured. See [Configuration](configuration.md#capture).
 
 ### Optional: Launch from the URL bar
 

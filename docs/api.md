@@ -17,7 +17,7 @@ Base URL for a local deployment: `http://localhost:8080`.
 
 | Method | Path | Auth | Description |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/api/config` | none | Client-visible feature flags and settings (resolutions, transports, version, `create_auth_required` when API token is set, `tor_exit_country` when a Tor exit-country default is configured, `network_log_max_entries` when a capture window is configured, `intel_enabled` for the on-demand recon surface). |
+| `GET` | `/api/config` | none | Client-visible feature flags and settings (resolutions, transports, version, `create_auth_required` when API token is set, `tor_exit_country` when a Tor exit-country default is configured, `network_log_max_entries` when a capture window is configured, `intel_enabled` for the on-demand recon surface, `capture_enabled` for the resource recorder). |
 | `POST` | `/api/sessions` | optional bearer | Create a session. |
 | `GET` | `/api/sessions/{id}` | session | Session details, including `cdp_url`. |
 | `PATCH` | `/api/sessions/{id}` | session | Extend the session TTL. |
@@ -26,6 +26,14 @@ Base URL for a local deployment: `http://localhost:8080`.
 | `GET` | `/api/sessions/{id}/graph.png` | session | Render the captured network as a resource-graph PNG (`theme`, `direction`, `expand`, `type`, `failed`, `scale`, `width`, `height`, `origin`, `caption`). |
 | `GET` | `/api/sessions/{id}/intel` | session | Recon for a host: passive DNS/ASN enrichment and/or bounded active probes (`host`, `ips`, `mode`, `checks`). |
 | `DELETE` | `/api/sessions/{id}` | session | Terminate the session. |
+| `POST` | `/api/sessions/{id}/capture/start` | session | Start recording downloaded resources. Returns `archive_id` and a one-time `archive_key`. |
+| `POST` | `/api/sessions/{id}/capture/stop` | session | Stop recording, final pull, totals. |
+| `GET` | `/api/sessions/{id}/capture` | session | Live recording status for the session. |
+| `GET` | `/api/captures` | optional bearer | List archives (same bearer posture as session creation). |
+| `GET` | `/api/captures/{archiveID}` | archive key | Archive `meta.json`, including every resource row. |
+| `GET` | `/api/captures/{archiveID}/blobs/{sha256}` | archive key | One stored body, as an attachment. |
+| `GET` | `/api/captures/{archiveID}/download` | archive key | Zip of `meta.json` plus every blob. |
+| `DELETE` | `/api/captures/{archiveID}` | archive key or create bearer | Delete the archive directory. |
 | `POST` | `/api/sessions/{id}/shares` | session | Create a view-only share link. |
 | `GET` | `/api/sessions/{id}/shares` | session | List share links. |
 | `DELETE` | `/api/sessions/{id}/shares/{token}` | session | Revoke a share link. |
@@ -217,6 +225,58 @@ A session whose container is still starting returns `409`
 (`container_not_ready`); a terminated session returns `404`. MCP clients get the
 same image from the `resource_graph` tool
 ([Automation → tools](automation.md#tools)).
+
+## Resource capture
+
+With `capture.enabled` (see [Configuration](configuration.md#capture)), the
+viewer's **Record** row saves every response body the sandbox downloads and
+keeps the archive after the session ends.
+
+```bash
+# Start: save the one-time archive key, it is not shown again
+curl -s -X POST "http://localhost:8080/api/sessions/$ID/capture/start" \
+  -H "X-Session-Token: $TOKEN"
+# -> {"archive_id":"<session id>","archive_key":"<32 hex>","started_at":"..."}
+
+# Live progress
+curl -s "http://localhost:8080/api/sessions/$ID/capture" \
+  -H "X-Session-Token: $TOKEN"
+
+# Stop and pull the remainder
+curl -s -X POST "http://localhost:8080/api/sessions/$ID/capture/stop" \
+  -H "X-Session-Token: $TOKEN"
+# -> {"items":84,"bytes":3128442,"deduped":12,"complete":true}
+
+# After the session is gone, the archive key is the only credential
+curl -s "http://localhost:8080/api/captures/$ID" -H "Authorization: Bearer $KEY"
+curl -s -OJ "http://localhost:8080/api/captures/$ID/blobs/$SHA256" \
+  -H "Authorization: Bearer $KEY"
+curl -s -o "$ID.zip" "http://localhost:8080/api/captures/$ID/download" \
+  -H "Authorization: Bearer $KEY"
+```
+
+`meta.json` records the session, start URL, `created_at`/`ended_at`, `complete`,
+counts and sizes, and one row per request: `url`, `final_url`, `method`,
+`status`, `mime`, `type`, `size_wire`, `size_decoded`, `sha256`, `sha1`,
+`filename`, `tab`, `origin_host`, `ts_requested`/`ts_finished`/`ts_saved`,
+cache/service-worker flags, and `state` (`captured`, `too_large`,
+`excluded_type`, `missing_body`, `failed`). Rows with `state != captured` have
+no stored bytes. The same URL can appear more than once with different
+`sha256` values; identical bodies are stored once.
+
+Storage is `$ISOLA_DATA_DIR/captures/<archive_id>/` with `meta.json` and
+`blobs/<sha[:2]>/<sha256>`. Blob responses are always
+`Content-Disposition: attachment` with `X-Content-Type-Options: nosniff` — a
+captured document is hostile input and must never be rendered on the isola
+origin. The viewer therefore previews text/images only, and shows HTML as
+source.
+
+Capture cannot see everything by construction: Chromium memory-cache hits,
+`blob:`/`data:` payloads, `Media` responses, WebSocket/SSE frames, POST bodies,
+and worker/OOPIF traffic are missing. HLS segments fetched by `hls.js` arrive as
+XHR and are captured individually. A session terminated before the final pull
+(e.g. a container crash) keeps the rows pulled so far and is marked
+incomplete.
 
 ## Shares
 
