@@ -195,7 +195,136 @@ export function truncatePathLeft(path: string, max = 48): string {
   return `…${cut >= 0 ? tail.slice(cut) : tail}`;
 }
 
-/** Search over URL, filename, readable path and mime — what a user remembers. */
+/**
+ * Cut a long URL in the middle, keeping the scheme/host and the file name:
+ * `https://example.com/…/load.php`. A single URL is shown inline, so both ends
+ * must stay legible.
+ */
+export function truncateUrlMiddle(url: string, max = 64): string {
+  if (url.length <= max) return url;
+  const keep = Math.max(2, max - 1);
+  const head = Math.ceil(keep * 0.6);
+  const tail = keep - head;
+  return `${url.slice(0, head)}…${url.slice(url.length - tail)}`;
+}
+
+/**
+ * Path relative to its host section, for the compact panel row: the host is
+ * already the section header, so repeating `files/host/` on every row wastes
+ * the little width a docked panel has.
+ */
+export function hostRelativePath(file: CaptureFile, host: string): string {
+  const prefix = `files/${host}/`;
+  if (file.file && file.file.startsWith(prefix)) return file.file.slice(prefix.length);
+  return file.file || file.filename;
+}
+
+/**
+ * Keep the identity of a path when space runs out. The host is already the
+ * section header, and the last two segments carry the content hash and the
+ * file name; a middle truncation would hide the hash and make 21 sibling images
+ * look identical. `get-inspire-x/3c1d…/grid.webp` → `…/3c1d…/grid.webp`.
+ */
+export function truncatePathTail(path: string, max = 48): string {
+  if (path.length <= max) return path;
+  const segments = path.split('/').filter(Boolean);
+  return `…/${segments.slice(-2).join('/')}`;
+}
+
+/**
+ * Host folder a file lives under (`files/<host>/…`). Falls back to the URL's
+ * hostname for rows recorded before the readable tree existed, then to `local`
+ * (the contract's bucket for host-less resources such as data: URLs).
+ */
+export function captureFileHost(file: CaptureFile): string {
+  const match = /^files\/([^/]+)\//.exec(file.file || '');
+  if (match) return match[1];
+  for (const url of file.urls) {
+    try {
+      const host = new URL(url).host;
+      if (host) return host;
+    } catch {
+      // not a parseable absolute URL; keep looking
+    }
+  }
+  return 'local';
+}
+
+/** Case-insensitive natural compare: `x2` sorts before `x10`. */
+export function compareNatural(a: string, b: string): number {
+  const left = a.match(/\d+|\D+/g) || [a];
+  const right = b.match(/\d+|\D+/g) || [b];
+  const len = Math.min(left.length, right.length);
+  for (let i = 0; i < len; i += 1) {
+    const x = left[i];
+    const y = right[i];
+    const xNum = /^\d+$/.test(x);
+    const yNum = /^\d+$/.test(y);
+    if (xNum && yNum) {
+      const diff = Number(x) - Number(y);
+      if (diff !== 0) return diff;
+      // `2` before `02` — shorter run first when numerically equal.
+      if (x.length !== y.length) return x.length - y.length;
+      continue;
+    }
+    const lx = x.toLowerCase();
+    const ly = y.toLowerCase();
+    if (lx !== ly) return lx < ly ? -1 : 1;
+  }
+  return left.length - right.length;
+}
+
+export type CaptureSort = 'path' | 'time' | 'size';
+
+export interface CaptureHostGroup {
+  host: string;
+  files: CaptureFile[];
+  count: number;
+  bytes: number;
+}
+
+function compareCaptureFiles(a: CaptureFile, b: CaptureFile, sort: CaptureSort): number {
+  if (sort === 'time') {
+    const diff = (b.savedAt || 0) - (a.savedAt || 0);
+    if (diff !== 0) return diff;
+  } else if (sort === 'size') {
+    const diff = (b.size || 0) - (a.size || 0);
+    if (diff !== 0) return diff;
+  }
+  // `path` is the default and the tie-breaker for every other order.
+  return compareNatural(a.file || a.filename, b.file || b.filename);
+}
+
+/**
+ * Browser view of the deduped rows: one section per host folder, files sorted
+ * inside it. Hosts stay in name order so a reload never reshuffles the tree.
+ */
+export function groupCaptureFilesByHost(
+  files: CaptureFile[],
+  sort: CaptureSort = 'path',
+): CaptureHostGroup[] {
+  const byHost = new Map<string, CaptureFile[]>();
+  for (const file of files) {
+    const host = captureFileHost(file);
+    const bucket = byHost.get(host);
+    if (bucket) bucket.push(file);
+    else byHost.set(host, [file]);
+  }
+  const groups: CaptureHostGroup[] = [];
+  for (const [host, bucket] of byHost) {
+    const sorted = [...bucket].sort((a, b) => compareCaptureFiles(a, b, sort));
+    groups.push({
+      host,
+      files: sorted,
+      count: sorted.length,
+      bytes: sorted.reduce((sum, file) => sum + (file.size || 0), 0),
+    });
+  }
+  groups.sort((a, b) => compareNatural(a.host, b.host));
+  return groups;
+}
+
+/** Search over URL, host, readable path, filename, mime and sha256. */
 export function filterCaptureFiles(files: CaptureFile[], query: string): CaptureFile[] {
   const q = query.trim().toLowerCase();
   if (!q) return files;
@@ -203,7 +332,9 @@ export function filterCaptureFiles(files: CaptureFile[], query: string): Capture
     (f) =>
       f.filename.toLowerCase().includes(q) ||
       (f.file || '').toLowerCase().includes(q) ||
+      captureFileHost(f).toLowerCase().includes(q) ||
       f.mime.toLowerCase().includes(q) ||
+      f.sha256.toLowerCase().includes(q) ||
       f.urls.some((u) => u.toLowerCase().includes(q)),
   );
 }

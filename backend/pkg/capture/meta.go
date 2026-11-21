@@ -8,11 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/url"
 	"os"
-	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -170,88 +167,7 @@ func parseMetaTime(raw string) time.Time {
 	return t
 }
 
-// ---- filename recomputation -------------------------------------------------
-
-var unsafeHostChar = regexp.MustCompile(`[^A-Za-z0-9.-]+`)
-
-var mimeExtensions = map[string]string{
-	"text/html":                 ".html",
-	"text/css":                  ".css",
-	"text/javascript":           ".js",
-	"application/javascript":    ".js",
-	"application/json":          ".json",
-	"application/manifest+json": ".webmanifest",
-	"image/png":                 ".png",
-	"image/jpeg":                ".jpg",
-	"image/gif":                 ".gif",
-	"image/webp":                ".webp",
-	"image/svg+xml":             ".svg",
-	"image/avif":                ".avif",
-	"font/woff":                 ".woff",
-	"font/woff2":                ".woff2",
-	"font/ttf":                  ".ttf",
-	"font/otf":                  ".otf",
-	"application/wasm":          ".wasm",
-	"application/pdf":           ".pdf",
-	"text/plain":                ".txt",
-	"text/xml":                  ".xml",
-	"application/xml":           ".xml",
-	"application/octet-stream":  "",
-}
-
-// recomputeFilename builds `<sanitized host>_<sha256[:12]><ext>` from data we
-// verified ourselves. The host component is already sanitized by construction;
-// the result contains no path separators.
-func recomputeFilename(rawURL, finalURL, mime string, sha string) string {
-	host := ""
-	for _, candidate := range []string{rawURL, finalURL} {
-		if candidate == "" {
-			continue
-		}
-		if u, err := parseURL(candidate); err == nil && u != "" {
-			host = u
-			break
-		}
-	}
-	host = unsafeHostChar.ReplaceAllString(host, "_")
-	host = strings.Trim(host, "._-")
-	if host == "" {
-		host = "resource"
-	}
-	if len(host) > 64 {
-		host = host[:64]
-	}
-	return host + "_" + sha[:12] + extensionFor(rawURL, finalURL, mime)
-}
-
-func parseURL(raw string) (string, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", err
-	}
-	return u.Hostname(), nil
-}
-
-var extensionPattern = regexp.MustCompile(`^\.[A-Za-z0-9]{1,8}$`)
-
-func extensionFor(rawURL, finalURL, mime string) string {
-	for _, candidate := range []string{rawURL, finalURL} {
-		if candidate == "" {
-			continue
-		}
-		if u, err := url.Parse(candidate); err == nil {
-			ext := path.Ext(u.Path)
-			if extensionPattern.MatchString(ext) {
-				return strings.ToLower(ext)
-			}
-		}
-	}
-	if ext, ok := mimeExtensions[normalizeMime(mime)]; ok {
-		return ext
-	}
-	return ""
-}
-
+// normalizeMime strips parameters and lowercases a mime type.
 func normalizeMime(mime string) string {
 	if idx := strings.IndexByte(mime, ';'); idx >= 0 {
 		mime = mime[:idx]

@@ -22,7 +22,7 @@ const (
 	maxHostLen   = 80
 	maxSegLen    = 80
 	maxPathDepth = 8
-	maxQueryLen  = 40
+	maxQueryLen  = 64
 )
 
 var (
@@ -162,12 +162,51 @@ func sanitizeSegment(s string) string {
 	return s
 }
 
-// queryToken collapses the query string into a filename-safe token.
+// volatileQueryKeys never contribute to a readable filename: they are auth,
+// cache-buster or timing noise that changes on every request.
+var volatileQueryKeys = map[string]bool{
+	"csrf_token": true,
+	"csrf":       true,
+	"_csrf":      true,
+	"token":      true,
+	"_":          true,
+	"t":          true,
+	"ts":         true,
+	"timestamp":  true,
+	"nonce":      true,
+	"rand":       true,
+	"cache_bust": true,
+	"cb":         true,
+}
+
+// queryToken collapses the query string into a filename-safe token, dropping
+// volatile keys so the same endpoint keeps one name.
 func queryToken(u *url.URL) string {
 	if u == nil || u.RawQuery == "" {
 		return ""
 	}
-	q := strings.Trim(queryRunPattern.ReplaceAllString(u.RawQuery, "_"), "_")
+	kept := make([]string, 0, 4)
+	for _, pair := range strings.Split(u.RawQuery, "&") {
+		if pair == "" {
+			continue
+		}
+		rawKey := pair
+		if idx := strings.IndexByte(pair, '='); idx >= 0 {
+			rawKey = pair[:idx]
+		}
+		key := rawKey
+		if decoded, err := url.QueryUnescape(rawKey); err == nil {
+			key = decoded
+		}
+		if volatileQueryKeys[strings.ToLower(key)] {
+			continue
+		}
+		kept = append(kept, pair)
+	}
+	if len(kept) == 0 {
+		return ""
+	}
+	q := strings.Trim(queryRunPattern.ReplaceAllString(strings.Join(kept, "&"), "_"), "_")
 	if len(q) > maxQueryLen {
 		q = strings.TrimRight(q[:maxQueryLen], "_")
 	}
@@ -271,8 +310,10 @@ func validFileRel(rel string) (string, error) {
 	return rel, nil
 }
 
-// renderIndex produces the human index: one tab-separated line per item,
-// sorted by URL then request time.
+// renderIndex produces the human index: one tab-separated line per distinct
+// consecutive (url, file, sha256) tuple, sorted by URL then request time. A
+// tuple seen N>1 times in a row gets a trailing `xN` column; meta.json keeps
+// every request.
 func renderIndex(items []Item) []byte {
 	rows := append([]Item(nil), items...)
 	sort.SliceStable(rows, func(i, j int) bool {
@@ -282,29 +323,45 @@ func renderIndex(items []Item) []byte {
 		return rows[i].TSRequested < rows[j].TSRequested
 	})
 	var b strings.Builder
-	for _, it := range rows {
-		file := it.File
-		if file == "" {
-			file = "-"
+	for i := 0; i < len(rows); {
+		j := i + 1
+		for j < len(rows) &&
+			rows[j].URL == rows[i].URL &&
+			rows[j].File == rows[i].File &&
+			rows[j].SHA256 == rows[i].SHA256 {
+			j++
 		}
-		sha := it.SHA256
-		if len(sha) > 12 {
-			sha = sha[:12]
+		writeIndexLine(&b, rows[i])
+		if n := j - i; n > 1 {
+			b.WriteString("\tx")
+			b.WriteString(strconv.Itoa(n))
 		}
-		b.WriteString(indexField(it.URL))
-		b.WriteByte('\t')
-		b.WriteString(indexField(file))
-		b.WriteByte('\t')
-		b.WriteString(indexField(it.State))
-		b.WriteByte('\t')
-		b.WriteString(indexField(it.Mime))
-		b.WriteByte('\t')
-		b.WriteString(strconv.FormatInt(it.SizeDecoded, 10))
-		b.WriteByte('\t')
-		b.WriteString(indexField(sha))
 		b.WriteByte('\n')
+		i = j
 	}
 	return []byte(b.String())
+}
+
+func writeIndexLine(b *strings.Builder, it Item) {
+	file := it.File
+	if file == "" {
+		file = "-"
+	}
+	sha := it.SHA256
+	if len(sha) > 12 {
+		sha = sha[:12]
+	}
+	b.WriteString(indexField(it.URL))
+	b.WriteByte('\t')
+	b.WriteString(indexField(file))
+	b.WriteByte('\t')
+	b.WriteString(indexField(it.State))
+	b.WriteByte('\t')
+	b.WriteString(indexField(it.Mime))
+	b.WriteByte('\t')
+	b.WriteString(strconv.FormatInt(it.SizeDecoded, 10))
+	b.WriteByte('\t')
+	b.WriteString(indexField(sha))
 }
 
 func indexField(s string) string {

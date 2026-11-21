@@ -402,7 +402,7 @@ func TestCaptureBlobHeaders(t *testing.T) {
 		t.Fatalf("content-type = %q", got)
 	}
 	cd := w.Header().Get("Content-Disposition")
-	wantName := "a.example_" + sha[:12] + ".js"
+	wantName := "app.js"
 	if !strings.HasPrefix(cd, "attachment;") || !strings.Contains(cd, `filename="`+wantName+`"`) {
 		t.Fatalf("content-disposition = %q, want %q", cd, wantName)
 	}

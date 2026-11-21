@@ -5,8 +5,8 @@
 // because only one can be open at a time.
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 
-import type { CaptureStatus } from '../lib/captureApi';
-import { formatBytes } from '../lib/captureFormat';
+import type { CaptureArchive, CaptureStatus } from '../lib/captureApi';
+import { formatBytes, groupCaptureFiles } from '../lib/captureFormat';
 import { useTheme } from '../lib/ThemeContext';
 import { CaptureArchiveView } from './CaptureArchiveView';
 import {
@@ -37,7 +37,7 @@ export function CapturePanel({ archiveId, status, layout, onLayout, onClose, onP
   const { theme } = useTheme();
   const recording = !!status?.recording;
   const [fileCount, setFileCount] = useState(0);
-  const [hot, setHot] = useState(false);
+  const [fileBytes, setFileBytes] = useState(0);
   const draggingRef = useRef(false);
   const startRectRef = useRef<{ width: number; height: number; clientY: number; clientX: number } | null>(null);
 
@@ -114,7 +114,14 @@ export function CapturePanel({ archiveId, status, layout, onLayout, onClose, onP
     };
   }, [layout]);
 
-  const onArchive = useCallback((_archive: unknown, count: number) => setFileCount(count), []);
+  const onArchive = useCallback((archive: CaptureArchive | null, count: number) => {
+    setFileCount(count);
+    setFileBytes(
+      archive
+        ? groupCaptureFiles(archive.items).reduce((sum, file) => sum + (file.size || 0), 0)
+        : 0,
+    );
+  }, []);
 
   const panelBg = theme === 'light' ? 'rgba(255, 255, 255, 0.97)' : 'rgba(17, 24, 39, 0.97)';
   const panelStyle: CSSProperties = layout === 'bottom'
@@ -122,15 +129,17 @@ export function CapturePanel({ archiveId, status, layout, onLayout, onClose, onP
     // Clear the 36px isola browser chrome (tab strip) plus the float margin.
     : { top: FLOAT_INSET + 32, right: FLOAT_INSET, bottom: FLOAT_INSET, width: `${sideWidth}px` };
 
+  // Live counters come from the capture status; once stopped the archive is the
+  // source of truth (its deduped rows and unique bytes), so a reopened panel
+  // still reads `N files · X MB`.
+  const recorded = status?.items ?? 0;
   const counts = recording
-    ? `${status?.items ?? 0} ${(status?.items ?? 0) === 1 ? 'file' : 'files'} · ${formatBytes(status?.bytes ?? 0)}`
-    : `${fileCount} ${fileCount === 1 ? 'saved file' : 'saved files'}`;
+    ? `Recording — ${recorded} ${recorded === 1 ? 'file' : 'files'}`
+    : `${fileCount} ${fileCount === 1 ? 'file' : 'files'} · ${formatBytes(fileBytes)}`;
 
   return (
     <div
-      onMouseEnter={() => setHot(true)}
-      onMouseLeave={() => setHot(false)}
-      className={`absolute z-30 flex flex-col overflow-hidden rounded-xl border border-cyan-500/30 bg-white font-mono text-xs text-zinc-800 shadow-2xl transition-opacity duration-200 dark:border-cyan-500/20 dark:bg-slate-950 dark:text-gray-200 ${hot ? 'opacity-100' : 'opacity-60'}`}
+      className="absolute z-30 flex flex-col overflow-hidden rounded-xl border border-cyan-500/30 bg-white font-mono text-xs text-zinc-800 shadow-2xl dark:border-cyan-500/20 dark:bg-slate-950 dark:text-gray-200"
       style={{ ...panelStyle, backgroundColor: panelBg }}
     >
       {layout === 'bottom' && (
@@ -157,7 +166,10 @@ export function CapturePanel({ archiveId, status, layout, onLayout, onClose, onP
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-zinc-300 px-2 py-1.5 dark:border-gray-700">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-bold text-zinc-900 dark:text-gray-100">Resources</span>
-          <span className={`whitespace-nowrap ${recording ? 'text-red-700 dark:text-red-300' : 'text-zinc-500 dark:text-gray-500'}`}>
+          <span
+            data-testid="capture-header-counts"
+            className={`whitespace-nowrap ${recording ? 'text-red-700 dark:text-red-300' : 'text-zinc-500 dark:text-gray-500'}`}
+          >
             {recording && <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-red-500 align-middle" aria-hidden />}
             {counts}
           </span>

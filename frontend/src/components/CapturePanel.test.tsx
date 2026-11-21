@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type * as captureApiModule from '../lib/captureApi';
 
 vi.mock('../lib/captureApi', async (importOriginal) => {
@@ -16,7 +16,7 @@ vi.mock('../lib/captureApi', async (importOriginal) => {
 import { CapturePanel } from './CapturePanel';
 import { ThemeProvider } from '../lib/ThemeContext';
 import { initAppConfig } from '../lib/config';
-import { setArchiveKey, type CaptureStatus } from '../lib/captureApi';
+import { getArchive, setArchiveKey, type CaptureItem, type CaptureStatus } from '../lib/captureApi';
 
 function memoryStorage(): Storage {
   const map = new Map<string, string>();
@@ -44,6 +44,21 @@ const recordingStatus: CaptureStatus = {
   truncated: false,
 };
 
+function archiveOf(items: CaptureItem[]) {
+  return { meta: { archive_id: 'sess-1', session_id: 'sess-1', complete: true }, items };
+}
+
+function captureItem(id: string, sha256: string, size: number): CaptureItem {
+  return {
+    id,
+    url: `https://a.example/${id}.js`,
+    mime: 'text/javascript',
+    size_decoded: size,
+    sha256,
+    state: 'captured',
+  };
+}
+
 function renderPanel(overrides: Partial<Parameters<typeof CapturePanel>[0]> = {}) {
   const props = {
     archiveId: 'sess-1',
@@ -67,6 +82,7 @@ describe('CapturePanel', () => {
     vi.stubGlobal('localStorage', memoryStorage());
     initAppConfig({ capture_enabled: true });
     setArchiveKey('sess-1', 'key-1');
+    vi.mocked(getArchive).mockResolvedValue(archiveOf([]));
   });
 
   afterEach(() => {
@@ -77,7 +93,33 @@ describe('CapturePanel', () => {
   it('titles the overlay Resources and shows the live recording counts', () => {
     renderPanel({ status: recordingStatus });
     expect(screen.getByText('Resources')).toBeInTheDocument();
-    expect(screen.getByText(/4 files · 2\.0 KB/)).toBeInTheDocument();
+    expect(screen.getByTestId('capture-header-counts')).toHaveTextContent('Recording — 4 files');
+    // No hover fade: the panel must stay readable over a live page.
+    expect(document.querySelector('.z-30')?.className).not.toContain('opacity-');
+  });
+
+  it('shows deduped files and bytes once the recording has stopped', async () => {
+    vi.mocked(getArchive).mockResolvedValue(
+      archiveOf([
+        captureItem('r1', 'a'.repeat(64), 2048),
+        captureItem('r2', 'b'.repeat(64), 1024),
+      ]),
+    );
+    renderPanel({ status: { ...recordingStatus, recording: false } });
+    await waitFor(() =>
+      expect(screen.getByTestId('capture-header-counts')).toHaveTextContent('2 files · 3.0 KB'),
+    );
+    expect(screen.getByTestId('capture-header-counts').querySelector('.animate-pulse')).toBeNull();
+  });
+
+  it('focuses the filter and exposes the sort control when the panel opens', () => {
+    renderPanel();
+    expect(screen.getByLabelText('Filter saved resources')).toHaveFocus();
+    const byPath = screen.getByRole('button', { name: 'path' });
+    expect(byPath).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'time' }));
+    expect(screen.getByRole('button', { name: 'time' })).toHaveAttribute('aria-pressed', 'true');
+    expect(byPath).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('switches the dock side through the layout toggle', () => {

@@ -229,7 +229,7 @@ describe('CapturesPage', () => {
   it('shows an empty state when nothing was saved', async () => {
     vi.mocked(getArchive).mockResolvedValue(archiveOf([]));
     renderPage();
-    expect(await screen.findByText('No resources saved yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No captured files')).toBeInTheDocument();
   });
 
   it('renders the backend error inline and retries', async () => {
@@ -242,7 +242,7 @@ describe('CapturesPage', () => {
     expect(await screen.findByText('archive is gone')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByText('No resources saved yet.')).toBeInTheDocument();
+    expect(await screen.findByText('No captured files')).toBeInTheDocument();
     expect(getArchive).toHaveBeenCalledTimes(2);
   });
 

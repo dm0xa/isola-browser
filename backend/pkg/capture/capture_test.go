@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -195,13 +196,16 @@ func TestPollerIngestsDedupesAndStops(t *testing.T) {
 	if meta.Items[0].File != "files/a.example/app.js" || meta.Items[1].File != "files/a.example/app__v_2.js" {
 		t.Fatalf("item files = %q, %q", meta.Items[0].File, meta.Items[1].File)
 	}
-	indexRaw, err := os.ReadFile(filepath.Join(dir, indexName))
-	if err != nil {
-		t.Fatalf("index.txt: %v", err)
+	if meta.Items[0].Filename != "app.js" || meta.Items[1].Filename != "app__v_2.js" {
+		t.Fatalf("item filenames = %q, %q", meta.Items[0].Filename, meta.Items[1].Filename)
 	}
-	if !strings.Contains(string(indexRaw), "https://a.example/app.js\tfiles/a.example/app.js\tcaptured\ttext/javascript") {
-		t.Fatalf("index.txt = %q", indexRaw)
-	}
+	waitFor(t, "index.txt batch", func() bool {
+		raw, readErr := os.ReadFile(filepath.Join(dir, indexName))
+		if readErr != nil {
+			return false
+		}
+		return strings.Contains(string(raw), "https://a.example/app.js\tfiles/a.example/app.js\tcaptured\ttext/javascript")
+	})
 	metaInfo, err := os.Stat(metaPath(dir))
 	if err != nil {
 		t.Fatalf("meta file: %v", err)
@@ -610,6 +614,125 @@ func TestVersionedNameOnChangedContent(t *testing.T) {
 	if meta.Items[1].SHA256 != sha2 {
 		t.Fatalf("versioned item sha = %q", meta.Items[1].SHA256)
 	}
+	if meta.Items[0].Filename != "load.php" || meta.Items[1].Filename != path.Base(wantVersioned) {
+		t.Fatalf("filenames = %q, %q", meta.Items[0].Filename, meta.Items[1].Filename)
+	}
+}
+
+func TestQueryTokenDropsVolatileParams(t *testing.T) {
+	// With csrf_token dropped but platform kept, the token is 59 characters and
+	// fits under the 64-character cap.
+	const ya = "https://ya.ru/portal/feed/web/actions?action_type=batch&blocks=rythm_feed_action&csrf_token=dc986f320d58fc0e8f2ac0c6659d56c296ef1a34%3A1795299522&platform=desktop"
+	got, err := deriveRel(ya, "", "application/json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const words = "action_type_batch_blocks_rythm_feed_action"
+	want := "files/ya.ru/portal/feed/web/actions__" + words + "_platform_desktop.json"
+	if got != want {
+		t.Fatalf("deriveRel = %q want %q", got, want)
+	}
+
+	// Without the non-volatile platform pair the same endpoint keeps its full
+	// words inside the cap.
+	core := "https://ya.ru/portal/feed/web/actions?action_type=batch&blocks=rythm_feed_action&csrf_token=abc123"
+	coreRel, err := deriveRel(core, "", "application/json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "files/ya.ru/portal/feed/web/actions__" + words + ".json"; coreRel != want {
+		t.Fatalf("deriveRel core = %q want %q", coreRel, want)
+	}
+
+	a, err := deriveRel("https://ya.ru/x?q=1&csrf_token=aaa", "", "application/json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := deriveRel("https://ya.ru/x?q=1&csrf_token=bbb", "", "application/json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b || a != "files/ya.ru/x__q_1.json" {
+		t.Fatalf("csrf variants = %q, %q", a, b)
+	}
+
+	c, err := deriveRel("https://ya.ru/x?_=1795299522&cb=99", "", "application/json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c != "files/ya.ru/x.json" {
+		t.Fatalf("cache-buster rel = %q", c)
+	}
+
+	// A query made only of volatile keys names no file variant at all.
+	if d, err := deriveRel("https://ya.ru/x?ts=1&nonce=2", "", "application/json"); err != nil || d != "files/ya.ru/x.json" {
+		t.Fatalf("volatile-only query rel = %q, %v", d, err)
+	}
+
+	// A token longer than 64 characters clamps deterministically.
+	long := "https://ya.ru/x?" + strings.Repeat("a", 30) + "=1&" + strings.Repeat("b", 40) + "=2"
+	l1, err := deriveRel(long, "", "application/json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l2, err := deriveRel(long, "", "application/json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l1 != l2 {
+		t.Fatalf("clamp not deterministic: %q vs %q", l1, l2)
+	}
+	base := path.Base(l1)
+	token := strings.TrimSuffix(strings.TrimPrefix(base, "x__"), ".json")
+	if len(token) != maxQueryLen {
+		t.Fatalf("clamped token len = %d, want %d (%q)", len(token), maxQueryLen, token)
+	}
+	if strings.HasSuffix(token, "_") {
+		t.Fatalf("clamped token keeps a trailing separator: %q", token)
+	}
+}
+
+func TestIndexCollapsesRepeatedRequests(t *testing.T) {
+	m := newTestManager(t, Config{Enabled: true})
+	dir := archiveDir(m.cfg.Dir, "index-repeat")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sha := strings.Repeat("d", 64)
+	row := func(ts int64) Item {
+		return Item{URL: "https://ya.ru/api?q=1", File: "files/ya.ru/api__q_1.json", State: "captured", Mime: "application/json", SizeDecoded: 42, SHA256: sha, TSRequested: ts}
+	}
+	items := []Item{row(1), row(2), row(3), row(4)}
+	if err := writeIndex(dir, items); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, indexName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "https://ya.ru/api?q=1\tfiles/ya.ru/api__q_1.json\tcaptured\tapplication/json\t42\tdddddddddddd\tx4\n"
+	if string(raw) != want {
+		t.Fatalf("index = %q want %q", raw, want)
+	}
+
+	// meta.json keeps every request.
+	if len(items) != 4 {
+		t.Fatalf("meta rows = %d", len(items))
+	}
+
+	// Non-repeated rows stay single.
+	items = append(items, Item{URL: "https://ya.ru/api?q=1", File: "files/ya.ru/api__q_1.json", State: "captured", Mime: "application/json", SizeDecoded: 42, SHA256: strings.Repeat("e", 64), TSRequested: 5})
+	if err := writeIndex(dir, items); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(filepath.Join(dir, indexName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	if len(lines) != 2 || !strings.HasSuffix(lines[0], "\tx4") || strings.HasSuffix(lines[1], "\tx") {
+		t.Fatalf("index lines = %q", lines)
+	}
 }
 
 func TestIndexSortedByURLThenTime(t *testing.T) {
@@ -706,7 +829,8 @@ func TestMigrateLegacyCASArchive(t *testing.T) {
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
 		Complete:      true,
 		Items: []Item{
-			{ID: "r1", URL: "https://example.com/s.js", Mime: "text/javascript", SizeDecoded: int64(len(jsData)), SHA256: jsSHA, State: "captured"},
+			// Flat filename from the old layout: migration must rewrite it.
+			{ID: "r1", URL: "https://example.com/s.js", Mime: "text/javascript", SizeDecoded: int64(len(jsData)), SHA256: jsSHA, Filename: "example.com_" + jsSHA[:12] + ".js", State: "captured"},
 			// Legacy streamer-supplied path that does not exist on the host.
 			{ID: "r2", URL: "https://example.com/nested/app.css", Mime: "text/css", SizeDecoded: int64(len(cssData)), SHA256: cssSHA, File: "files/aa/" + cssSHA, State: "captured"},
 			// No legacy bytes at all: skipped, never fatal.
@@ -724,8 +848,14 @@ func TestMigrateLegacyCASArchive(t *testing.T) {
 	if got.Items[0].File != "files/example.com/s.js" {
 		t.Fatalf("item 0 file = %q", got.Items[0].File)
 	}
+	if got.Items[0].Filename != "s.js" {
+		t.Fatalf("item 0 filename = %q, want s.js", got.Items[0].Filename)
+	}
 	if got.Items[1].File != "files/example.com/nested/app.css" {
 		t.Fatalf("item 1 file = %q", got.Items[1].File)
+	}
+	if got.Items[1].Filename != "app.css" {
+		t.Fatalf("item 1 filename = %q, want app.css", got.Items[1].Filename)
 	}
 	if got.Items[2].File != "" {
 		t.Fatalf("item without legacy bytes got a file: %q", got.Items[2].File)

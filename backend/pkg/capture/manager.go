@@ -801,6 +801,7 @@ func (m *Manager) ingest(ctx context.Context, rec *recording) error {
 		baseRel, relErr := deriveRel(raw.URL, raw.FinalURL, raw.Mime)
 		if relErr == nil {
 			item.File = baseRel
+			item.Filename = path.Base(baseRel)
 		}
 
 		if raw.State != "captured" {
@@ -836,8 +837,6 @@ func (m *Manager) ingest(ctx context.Context, rec *recording) error {
 			continue
 		}
 
-		item.Filename = recomputeFilename(raw.URL, raw.FinalURL, raw.Mime, raw.SHA256)
-
 		if raw.SizeDecoded > 0 && raw.SizeDecoded > m.cfg.MaxFileBytes {
 			rec.counts["too_large"]++
 			item.State = "too_large"
@@ -860,6 +859,7 @@ func (m *Manager) ingest(ctx context.Context, rec *recording) error {
 		}
 		rel := rec.resolveRel(baseRel, raw.SHA256)
 		item.File = rel
+		item.Filename = path.Base(rel)
 		if stored {
 			// Same bytes at another URL: a readable hardlink, one copy on disk.
 			if err := linkFile(rec.dir, first, rel); err != nil {

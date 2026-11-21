@@ -7,8 +7,8 @@
 // recording is live, filtering, previewing, per-file and zip downloads. Nothing
 // archived is ever injected as markup: text (HTML included) is shown in a
 // <pre>, images through an object URL, everything else is download-only.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Copy, Download, FileImage, RefreshCw, X } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, ChevronDown, ChevronRight, Copy, Download, Eye, FileImage, RefreshCw, X } from 'lucide-react';
 
 import { copyToClipboard } from '../lib/clipboard';
 import { isCaptureEnabled } from '../lib/config';
@@ -26,11 +26,17 @@ import {
   formatBytes,
   formatSavedAt,
   groupCaptureFiles,
+  groupCaptureFilesByHost,
+  hostRelativePath,
   previewKind,
   saveBlob,
   shortSha256,
   truncatePathLeft,
+  truncatePathTail,
+  truncateUrlMiddle,
   type CaptureFile,
+  type CaptureSort,
+  type PreviewKind,
 } from '../lib/captureFormat';
 
 // A recording is still growing; the archive endpoint is cheap (meta + items),
@@ -74,11 +80,15 @@ export function CaptureArchiveView({
   const [loadError, setLoadError] = useState('');
   const [actionError, setActionError] = useState('');
   const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<CaptureSort>('path');
+  const [collapsedHosts, setCollapsedHosts] = useState<Set<string>>(() => new Set());
+  const [expandedSha, setExpandedSha] = useState('');
   const [copied, setCopied] = useState('');
   const [preview, setPreview] = useState<OpenPreview | null>(null);
   const [zipping, setZipping] = useState(false);
   const mountedRef = useRef(true);
   const objectUrlRef = useRef('');
+  const filterRef = useRef<HTMLInputElement>(null);
   // Only the newest Open request may land: a slow first fetch must not replace
   // the preview the user asked for second.
   const previewSeqRef = useRef(0);
@@ -149,8 +159,25 @@ export function CaptureArchiveView({
     return () => window.clearInterval(timer);
   }, [recording, load]);
 
+  const compact = layout === 'panel';
   const files = useMemo(() => groupCaptureFiles(archive?.items ?? []), [archive]);
   const visible = useMemo(() => filterCaptureFiles(files, query), [files, query]);
+  const groups = useMemo(() => groupCaptureFilesByHost(visible, sort), [visible, sort]);
+
+  // The docked panel is opened by an explicit action, so the cursor belongs in
+  // the filter: typing narrows immediately. The full page does not steal focus.
+  useEffect(() => {
+    if (compact) filterRef.current?.focus();
+  }, [compact]);
+
+  const toggleHost = useCallback((host: string) => {
+    setCollapsedHosts((cur) => {
+      const next = new Set(cur);
+      if (next.has(host)) next.delete(host);
+      else next.add(host);
+      return next;
+    });
+  }, []);
 
   const closePreview = useCallback(() => {
     previewSeqRef.current += 1;
@@ -160,6 +187,17 @@ export function CaptureArchiveView({
       objectUrlRef.current = '';
     }
   }, []);
+
+  // Esc dismisses the preview without reaching into row state; the detail row
+  // stays open so the reviewer keeps their place.
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closePreview();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [preview, closePreview]);
 
   const openFile = useCallback(
     async (file: CaptureFile) => {
@@ -244,7 +282,127 @@ export function CaptureArchiveView({
     window.setTimeout(() => setCopied((cur) => (cur === token ? '' : cur)), 1500);
   }, []);
 
-  const compact = layout === 'panel';
+  const copyUrl = useCallback(async (url: string) => {
+    const ok = await copyToClipboard(url);
+    if (!ok) return;
+    const token = `url:${url}`;
+    setCopied(token);
+    window.setTimeout(() => setCopied((cur) => (cur === token ? '' : cur)), 1500);
+  }, []);
+
+  // `captured` is the normal case and must not cost a badge on every row; only
+  // an anomalous state earns attention.
+  const renderStateBadge = (file: CaptureFile) => {
+    if (file.state === 'captured') return null;
+    return (
+      <span
+        data-testid="capture-state"
+        className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] uppercase tracking-wide text-amber-800 dark:text-amber-300"
+      >
+        {file.state}
+      </span>
+    );
+  };
+
+  // Shared between the full-page table's detail row and the panel's expanded
+  // block: full path, full sha and every URL, each with its own copy action.
+  const renderDetailBody = (file: CaptureFile, pathLabel: string) => (
+    <div className="flex flex-col gap-1.5 text-[10px] text-zinc-600 dark:text-gray-400">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="shrink-0 text-zinc-500 dark:text-gray-500">path</span>
+        <span className="min-w-0 flex-1 break-all font-mono text-zinc-800 dark:text-gray-200">
+          {pathLabel}
+        </span>
+        <button
+          type="button"
+          onClick={() => { void copyFilePath(pathLabel); }}
+          aria-label="Copy file path"
+          className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 hover:bg-zinc-200 dark:hover:bg-gray-800"
+          title={`Copy ${pathLabel}`}
+        >
+          <Copy size={10} aria-hidden />
+          {copied === `file:${pathLabel}` ? 'copied' : 'Copy path'}
+        </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="shrink-0 text-zinc-500 dark:text-gray-500">sha256</span>
+        <span className="min-w-0 flex-1 break-all font-mono">{file.sha256}</span>
+        <button
+          type="button"
+          onClick={() => { void copySha(file.sha256); }}
+          aria-label="Copy sha256"
+          className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 hover:bg-zinc-200 dark:hover:bg-gray-800"
+          title="Copy sha256"
+        >
+          <Copy size={10} aria-hidden />
+          {copied === file.sha256 ? 'copied' : 'copy'}
+        </button>
+      </div>
+      {file.urls.length > 0 && (
+        <div>
+          <div className="mb-0.5 text-zinc-500 dark:text-gray-500">URLs ({file.urls.length})</div>
+          <ul className="space-y-0.5">
+            {file.urls.map((url) => (
+              <li key={url} className="flex items-start gap-1">
+                <span className="min-w-0 flex-1 break-all font-mono text-zinc-600 dark:text-gray-400">
+                  {url}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => { void copyUrl(url); }}
+                  aria-label={`Copy URL ${url}`}
+                  className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 hover:bg-zinc-200 dark:hover:bg-gray-800"
+                  title="Copy URL"
+                >
+                  <Copy size={10} aria-hidden />
+                  {copied === `url:${url}` ? 'copied' : 'copy'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+
+  // Line one of a panel row is the file; the trailing actions are icon-only so
+  // the row stays two lines. Non-captured rows have no actions at all.
+  const renderActions = (file: CaptureFile, kind: PreviewKind) => {
+    if (!file.downloadable) return null;
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => { void downloadFile(file); }}
+          aria-label={compact ? 'Download' : undefined}
+          className={
+            compact
+              ? 'rounded p-0.5 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+              : 'flex items-center gap-1 rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] text-zinc-600 hover:bg-zinc-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800'
+          }
+          title="Save this file"
+        >
+          <Download size={compact ? 12 : 11} aria-hidden />
+          {!compact && 'Download'}
+        </button>
+        {kind !== 'none' && (
+          <button
+            type="button"
+            onClick={() => { void openFile(file); }}
+            aria-label={compact ? 'Open' : undefined}
+            className={
+              compact
+                ? 'rounded p-0.5 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-800 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+                : 'rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] text-zinc-600 hover:bg-zinc-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800'
+            }
+            title={kind === 'text' ? 'Show the response body as source text' : 'Show the image'}
+          >
+            {compact ? <Eye size={12} aria-hidden /> : 'Open'}
+          </button>
+        )}
+      </>
+    );
+  };
 
   return (
     <div className={`flex min-h-0 flex-1 flex-col overflow-hidden ${className || ''}`}>
@@ -254,20 +412,45 @@ export function CaptureArchiveView({
         }`}
       >
         <input
+          ref={filterRef}
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={compact ? 'filter…' : 'Filter URL, file name, or mime'}
+          placeholder={compact ? 'filter…' : 'Filter URL, host, file name, mime, or sha'}
           className={`rounded border border-zinc-300 bg-white px-2 py-1 outline-none focus:border-cyan-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 ${
             compact ? 'w-40' : 'w-64'
           }`}
           aria-label="Filter saved resources"
         />
-        <span className="whitespace-nowrap text-zinc-500 dark:text-gray-500">
-          {visible.length === files.length
-            ? `${files.length} ${files.length === 1 ? 'file' : 'files'}`
-            : `${visible.length}/${files.length} files`}
-        </span>
+        {!compact && (
+          <span className="whitespace-nowrap text-zinc-500 dark:text-gray-500">
+            {visible.length === files.length
+              ? `${files.length} ${files.length === 1 ? 'file' : 'files'}`
+              : `${visible.length}/${files.length} files`}
+          </span>
+        )}
+        <div
+          className="flex items-center gap-0.5 rounded border border-zinc-300 p-0.5 dark:border-gray-700"
+          role="group"
+          aria-label="Sort saved files"
+        >
+          {(['path', 'time', 'size'] as const).map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setSort(key)}
+              aria-pressed={sort === key}
+              title={`Sort by ${key}`}
+              className={`rounded px-1.5 py-0.5 ${
+                sort === key
+                  ? 'bg-cyan-600 text-white'
+                  : 'text-zinc-600 hover:bg-zinc-100 dark:text-gray-300 dark:hover:bg-gray-800'
+              }`}
+            >
+              {key}
+            </button>
+          ))}
+        </div>
         <div className="ml-auto flex items-center gap-2">
           <button
             type="button"
@@ -376,14 +559,14 @@ export function CaptureArchiveView({
           <div className="px-4 py-8 text-center text-xs text-zinc-500 dark:text-gray-400">
             {recording ? (
               <>
-                <p className="text-sm text-zinc-700 dark:text-gray-200">Recording — no files yet.</p>
+                <p className="text-sm text-zinc-700 dark:text-gray-200">Recording — nothing captured yet</p>
                 <p className="mt-1">
                   Downloaded files appear here as the capture pulls them from the sandbox.
                 </p>
               </>
             ) : (
               <>
-                <p className="text-sm text-zinc-700 dark:text-gray-200">No resources saved yet.</p>
+                <p className="text-sm text-zinc-700 dark:text-gray-200">No captured files</p>
                 <p className="mt-1">
                   Record from the session's menu while browsing; downloaded files appear here when
                   the capture has pulled them from the sandbox.
@@ -393,9 +576,138 @@ export function CaptureArchiveView({
           </div>
         )}
 
-        {!loading && !loadError && files.length > 0 && (
+        {!loading && !loadError && files.length > 0 && (compact ? (
+          <div className="text-xs">
+            {visible.length === 0 && (
+              <p className="px-3 py-6 text-center text-zinc-500 dark:text-gray-400">
+                No saved files match “{query}”.
+              </p>
+            )}
+            {groups.map((group) => {
+              const isCollapsed = collapsedHosts.has(group.host);
+              return (
+                <section key={group.host} className="border-b border-zinc-200 last:border-b-0 dark:border-gray-800">
+                  <button
+                    type="button"
+                    onClick={() => toggleHost(group.host)}
+                    aria-expanded={!isCollapsed}
+                    className="sticky top-0 z-10 flex w-full items-center gap-1.5 border-b border-zinc-200 bg-zinc-100 px-2 py-1 text-left hover:bg-zinc-200 dark:border-gray-800 dark:bg-gray-900 dark:hover:bg-gray-800"
+                  >
+                    {isCollapsed ? <ChevronRight size={12} aria-hidden /> : <ChevronDown size={12} aria-hidden />}
+                    <span className="min-w-0 flex-1 truncate font-mono font-semibold text-zinc-800 dark:text-gray-200">
+                      {group.host}
+                    </span>
+                    <span className="shrink-0 whitespace-nowrap text-[10px] font-normal text-zinc-500 dark:text-gray-500">
+                      {group.count} {group.count === 1 ? 'file' : 'files'} · {formatBytes(group.bytes)}
+                    </span>
+                  </button>
+                  {!isCollapsed && group.files.map((file) => {
+                    const kind = previewKind(file.mime);
+                    const captured = file.downloadable;
+                    const pathLabel = file.file || file.filename;
+                    const detailOpen = expandedSha === file.sha256;
+                    const singleUrl = file.urls.length === 1 ? file.urls[0] : '';
+                    return (
+                      <div key={file.sha256} className="border-b border-zinc-100 last:border-b-0 dark:border-gray-800/60">
+                        <div
+                          className={`flex items-start gap-1 px-2 py-1 ${
+                            captured
+                              ? 'hover:bg-zinc-50 dark:hover:bg-gray-900/60'
+                              : 'bg-amber-50/40 dark:bg-amber-950/10'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setExpandedSha(detailOpen ? '' : file.sha256)}
+                            aria-expanded={detailOpen}
+                            aria-label={`File details for ${pathLabel}`}
+                            title="Show details"
+                            className="mt-0.5 shrink-0 rounded p-0.5 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                          >
+                            <ChevronRight
+                              size={11}
+                              aria-hidden
+                              className={`transition-transform ${detailOpen ? 'rotate-90' : ''}`}
+                            />
+                          </button>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1">
+                              <span
+                                data-testid="capture-file-path"
+                                className="min-w-0 truncate font-mono font-medium"
+                                title={pathLabel}
+                                aria-label={pathLabel}
+                              >
+                                {truncatePathTail(hostRelativePath(file, group.host))}
+                              </span>
+                              {file.versionCount > 1 && (
+                                <span
+                                  className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] uppercase tracking-wide text-amber-700 dark:text-amber-300"
+                                  title={`Version ${file.version} of ${file.versionCount} saved for this URL`}
+                                >
+                                  v{file.version}
+                                </span>
+                              )}
+                              {renderStateBadge(file)}
+                            </div>
+                            <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-zinc-500 dark:text-gray-500">
+                              <div className="flex min-w-0 flex-1 items-center gap-1">
+                                {singleUrl ? (
+                                  <>
+                                    <span className="min-w-0 truncate" title={singleUrl}>
+                                      {truncateUrlMiddle(singleUrl, 56)}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => { void copyUrl(singleUrl); }}
+                                      aria-label={`Copy URL ${singleUrl}`}
+                                      title="Copy URL"
+                                      className="shrink-0 rounded p-0.5 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                                    >
+                                      <Copy size={10} aria-hidden />
+                                    </button>
+                                    {copied === `url:${singleUrl}` && <span>copied</span>}
+                                  </>
+                                ) : file.urls.length > 1 ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setExpandedSha(detailOpen ? '' : file.sha256)}
+                                    aria-expanded={detailOpen}
+                                    className="truncate text-cyan-700 hover:underline dark:text-cyan-300"
+                                  >
+                                    shared by {file.urls.length} URLs
+                                  </button>
+                                ) : (
+                                  <span>—</span>
+                                )}
+                              </div>
+                              <span
+                                className="max-w-[55%] shrink-0 truncate whitespace-nowrap"
+                                title={file.mime || undefined}
+                              >
+                                {file.mime || '—'} · {formatBytes(file.size)} · {formatSavedAt(file.savedAt)}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-0.5">
+                            {renderActions(file, kind)}
+                          </div>
+                        </div>
+                        {detailOpen && (
+                          <div className="border-t border-zinc-200 bg-zinc-50/70 px-4 py-2 dark:border-gray-800 dark:bg-gray-950/40">
+                            {renderDetailBody(file, pathLabel)}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </section>
+              );
+            })}
+          </div>
+        ) : (
           <table className="w-full table-fixed border-collapse text-left text-xs">
-            <thead className="sticky top-0 z-10 bg-zinc-100 text-[10px] uppercase tracking-wide text-zinc-500 dark:bg-gray-900 dark:text-gray-500">
+            <thead className="sticky top-0 z-20 bg-zinc-100 text-[10px] uppercase tracking-wide text-zinc-500 dark:bg-gray-900 dark:text-gray-500">
               <tr>
                 <th className="px-3 py-1.5 font-normal">file / url</th>
                 <th className="w-28 px-2 py-1.5 font-normal">mime</th>
@@ -405,92 +717,161 @@ export function CaptureArchiveView({
                 <th className="w-36 px-2 py-1.5 font-normal">actions</th>
               </tr>
             </thead>
-            <tbody>
-              {visible.length === 0 && (
+            {visible.length === 0 && (
+              <tbody>
                 <tr>
                   <td colSpan={6} className="px-3 py-6 text-center text-zinc-500 dark:text-gray-400">
                     No saved files match “{query}”.
                   </td>
                 </tr>
-              )}
-              {visible.map((file) => {
-                const kind = previewKind(file.mime);
-                return (
-                  <tr
-                    key={file.sha256}
-                    className="border-b border-zinc-100 hover:bg-zinc-50 dark:border-gray-800/60 dark:hover:bg-gray-900/60"
-                  >
-                    <td className="px-3 py-1.5">
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className="truncate font-mono font-medium"
-                          title={file.file || file.filename}
-                        >
-                          {truncatePathLeft(file.file || file.filename)}
-                        </span>
-                        {file.versionCount > 1 && (
-                          <span
-                            className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] uppercase tracking-wide text-amber-700 dark:text-amber-300"
-                            title={`Version ${file.version} of ${file.versionCount} saved for this URL`}
-                          >
-                            v{file.version}
-                          </span>
-                        )}
-                      </div>
-                      <div className="truncate text-[10px] text-zinc-500 dark:text-gray-500" title={file.urls.join('\n')}>
-                        {file.urls[0] || '—'}
-                        {file.urls.length > 1 && (
-                          <span className="ml-1.5 text-zinc-400 dark:text-gray-600">shared by {file.urls.length} URLs</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="truncate px-2 py-1.5 text-zinc-600 dark:text-gray-400" title={file.mime}>
-                      {file.mime || '—'}
-                    </td>
-                    <td className="px-2 py-1.5 text-right font-mono text-zinc-600 dark:text-gray-400">
-                      {formatBytes(file.size)}
-                    </td>
-                    <td className="px-2 py-1.5 text-zinc-600 dark:text-gray-400">{formatSavedAt(file.savedAt)}</td>
-                    <td className="px-2 py-1.5">
+              </tbody>
+            )}
+            {groups.map((group) => {
+              const isCollapsed = collapsedHosts.has(group.host);
+              return (
+                <tbody key={group.host}>
+                  <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-gray-800 dark:bg-gray-900/50">
+                    <th
+                      colSpan={6}
+                      scope="colgroup"
+                      className="sticky top-[25px] z-[5] bg-zinc-50 p-0 text-left font-normal dark:bg-gray-900"
+                    >
                       <button
                         type="button"
-                        onClick={() => { void copySha(file.sha256); }}
-                        className="flex items-center gap-1 font-mono text-[10px] text-zinc-500 hover:text-cyan-700 dark:text-gray-500 dark:hover:text-cyan-300"
-                        title={`sha256 ${file.sha256} — click to copy`}
+                        onClick={() => toggleHost(group.host)}
+                        aria-expanded={!isCollapsed}
+                        className="flex w-full items-center gap-1.5 px-2 py-1 text-left hover:bg-zinc-100 dark:hover:bg-gray-800/60"
                       >
-                        <Copy size={11} aria-hidden />
-                        {copied === file.sha256 ? 'copied' : shortSha256(file.sha256)}
-                      </button>
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => { void downloadFile(file); }}
-                          className="flex items-center gap-1 rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] text-zinc-600 hover:bg-zinc-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-                          title="Save this file"
-                        >
-                          <Download size={11} aria-hidden />
-                          Download
-                        </button>
-                        {kind !== 'none' && (
-                          <button
-                            type="button"
-                            onClick={() => { void openFile(file); }}
-                            className="rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] text-zinc-600 hover:bg-zinc-100 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
-                            title={kind === 'text' ? 'Show the response body as source text' : 'Show the image'}
-                          >
-                            Open
-                          </button>
+                        {isCollapsed ? (
+                          <ChevronRight size={12} aria-hidden />
+                        ) : (
+                          <ChevronDown size={12} aria-hidden />
                         )}
-                      </div>
-                    </td>
+                        <span className="min-w-0 flex-1 truncate font-mono font-semibold text-zinc-800 dark:text-gray-200">
+                          {group.host}
+                        </span>
+                        <span className="shrink-0 whitespace-nowrap text-[10px] font-normal text-zinc-500 dark:text-gray-500">
+                          {group.count} {group.count === 1 ? 'file' : 'files'} · {formatBytes(group.bytes)}
+                        </span>
+                      </button>
+                    </th>
                   </tr>
-                );
-              })}
-            </tbody>
+                  {!isCollapsed && group.files.map((file) => {
+                    const kind = previewKind(file.mime);
+                    const captured = file.downloadable;
+                    const pathLabel = file.file || file.filename;
+                    const detailOpen = expandedSha === file.sha256;
+                    const singleUrl = file.urls.length === 1 ? file.urls[0] : '';
+                    return (
+                      <Fragment key={file.sha256}>
+                        <tr
+                          className={`border-b border-zinc-100 dark:border-gray-800/60 ${
+                            captured
+                              ? 'hover:bg-zinc-50 dark:hover:bg-gray-900/60'
+                              : 'bg-amber-50/40 dark:bg-amber-950/10'
+                          }`}
+                        >
+                          <td className="px-3 py-1.5">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setExpandedSha(detailOpen ? '' : file.sha256)}
+                                aria-expanded={detailOpen}
+                                aria-label={`File details for ${pathLabel}`}
+                                title="Show details"
+                                className="shrink-0 rounded p-0.5 text-zinc-400 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                              >
+                                <ChevronRight
+                                  size={11}
+                                  aria-hidden
+                                  className={`transition-transform ${detailOpen ? 'rotate-90' : ''}`}
+                                />
+                              </button>
+                              <span
+                                data-testid="capture-file-path"
+                                className="truncate font-mono font-medium"
+                                title={pathLabel}
+                              >
+                                {truncatePathLeft(pathLabel)}
+                              </span>
+                              {file.versionCount > 1 && (
+                                <span
+                                  className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] uppercase tracking-wide text-amber-700 dark:text-amber-300"
+                                  title={`Version ${file.version} of ${file.versionCount} saved for this URL`}
+                                >
+                                  v{file.version}
+                                </span>
+                              )}
+                              {renderStateBadge(file)}
+                            </div>
+                            <div className="mt-0.5 flex items-center gap-1 pl-5 text-[10px] text-zinc-500 dark:text-gray-500">
+                              {singleUrl ? (
+                                <>
+                                  <span className="min-w-0 truncate" title={singleUrl}>
+                                    {truncateUrlMiddle(singleUrl)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => { void copyUrl(singleUrl); }}
+                                    aria-label={`Copy URL ${singleUrl}`}
+                                    title="Copy URL"
+                                    className="shrink-0 rounded p-0.5 hover:bg-zinc-200 hover:text-zinc-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                                  >
+                                    <Copy size={10} aria-hidden />
+                                  </button>
+                                  {copied === `url:${singleUrl}` && <span>copied</span>}
+                                </>
+                              ) : file.urls.length > 1 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedSha(detailOpen ? '' : file.sha256)}
+                                  aria-expanded={detailOpen}
+                                  className="text-cyan-700 hover:underline dark:text-cyan-300"
+                                >
+                                  shared by {file.urls.length} URLs
+                                </button>
+                              ) : (
+                                <span>—</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="truncate px-2 py-1.5 text-zinc-600 dark:text-gray-400" title={file.mime}>
+                            {file.mime || '—'}
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-mono text-zinc-600 dark:text-gray-400">
+                            {formatBytes(file.size)}
+                          </td>
+                          <td className="px-2 py-1.5 text-zinc-600 dark:text-gray-400">{formatSavedAt(file.savedAt)}</td>
+                          <td className="px-2 py-1.5">
+                            <button
+                              type="button"
+                              onClick={() => { void copySha(file.sha256); }}
+                              className="flex items-center gap-1 font-mono text-[10px] text-zinc-500 hover:text-cyan-700 dark:text-gray-500 dark:hover:text-cyan-300"
+                              title={`sha256 ${file.sha256} — click to copy`}
+                            >
+                              <Copy size={11} aria-hidden />
+                              {copied === file.sha256 ? 'copied' : shortSha256(file.sha256)}
+                            </button>
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <div className="flex items-center gap-1">{renderActions(file, kind)}</div>
+                          </td>
+                        </tr>
+                        {detailOpen && (
+                          <tr className="border-b border-zinc-100 bg-zinc-50/70 align-top dark:border-gray-800/60 dark:bg-gray-950/40">
+                            <td colSpan={6} className="px-6 py-2">
+                              {renderDetailBody(file, pathLabel)}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              );
+            })}
           </table>
-        )}
+        ))}
       </div>
     </div>
   );

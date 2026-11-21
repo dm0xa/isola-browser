@@ -2,6 +2,7 @@ package capture
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 )
 
@@ -61,7 +62,12 @@ func (m *Manager) migrateArchive(id string) (int, bool, error) {
 		if it.State != "captured" || !validSHA256(it.SHA256) {
 			continue
 		}
-		if _, target, ok := recordedFile(dir, it.File); ok && fileExists(target) {
+		if clean, target, ok := recordedFile(dir, it.File); ok && fileExists(target) {
+			paths[clean] = it.SHA256
+			if base := path.Base(clean); it.Filename != base {
+				it.Filename = base
+				changed = true
+			}
 			continue
 		}
 		base, err := deriveRel(it.URL, it.FinalURL, it.Mime)
@@ -96,6 +102,10 @@ func (m *Manager) migrateArchive(id string) (int, bool, error) {
 		files++
 		if it.File != rel {
 			it.File = rel
+			changed = true
+		}
+		if base := path.Base(rel); it.Filename != base {
+			it.Filename = base
 			changed = true
 		}
 	}
