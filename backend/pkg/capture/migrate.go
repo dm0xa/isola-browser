@@ -100,6 +100,18 @@ func (m *Manager) migrateArchive(id string) (int, bool, error) {
 		}
 	}
 
+	// Drop the legacy CAS tree only once every captured body is readable under
+	// files/; a partial migration keeps it so Blob's fallback still works.
+	if completeReadableTree(dir, meta.Items) {
+		if fileExists(filepath.Join(dir, "blobs")) {
+			if err := os.RemoveAll(filepath.Join(dir, "blobs")); err != nil {
+				return files, changed, err
+			}
+		}
+	} else {
+		m.log.Debug().Str("archive", id).Msg("capture: legacy blobs kept (incomplete migration)")
+	}
+
 	if !changed {
 		return files, false, nil
 	}
@@ -110,6 +122,21 @@ func (m *Manager) migrateArchive(id string) (int, bool, error) {
 		return files, true, err
 	}
 	return files, true, nil
+}
+
+// completeReadableTree reports whether every captured item has a `file` that
+// exists under files/.
+func completeReadableTree(dir string, items []Item) bool {
+	for i := range items {
+		it := &items[i]
+		if it.State != "captured" || !validSHA256(it.SHA256) {
+			continue
+		}
+		if _, target, ok := recordedFile(dir, it.File); !ok || !fileExists(target) {
+			return false
+		}
+	}
+	return true
 }
 
 // recordedFile resolves a meta item's file to a path inside the archive and

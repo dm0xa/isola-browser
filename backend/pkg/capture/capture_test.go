@@ -770,6 +770,11 @@ func TestMigrateLegacyCASArchive(t *testing.T) {
 		t.Fatalf("blob bytes = %q, %v", body, err)
 	}
 
+	// One captured item has no readable file, so the CAS tree is kept.
+	if !fileExists(filepath.Join(dir, "blobs")) {
+		t.Fatal("legacy blobs removed although an item had no readable file")
+	}
+
 	// Idempotent: a second pass rewrites nothing and adds no versioned files.
 	beforeMeta, err := os.ReadFile(metaPath(dir))
 	if err != nil {
@@ -815,6 +820,119 @@ func archiveFileTree(t *testing.T, dir string) []string {
 		t.Fatalf("walk files tree: %v", err)
 	}
 	return out
+}
+
+func TestMigrateRemovesLegacyBlobsWhenComplete(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "captures")
+	id := "complete-archive"
+	dir := archiveDir(root, id)
+
+	data := []byte("console.log('complete')")
+	sha := shaOf(data)
+	if err := os.MkdirAll(blobDir(dir, sha), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(blobPath(dir, sha), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	meta := &metaFile{
+		SchemaVersion: 1,
+		ArchiveID:     id,
+		SessionID:     id,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+		Complete:      true,
+		Items: []Item{
+			{ID: "r1", URL: "https://example.com/s.js", Mime: "text/javascript", SizeDecoded: int64(len(data)), SHA256: sha, State: "captured"},
+		},
+	}
+	if err := writeMeta(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestManager(t, Config{Enabled: true, Dir: root})
+
+	got := readArchive(t, m, id)
+	if got.Items[0].File != "files/example.com/s.js" {
+		t.Fatalf("file = %q", got.Items[0].File)
+	}
+	if fileExists(filepath.Join(dir, "blobs")) {
+		t.Fatal("legacy blobs survived a complete migration")
+	}
+	migrated := filepath.Join(dir, "files", "example.com", "s.js")
+	if body, err := os.ReadFile(migrated); err != nil || !bytes.Equal(body, data) {
+		t.Fatalf("migrated bytes = %q, %v", body, err)
+	}
+
+	// The sha lookup still serves the body after the CAS tree is gone.
+	p, mime, _, err := m.Blob(id, sha)
+	if err != nil {
+		t.Fatalf("Blob after blob removal: %v", err)
+	}
+	if p != migrated || mime != "text/javascript" {
+		t.Fatalf("Blob = %q, %q", p, mime)
+	}
+
+	// Idempotent: a second pass neither recreates nor needs blobs/.
+	m.Migrate()
+	if fileExists(filepath.Join(dir, "blobs")) {
+		t.Fatal("second migration recreated blobs/")
+	}
+	if !fileExists(migrated) {
+		t.Fatal("second migration lost the readable file")
+	}
+}
+
+func TestMigrateKeepsLegacyBlobsWhenIncomplete(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "captures")
+	id := "partial-archive"
+	dir := archiveDir(root, id)
+
+	data := []byte("body")
+	sha := shaOf(data)
+	goneSHA := shaOf([]byte("gone"))
+	if err := os.MkdirAll(blobDir(dir, sha), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(blobPath(dir, sha), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	meta := &metaFile{
+		SchemaVersion: 1,
+		ArchiveID:     id,
+		SessionID:     id,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+		Items: []Item{
+			{ID: "r1", URL: "https://example.com/a.txt", Mime: "text/plain", SizeDecoded: int64(len(data)), SHA256: sha, State: "captured"},
+			{ID: "r2", URL: "https://example.com/gone.bin", Mime: "application/octet-stream", SHA256: goneSHA, State: "captured"},
+		},
+	}
+	if err := writeMeta(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestManager(t, Config{Enabled: true, Dir: root})
+
+	got := readArchive(t, m, id)
+	if got.Items[0].File != "files/example.com/a.txt" {
+		t.Fatalf("migrated file = %q", got.Items[0].File)
+	}
+	if got.Items[1].File != "" {
+		t.Fatalf("unmigratable item got a file: %q", got.Items[1].File)
+	}
+	if !fileExists(blobPath(dir, sha)) {
+		t.Fatal("legacy blob removed although the archive is incomplete")
+	}
+	if !fileExists(filepath.Join(dir, "files", "example.com", "a.txt")) {
+		t.Fatal("complete item not migrated")
+	}
+
+	// The CAS fallback still serves archives that keep blobs/.
+	if _, _, _, err := m.Blob(id, sha); err != nil {
+		t.Fatalf("Blob for migrated sha: %v", err)
+	}
+	if _, _, _, err := m.Blob(id, goneSHA); !errors.Is(err, ErrBlobNotFound) {
+		t.Fatalf("Blob for missing sha err = %v", err)
+	}
 }
 
 func TestStatusAndList(t *testing.T) {
