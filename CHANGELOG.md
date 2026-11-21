@@ -18,9 +18,32 @@ publishes the section matching the tag.
   while the session runs, with a final pull before the container stops. See
   [Configuration → capture](docs/configuration.md#capture) and
   [API → Resource capture](docs/api.md#resource-capture).
+- **Timezone and locale per session**: `POST /api/sessions` accepts `timezone`
+  (IANA zone, e.g. `Europe/Stockholm`) and `locale` (BCP-47, e.g. `sv-SE`).
+  The streamer applies both over CDP at target creation, so `Date`, `Intl`,
+  `navigator.languages` and `Accept-Language` describe the declared region
+  before the page's first script runs. Deployment defaults are
+  `session.timezone` / `session.locale`; a per-session value wins, and with
+  neither set the sandbox stays on UTC / `en-US`. Invalid values are `400`
+  `invalid_timezone` / `invalid_locale`. The launcher exposes both fields in
+  its settings menu.
 
 ### Fixed
 
+- A session no longer reports one pixel less than its resolution. Chromium
+  clamps an X11 toplevel that exactly covers the display, so a 1280x720 session
+  came back 1279x719 in the page's `screen`, `innerWidth/Height` and
+  `outerWidth/Height`. Xvfb now runs one pixel larger per axis; the extra pixel
+  lies outside the window, so the page sees the requested size while the
+  capture surface stays unchanged.
+- The sandbox no longer contradicts itself in the client hints a page reads.
+  The user agent has always named Chrome; `navigator.platform`, the language
+  list and `navigator.userAgentData.brands` said otherwise (Chromium-only
+  brands, a bare `en-US`), which bot gates read as automation. The streamer now
+  applies the identity over CDP at target creation — before the first page
+  script — so `Sec-CH-UA`, `Accept-Language`, `navigator.platform` and the UA
+  all describe one Chrome client. The empty `isolaBridge` preload global, which
+  every page could detect, is gone.
 - The warm pool now serves ordinary launches. The launcher sent a resolution
   fitted to the browser window, which could never equal the pooled container's
   baked resolution, so every UI launch cold-started while an idle warm container

@@ -102,7 +102,9 @@ Expected container-log noise that is **not** fatal: `Fontconfig error: No writab
 
 The sandbox runs a current Chromium, but Electron's default user agent names the embedder (`electron-runner/1.0.0 … Electron/45.1.0`). UA-sniffing gates (bowser/UAParser-based, common on betting and banking sites) resolved that to browser "Electron" and refused to serve. Current images set the app-wide user agent to plain Chrome (`Chrome/<Chromium version>` with no Electron or app token), so `bowser.parse` reports `Chrome`.
 
-If a site still refuses, it is not looking at the UA string: check `navigator.userAgentData.brands` — the engine reports `Chromium`, never `Google Chrome` — or the site is gating on geolocation, account state, or bot signals unrelated to the browser build.
+The page's own client hints agree with that UA. At target creation the streamer applies `Emulation.setUserAgentOverride`, so `navigator.platform` (`Linux x86_64` on every architecture), `navigator.languages` (`en-US,en` by default, or the session's declared locale), `navigator.userAgentData.brands` (`Chromium` and `Google Chrome`) and the `Sec-CH-UA` / `Accept-Language` headers describe the same client, before the page's first script runs.
+
+If a site still refuses, it is not the UA or the client hints. What remains is not normalized: the session reports `UTC` unless `session.timezone` (or a launch `timezone`) sets a zone, WebGL is SwiftShader (software), the window has no browser chrome, and there are no speech voices. Suspect geolocation, account state or a bot gate keyed on those, and say which one you checked.
 
 ## Sessions End Sooner Than Expected
 

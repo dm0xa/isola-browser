@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 
 import LandingPage from './LandingPage';
@@ -70,7 +70,7 @@ const addressBox = () => screen.getByPlaceholderText('Enter URL...');
 
 const storedLaunchConfig = () => {
   const raw = sessionStorage.getItem('isola_launch_config');
-  return raw ? (JSON.parse(raw) as { url?: string }) : null;
+  return raw ? (JSON.parse(raw) as { url?: string; timezone?: string; locale?: string }) : null;
 };
 
 beforeEach(() => {
@@ -136,5 +136,34 @@ describe('?q= deep link', () => {
     expect(addressBox()).toHaveValue('');
     expect(screen.queryByTestId('run')).toBeNull();
     expect(screen.getByTestId('location')).toHaveTextContent(/^$/);
+  });
+});
+
+describe('launch identity', () => {
+  const launchWith = async (zone: string, locale: string) => {
+    renderAt('/');
+    fireEvent.click(screen.getByTitle('Settings'));
+    fireEvent.change(screen.getByLabelText(/Zone/), { target: { value: zone } });
+    fireEvent.change(screen.getByLabelText(/Locale/), { target: { value: locale } });
+    fireEvent.change(addressBox(), { target: { value: 'example.com' } });
+    fireEvent.click(screen.getByText('Open →'));
+    await screen.findByTestId('run');
+  };
+
+  it('carries a declared timezone and locale', async () => {
+    await launchWith('Europe/Stockholm', 'sv-SE');
+
+    const config = storedLaunchConfig();
+    expect(config?.timezone).toBe('Europe/Stockholm');
+    expect(config?.locale).toBe('sv-SE');
+  });
+
+  it('omits empty identity fields instead of sending blanks', async () => {
+    await launchWith('', '');
+
+    const config = storedLaunchConfig();
+    expect(config).not.toBeNull();
+    expect(config).not.toHaveProperty('timezone');
+    expect(config).not.toHaveProperty('locale');
   });
 });

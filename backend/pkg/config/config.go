@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -129,6 +130,121 @@ func NormalizeTorCountry(raw string) (string, error) {
 	return strings.Join(codes, ","), nil
 }
 
+// localePattern is the accepted BCP-47 shape for a session locale: a 2-3 letter
+// language subtag followed by 2-8 alphanumeric subtags (script, region,
+// variants). Anything else is a client error rather than a silent fallback.
+var localePattern = regexp.MustCompile(`^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$`)
+
+// NormalizeTimezone canonicalizes an IANA zone name and rejects anything
+// time.LoadLocation cannot resolve: the page-visible zone comes from
+// Emulation.setTimezoneOverride, so an unusable name would leave the session on
+// UTC while claiming otherwise. Empty means unset (the image default, UTC).
+// "Local" names the backend host's own zone and has no meaning in a sandbox.
+func NormalizeTimezone(raw string) (string, error) {
+	zone := strings.TrimSpace(raw)
+	if zone == "" {
+		return "", nil
+	}
+	if strings.EqualFold(zone, "Local") {
+		return "", fmt.Errorf("invalid timezone %q (want an IANA zone, e.g. Europe/Stockholm)", zone)
+	}
+	loc, err := time.LoadLocation(zone)
+	if err != nil {
+		return "", fmt.Errorf("unknown timezone %q (want an IANA zone, e.g. Europe/Stockholm)", zone)
+	}
+	return canonicalZoneName(loc.String()), nil
+}
+
+// zoneinfoRoots are the directories tzdata is read from on the supported hosts
+// (macOS and the Debian backend image).
+var zoneinfoRoots = []string{
+	"/usr/share/zoneinfo",
+	"/usr/lib/zoneinfo",
+	"/usr/share/lib/zoneinfo",
+	"/usr/lib/locale/TZ",
+	"/etc/zoneinfo",
+}
+
+// canonicalZoneName restores the registered spelling of a zone. Go's
+// LoadLocation resolves case-insensitively but keeps the caller's case, while
+// Chromium's ICU expects the canonical id ("europe/stockholm" is not
+// "Europe/Stockholm"). The on-disk names are compared entry by entry because
+// macOS's default filesystem would accept a wrong-case stat. When no zoneinfo
+// tree is readable (the platform resolved the name another way) the validated
+// name is returned unchanged.
+func canonicalZoneName(resolved string) string {
+	for _, root := range zoneinfoRoots {
+		if canonical, ok := matchZoneName(root, resolved); ok {
+			return canonical
+		}
+	}
+	return resolved
+}
+
+// matchZoneName walks root one path segment at a time, matching each segment
+// case-insensitively, and returns the spelling found on disk.
+func matchZoneName(root, zone string) (string, bool) {
+	dir := root
+	parts := strings.Split(zone, "/")
+	for i, part := range parts {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return "", false
+		}
+		name := ""
+		for _, entry := range entries {
+			if strings.EqualFold(entry.Name(), part) {
+				name = entry.Name()
+				break
+			}
+		}
+		if name == "" {
+			return "", false
+		}
+		dir = filepath.Join(dir, name)
+		if i == len(parts)-1 {
+			return strings.TrimPrefix(dir, root+string(filepath.Separator)), true
+		}
+	}
+	return "", false
+}
+
+// NormalizeLocale validates a BCP-47 tag and fixes the conventional casing
+// (language lowercase, script titlecase, region uppercase) so the value the
+// streamer derives navigator.languages and Accept-Language from is stable.
+// Empty means unset (the image default, en-US).
+func NormalizeLocale(raw string) (string, error) {
+	tag := strings.TrimSpace(raw)
+	if tag == "" {
+		return "", nil
+	}
+	if !localePattern.MatchString(tag) {
+		return "", fmt.Errorf("invalid locale %q (want a BCP-47 tag, e.g. sv-SE)", tag)
+	}
+	parts := strings.Split(tag, "-")
+	parts[0] = strings.ToLower(parts[0])
+	for i := 1; i < len(parts); i++ {
+		switch {
+		case len(parts[i]) == 2 && isAlpha(parts[i]):
+			parts[i] = strings.ToUpper(parts[i])
+		case len(parts[i]) == 4 && isAlpha(parts[i]):
+			parts[i] = strings.ToUpper(parts[i][:1]) + strings.ToLower(parts[i][1:])
+		}
+	}
+	return strings.Join(parts, "-"), nil
+}
+
+// isAlpha reports whether every byte is an ASCII letter.
+func isAlpha(s string) bool {
+	for i := range len(s) {
+		c := s[i]
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
 // CORSOrigins never returns empty: chi-cors would read that as allow-all with credentials.
 func (c *Config) CORSOrigins() []string {
 	if c == nil {
@@ -163,8 +279,13 @@ type Config struct {
 	DNSServers []string `yaml:"-"`
 	DNSMode    string   `yaml:"-"` // plain | tls | https
 	// Tor exit pin (ISO alpha-2 list); empty = any exit. See NormalizeTorCountry.
-	TorExitCountry    string `yaml:"-"`
-	CORSOrigin        string `yaml:"-"`
+	TorExitCountry string `yaml:"-"`
+	CORSOrigin     string `yaml:"-"`
+	// SessionTimezone / SessionLocale are the deployment-wide page identity
+	// defaults, applied when a session request does not name its own. Empty
+	// keeps the sandbox's own UTC / en-US.
+	SessionTimezone   string `yaml:"-"`
+	SessionLocale     string `yaml:"-"`
 	JWTSecret         string `yaml:"-"`
 	SessionDefaultMin int    `yaml:"-"` // default session duration in minutes
 	SessionMaxMin     int    `yaml:"-"` // maximum session duration in minutes
@@ -305,6 +426,10 @@ type configFile struct {
 		// NetworkLogMaxEntries is the number of network requests a session's
 		// capture window retains (default 1000).
 		NetworkLogMaxEntries int `yaml:"network_log_max_entries"`
+		// Timezone / Locale are the page-visible identity defaults (IANA zone,
+		// BCP-47 tag). Empty = the image's UTC / en-US.
+		Timezone string `yaml:"timezone"`
+		Locale   string `yaml:"locale"`
 	} `yaml:"session"`
 	WarmPool struct {
 		Enabled bool `yaml:"enabled"`
@@ -615,6 +740,20 @@ func LoadFrom(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: tor.exit_country / TOR_EXIT_COUNTRY: %w", err)
 	}
 	cfg2.TorExitCountry = torCountry
+
+	// Page-identity defaults. Validated at startup so a typo fails the boot
+	// instead of every session (the same normalizers guard the per-session
+	// timezone/locale and the streamer's CDP overrides).
+	timezone, err := NormalizeTimezone(envOrDefault("SESSION_TIMEZONE", cfg.Session.Timezone))
+	if err != nil {
+		return nil, fmt.Errorf("config: session.timezone / SESSION_TIMEZONE: %w", err)
+	}
+	cfg2.SessionTimezone = timezone
+	locale, err := NormalizeLocale(envOrDefault("SESSION_LOCALE", cfg.Session.Locale))
+	if err != nil {
+		return nil, fmt.Errorf("config: session.locale / SESSION_LOCALE: %w", err)
+	}
+	cfg2.SessionLocale = locale
 
 	if caFile := strings.TrimSpace(envOrDefault("INTEL_CA_FILE", cfg.Intel.CAFile)); caFile != "" {
 		pem, err := os.ReadFile(caFile)

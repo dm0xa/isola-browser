@@ -43,6 +43,9 @@ func main() {
 
 	initInput()
 	initCapture()
+	// Page-visible identity (UA-CH brands, platform, languages) for every
+	// target, independent of whether the viewer opted into traffic capture.
+	go newIdentityClient().Start()
 	initActivityTracker()
 	startTabCtrl()
 	startInputTargetWatchdog()

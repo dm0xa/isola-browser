@@ -516,10 +516,20 @@ done
 
 # ── Start electron-runner (offscreen browser → UDS client) ────────────
 echo "[browser-node-electron] Starting Xvfb display :99 (GTK needs display even for offscreen)"
+# One pixel of headroom per axis, or the session is one pixel short everywhere.
+# Chromium fits an X11 toplevel into the display work area, and a window that
+# covers the whole screen comes back shrunk by one pixel per axis: measured
+# 1280x720 requested on a 1280x720 Xvfb → window/content/inner/outer/capture
+# 1279x719 (and the page's `screen` too, which offscreen Electron reports from
+# the window rather than the X display), while a 1281x721 Xvfb gives exactly
+# 1280x720. The extra pixel lies outside the window, so the page never sees it,
+# and any resize back up to the session size stays exact as well.
+XVFB_WIDTH=$((WIDTH + 1))
+XVFB_HEIGHT=$((HEIGHT + 1))
 if [ -n "$RUN_AS_USER" ]; then
-    $RUN_AS_USER Xvfb :99 -screen 0 "${WIDTH}x${HEIGHT}x24" -ac +extension RANDR &
+    $RUN_AS_USER Xvfb :99 -screen 0 "${XVFB_WIDTH}x${XVFB_HEIGHT}x24" -ac +extension RANDR &
 else
-    Xvfb :99 -screen 0 "${WIDTH}x${HEIGHT}x24" -ac +extension RANDR &
+    Xvfb :99 -screen 0 "${XVFB_WIDTH}x${XVFB_HEIGHT}x24" -ac +extension RANDR &
 fi
 XVFB_PID=$!
 export DISPLAY=:99

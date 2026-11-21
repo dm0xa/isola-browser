@@ -69,4 +69,45 @@ describe('RunPage launch request', () => {
     const body = JSON.parse(bodies[0]) as { resolution?: string };
     expect(body.resolution).toBe('1920x1080');
   });
+
+  const launchWith = async (config: Record<string, unknown>) => {
+    sessionStorage.setItem(
+      'isola_launch_config',
+      JSON.stringify({ url: 'https://example.com', browser_theme: 'dark', ...config }),
+    );
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: unknown, init?: { body?: string }) => {
+        if (init?.body) bodies.push(init.body);
+        return { ok: true, status: 200, json: async () => ({ id: 'sess-1', session_token: 'tok' }) };
+      }),
+    );
+
+    render(
+      <MemoryRouter initialEntries={['/run?url=https%3A%2F%2Fexample.com']}>
+        <Routes>
+          <Route path="/run" element={<RunPage />} />
+          <Route path="/session/:id" element={<div />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
+    return JSON.parse(bodies[0]) as { timezone?: string; locale?: string };
+  };
+
+  it('carries the declared timezone and locale in the create payload', async () => {
+    const body = await launchWith({ timezone: 'Europe/Stockholm', locale: 'sv-SE' });
+
+    expect(body.timezone).toBe('Europe/Stockholm');
+    expect(body.locale).toBe('sv-SE');
+  });
+
+  it('omits timezone and locale when they are empty', async () => {
+    const body = await launchWith({ timezone: '', locale: '' });
+
+    expect(body).not.toHaveProperty('timezone');
+    expect(body).not.toHaveProperty('locale');
+  });
 });

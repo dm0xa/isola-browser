@@ -77,6 +77,8 @@ var openAPISpec = []byte(`{
           "transport": { "type": "string", "enum": ["isola"], "description": "Streaming transport protocol" },
           "tor_enabled": { "type": "boolean", "default": false, "description": "Whether session traffic is routed through Tor SOCKS5 proxy" },
           "tor_country": { "type": "string", "description": "Pinned Tor exit country/countries (ISO 3166-1 alpha-2, comma-separated) when Tor is enabled" },
+          "timezone": { "type": "string", "description": "Page-visible IANA timezone the session launched with (e.g. Europe/Stockholm)" },
+          "locale": { "type": "string", "description": "Page-visible BCP-47 locale the session launched with (e.g. sv-SE)" },
           "created_at": { "type": "string", "format": "date-time" },
           "expires_at": { "type": "string", "format": "date-time", "nullable": true },
           "terminated_at": { "type": "string", "format": "date-time", "nullable": true },
@@ -110,6 +112,8 @@ var openAPISpec = []byte(`{
           "transport": { "type": "string", "enum": ["isola"], "default": "isola", "description": "Streaming transport protocol (Isola only)." },
           "tor_enabled": { "type": "boolean", "default": false },
           "tor_country": { "type": "string", "description": "Pin Tor exits to one or more ISO 3166-1 alpha-2 countries (e.g. 'se' or 'se,no'). Requires tor_enabled." },
+          "timezone": { "type": "string", "description": "Page-visible IANA timezone (e.g. 'Europe/Stockholm'). Overrides session.timezone; empty keeps the deployment default (UTC when unset).", "example": "Europe/Stockholm" },
+          "locale": { "type": "string", "description": "Page-visible BCP-47 locale (e.g. 'sv-SE'). Drives navigator.languages, Intl formatting and Accept-Language. Overrides session.locale; empty keeps the deployment default (en-US when unset).", "example": "sv-SE" },
           "fingerprint": { "type": "string", "description": "Client fingerprint for rate limiting" }
         }
       },

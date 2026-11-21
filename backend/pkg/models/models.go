@@ -30,6 +30,8 @@ type Session struct {
 	VncPassword    string     `json:"vnc_password"`
 	TorEnabled     bool       `json:"tor_enabled"`           // session-level Tor proxy flag (not a browser type)
 	TorCountry     string     `json:"tor_country,omitempty"` // pinned Tor exit country/countries, when tor_enabled
+	Timezone       string     `json:"timezone,omitempty"`    // page-visible IANA zone the session launched with
+	Locale         string     `json:"locale,omitempty"`      // page-visible BCP-47 tag the session launched with
 	CreatedAt      time.Time  `json:"created_at"`
 	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 	TerminatedAt   *time.Time `json:"terminated_at,omitempty"`
@@ -48,6 +50,8 @@ type CreateSessionRequest struct {
 	FrameRate      int    `json:"frame_rate,omitempty"`     // capture framerate (default 30)
 	TorEnabled     bool   `json:"tor_enabled"`
 	TorCountry     string `json:"tor_country,omitempty"`     // pinned Tor exit country/countries (ISO 3166-1 alpha-2); requires tor_enabled
+	Timezone       string `json:"timezone,omitempty"`        // page-visible IANA zone (e.g. Europe/Stockholm); empty = deployment default or UTC
+	Locale         string `json:"locale,omitempty"`          // page-visible BCP-47 tag (e.g. sv-SE); empty = deployment default or en-US
 	NetworkMonitor bool   `json:"network_monitor,omitempty"` // isola: stream CDP network events to the viewer
 	Fingerprint    string `json:"fingerprint,omitempty"`     // client fingerprint for rate limiting
 }

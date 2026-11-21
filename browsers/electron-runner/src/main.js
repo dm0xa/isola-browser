@@ -9,7 +9,6 @@ process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true';
 const { app, BrowserWindow, nativeTheme, session } = require('electron');
 const net = require('net');
 const fs = require('fs');
-const path = require('path');
 const { encodeFrame, extractRect, clampRect, isBlankBitmap, shouldHoldBlank, surfaceBlankAfterFrame, frameTimestampNs, frameOutcome, FRAME_SENT, FRAME_DEDUP, FRAME_EMPTY, FRAME_IDLE } = require('./isol_protocol');
 const { hardenCtrlSocket } = require('./ctrl_socket');
 const { applyChromeFlags } = require('./chrome_flags');
@@ -893,7 +892,6 @@ function attachTabWindow(tab, url) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      preload: path.join(__dirname, 'preload.js'),
       backgroundThrottling: false,
     },
   });

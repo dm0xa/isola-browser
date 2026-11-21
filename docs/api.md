@@ -61,6 +61,8 @@ Base URL for a local deployment: `http://localhost:8080`.
 | `frame_rate` | int | Capture framerate (default `30`). |
 | `tor_enabled` | bool | Route the session through Tor. |
 | `tor_country` | string | Pin Tor exit nodes to one or more ISO 3166-1 alpha-2 countries (comma-separated, e.g. `"se"` or `"se,no"`). Requires `tor_enabled`; overrides the server default (`tor.exit_country`). |
+| `timezone` | string | Page-visible IANA timezone (e.g. `"Europe/Stockholm"`), validated with the host's zoneinfo; unknown names are `400 invalid_timezone`. Overrides the server default (`session.timezone`); empty keeps the deployment default, and with neither set the sandbox stays on UTC. |
+| `locale` | string | Page-visible BCP-47 tag (e.g. `"sv-SE"`), validated as `^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$`; malformed tags are `400 invalid_locale`. Drives `navigator.languages`, `Intl` formatting and `Accept-Language`. Overrides the server default (`session.locale`); empty keeps the deployment default, and with neither set the sandbox stays on `en-US`. |
 | `network_monitor` | bool | Stream CDP network events to the viewer's Network tab. |
 | `fingerprint` | string | Client fingerprint, used for rate limiting. |
 

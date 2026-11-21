@@ -11,30 +11,28 @@
 // differs between the blocked and the served render.
 //
 // The fix is to advertise the engine we actually run — Chromium's own version
-// from process.versions.chrome — and nothing about the embedder. Keep the
-// platform token consistent with what Chromium reports in navigator.platform
-// ("Linux x86_64") so the two surfaces do not contradict each other.
-
-// linuxArch maps Node's arch name to the token Chromium puts in its own UA.
-function linuxArch(arch) {
-  if (arch === 'arm64') return 'aarch64';
-  if (arch === 'arm') return 'armv7l';
-  return 'x86_64';
-}
+// from process.versions.chrome — and nothing about the embedder.
+//
+// The architecture token is always x86_64, never the container's: every Linux
+// Chromium build reports navigator.platform === "Linux x86_64", including the
+// arm64 image (verified in a real session container). A UA carrying "aarch64"
+// therefore contradicts the engine's own platform string, and strict bot gates
+// read that contradiction as a spoof. Linux Chrome only ships x64, so x86_64 is
+// also the truthful client description.
 
 // chromeUserAgent builds the UA a stock Chrome of this exact Chromium version
 // would send on Linux. `versions` is process.versions (chrome = 156.0.8078.49).
-function chromeUserAgent(versions, arch) {
+function chromeUserAgent(versions) {
   const chrome = String((versions && versions.chrome) || '').trim();
   if (!chrome) throw new Error('process.versions.chrome is missing: cannot build a truthful user agent');
-  return `Mozilla/5.0 (X11; Linux ${linuxArch(arch)}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
+  return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
 }
 
 // applyUserAgent sets the app-wide fallback, which is what BrowserWindow
 // webContents and session requests use. Must run before any window exists.
-function applyUserAgent(app, versions = process.versions, arch = process.arch) {
-  app.userAgentFallback = chromeUserAgent(versions, arch);
+function applyUserAgent(app, versions = process.versions) {
+  app.userAgentFallback = chromeUserAgent(versions);
   return app.userAgentFallback;
 }
 
-module.exports = { chromeUserAgent, applyUserAgent, linuxArch };
+module.exports = { chromeUserAgent, applyUserAgent };

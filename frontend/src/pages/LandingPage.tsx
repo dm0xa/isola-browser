@@ -43,6 +43,33 @@ function normalizeUrl(input: string): string {
 
 const GITHUB_URL = 'https://github.com/dm0xa/isola-browser';
 
+// Common IANA zones offered as datalist suggestions. The field stays free text:
+// the backend validates against the host's full zoneinfo, so anything it can
+// resolve is accepted, not just this list.
+const COMMON_TIMEZONES = [
+  'UTC',
+  'Europe/Stockholm',
+  'Europe/London',
+  'Europe/Berlin',
+  'Europe/Paris',
+  'Europe/Madrid',
+  'Europe/Rome',
+  'Europe/Amsterdam',
+  'Europe/Warsaw',
+  'Europe/Athens',
+  'Europe/Moscow',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'America/Sao_Paulo',
+  'Asia/Tokyo',
+  'Asia/Shanghai',
+  'Asia/Singapore',
+  'Asia/Dubai',
+  'Australia/Sydney',
+];
+
 const textStyle = {
   fontFamily: '"Bitcount Prop Single", monospace',
   fontVariationSettings: '"wght" 400, "slnt" 0, "CRSV" 0.5, "ELSH" 0, "ELXP" 0',
@@ -107,6 +134,10 @@ export default function LandingPage() {
   const [resolution, setResolution] = useState(() => localStorage.getItem('isola_resolution') || defaultResolution);
   const [browserType, setBrowserType] = useState(() => localStorage.getItem('isola_browser') || defaultBrowser);
   const [torEnabled, setTorEnabled] = useState(() => localStorage.getItem('isola_tor') === 'true');
+  // Page-visible identity. Empty = let the deployment default (or the image's
+  // UTC/en-US) apply; these are sent only when the user typed something.
+  const [timezone, setTimezone] = useState(() => localStorage.getItem('isola_timezone') || '');
+  const [locale, setLocale] = useState(() => localStorage.getItem('isola_locale') || '');
   const transport = 'isola';
 
   // Every launch path funnels through here — the address box, the app tiles and
@@ -124,6 +155,10 @@ export default function LandingPage() {
         // Per-tab CDP capture (network/console/cookies) only exists on the
         // isola transport; the viewer's network panel is gated on this flag.
         network_monitor: true,
+        // Only send an identity the user actually declared; an empty field
+        // means "deployment default", not "UTC"/"en-US" explicitly.
+        ...(timezone.trim() ? { timezone: timezone.trim() } : {}),
+        ...(locale.trim() ? { locale: locale.trim() } : {}),
       };
       try {
         sessionStorage.setItem('isola_launch_config', JSON.stringify(launchConfig));
@@ -132,7 +167,7 @@ export default function LandingPage() {
       }
       navigate(`/run?url=${encodeURIComponent(target)}`, { replace: true });
     },
-    [navigate, resolution, browserType, theme, torEnabled, transport],
+    [navigate, resolution, browserType, theme, torEnabled, transport, timezone, locale],
   );
 
   useEffect(() => {
@@ -153,6 +188,14 @@ export default function LandingPage() {
   useEffect(() => {
     localStorage.setItem('isola_tor', torEnabled.toString());
   }, [torEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem('isola_timezone', timezone);
+  }, [timezone]);
+
+  useEffect(() => {
+    localStorage.setItem('isola_locale', locale);
+  }, [locale]);
 
   useEffect(() => {
     if (resolutions.length === 0) return;
@@ -333,7 +376,7 @@ export default function LandingPage() {
               </svg>
             </button>
             {menuOpen && (
-              <div className="absolute bottom-full left-0 mb-1 bg-zinc-200 dark:bg-gray-800 border border-zinc-400 dark:border-gray-700 rounded-lg py-1 shadow-xl z-50 min-w-[140px]">
+              <div className="absolute bottom-full left-0 mb-1 bg-zinc-200 dark:bg-gray-800 border border-zinc-400 dark:border-gray-700 rounded-lg py-1 shadow-xl z-50 min-w-[240px]">
                 {resolutionVisible && (
                   <>
                     <div className="px-3 py-1 text-[10px] text-gray-500 dark:text-gray-600 uppercase tracking-wider">Resolution</div>
@@ -423,6 +466,40 @@ export default function LandingPage() {
                     </span>
                   </span>
                 </button>
+                <div className="mx-2 my-1 border-t border-zinc-400 dark:border-gray-700" />
+                <div className="px-3 py-1 text-[10px] text-zinc-600 dark:text-gray-600 uppercase tracking-wider">Timezone · Locale</div>
+                <div className="px-3 pb-1.5 flex flex-col gap-1.5">
+                  <label className="flex items-center gap-2 text-[11px] text-zinc-600 dark:text-gray-500">
+                    <span className="w-12 shrink-0">Zone</span>
+                    <input
+                      type="text"
+                      list="isola-timezones"
+                      value={timezone}
+                      onChange={(e) => setTimezone(e.target.value)}
+                      placeholder="Europe/Stockholm"
+                      spellCheck={false}
+                      autoComplete="off"
+                      className="w-full min-w-0 bg-transparent border border-zinc-400 dark:border-gray-700 rounded px-1.5 py-0.5 text-xs text-zinc-800 dark:text-[#aea2a2] placeholder-zinc-500 dark:placeholder-white/40 focus:outline-hidden focus:border-zinc-600 dark:focus:border-gray-400"
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 text-[11px] text-zinc-600 dark:text-gray-500">
+                    <span className="w-12 shrink-0">Locale</span>
+                    <input
+                      type="text"
+                      value={locale}
+                      onChange={(e) => setLocale(e.target.value)}
+                      placeholder="sv-SE"
+                      spellCheck={false}
+                      autoComplete="off"
+                      className="w-full min-w-0 bg-transparent border border-zinc-400 dark:border-gray-700 rounded px-1.5 py-0.5 text-xs text-zinc-800 dark:text-[#aea2a2] placeholder-zinc-500 dark:placeholder-white/40 focus:outline-hidden focus:border-zinc-600 dark:focus:border-gray-400"
+                    />
+                  </label>
+                </div>
+                <datalist id="isola-timezones">
+                  {COMMON_TIMEZONES.map((zone) => (
+                    <option key={zone} value={zone} />
+                  ))}
+                </datalist>
               </div>
             )}
           </div>

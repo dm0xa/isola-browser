@@ -41,6 +41,11 @@ type WarmPool struct {
 	intelEnabled bool
 	// intelCAPEM is baked in so a claimed container trusts the same CAs.
 	intelCAPEM string
+	// timezone / locale are the deployment defaults baked into every warm
+	// container: the handler refuses a claim whose request resolves to a
+	// different pair (env cannot change after launch).
+	timezone string
+	locale   string
 
 	// injectable for tests
 	provisioner func(ctx context.Context, p WarmPoolParams) (*SessionInfo, error)
@@ -163,6 +168,8 @@ func NewWarmPool(orch *Orchestrator, cfg *config.Config) *WarmPool {
 		networkLogMaxEntries: cfg.NetworkLogMaxEntries,
 		intelEnabled:         cfg.IntelEnabled,
 		intelCAPEM:           cfg.IntelCAPEM,
+		timezone:             cfg.SessionTimezone,
+		locale:               cfg.SessionLocale,
 		nower:                time.Now,
 	}
 	p.provisioner = p.provisionWarm
@@ -679,6 +686,8 @@ func (p *WarmPool) provisionWarm(ctx context.Context, params WarmPoolParams) (*S
 		NetworkLogMaxEntries: p.networkLogMaxEntries,
 		IntelEnabled:         p.intelEnabled,
 		IntelCAPEM:           p.intelCAPEM,
+		Timezone:             p.timezone,
+		Locale:               p.locale,
 		DockerImage:          params.Image,
 		DNSMode:              p.dnsMode,
 		DNSServers:           p.dnsServers,

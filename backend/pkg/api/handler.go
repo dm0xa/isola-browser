@@ -302,6 +302,26 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	req.TorCountry = torCountry
 
+	// Page-visible timezone/locale. Validated here so a typo is a client error
+	// instead of a sandbox that silently stays on UTC/en-US; a per-request value
+	// overrides the deployment default (session.timezone / session.locale).
+	timezone, tzErr := config.NormalizeTimezone(req.Timezone)
+	if tzErr != nil {
+		respondErrorMessage(w, http.StatusBadRequest, "invalid_timezone", tzErr.Error())
+		return
+	}
+	if timezone == "" {
+		timezone = h.cfg.SessionTimezone
+	}
+	locale, localeErr := config.NormalizeLocale(req.Locale)
+	if localeErr != nil {
+		respondErrorMessage(w, http.StatusBadRequest, "invalid_locale", localeErr.Error())
+		return
+	}
+	if locale == "" {
+		locale = h.cfg.SessionLocale
+	}
+
 	// All sessions use the Isola transport (Electron image).
 	req.Transport = "isola"
 
@@ -345,6 +365,8 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		BrowserType: req.BrowserType,
 		TorEnabled:  req.TorEnabled,
 		TorCountry:  req.TorCountry,
+		Timezone:    timezone,
+		Locale:      locale,
 	}
 
 	// Admission control: refuse once the configured concurrent-session cap is
@@ -397,7 +419,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		if effectiveFPS <= 0 {
 			effectiveFPS = 30
 		}
-		info, warmed := h.claimWarmContainer(bgCtx, session.ID.String(), req.URL, req.Resolution, browserTheme, userID.String(), effectiveFPS, req.TorEnabled, req.BandwidthKbps, validatedTarget)
+		info, warmed := h.claimWarmContainer(bgCtx, session.ID.String(), req.URL, req.Resolution, browserTheme, userID.String(), effectiveFPS, req.TorEnabled, req.BandwidthKbps, timezone, locale, validatedTarget)
 		if !warmed {
 			var err error
 			info, err = h.orch.CreateSession(bgCtx, orchestrator.CreateSessionParams{
@@ -421,6 +443,8 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 				}(),
 				TorEnabled: req.TorEnabled,
 				TorCountry: req.TorCountry,
+				Timezone:   timezone,
+				Locale:     locale,
 				// Capture CDP events at creation so the panel can toggle on later (env can't change after launch).
 				NetworkMonitor: true,
 				// Capture window: the streamer drops the oldest entries past this
@@ -547,24 +571,38 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// warmIdentityMatches: a warm container's timezone/locale are baked at creation
+// and cannot change, so only a request that resolves to the pool's pair may
+// claim it. Pure, so the gate is tested without a live pool.
+func warmIdentityMatches(cfgTimezone, cfgLocale, timezone, locale string) bool {
+	return timezone == cfgTimezone && locale == cfgLocale
+}
+
 // claimWarmContainer serves a session from the warm pool when the request is
-// eligible (exact resolution/fps/theme match, no Tor/bandwidth override — env is
-// baked). Warm claims lose the --add-host DNS pin; the container egress
-// firewall remains the primary SSRF control. false = fall back to cold.
+// eligible (exact resolution/fps/theme/tz/locale match, no Tor/bandwidth
+// override — env is baked). Warm claims lose the --add-host DNS pin; the
+// container egress firewall remains the primary SSRF control. false = fall
+// back to cold.
 func (h *Handler) claimWarmContainer(
 	ctx context.Context,
 	sessionID, targetURL, resolution, theme, userID string,
 	effectiveFPS int,
 	torEnabled bool,
 	bandwidthKbps int,
+	timezone, locale string,
 	target *validatedSessionTarget,
 ) (*orchestrator.SessionInfo, bool) {
 	if h.warm == nil || h.warm.Disabled() {
 		return nil, false
 	}
 	// Guards for settings baked at container creation that this request
-	// cannot override.
+	// cannot override. Timezone/locale travel as container env and the
+	// streamer reads them once at startup, so only a request that resolves to
+	// the pool's baked defaults can be served warm.
 	if torEnabled || bandwidthKbps > 0 {
+		return nil, false
+	}
+	if !warmIdentityMatches(h.cfg.SessionTimezone, h.cfg.SessionLocale, timezone, locale) {
 		return nil, false
 	}
 
@@ -1862,6 +1900,10 @@ func errorMessageForCode(code string) string {
 		return "Resolution is invalid or exceeds the session's launch resolution"
 	case "invalid_tor_country":
 		return "Tor exit country is invalid"
+	case "invalid_timezone":
+		return "Timezone is invalid"
+	case "invalid_locale":
+		return "Locale is invalid"
 	case "session_unlimited":
 		return "Session is unlimited — nothing to extend"
 	case "extend_failed":

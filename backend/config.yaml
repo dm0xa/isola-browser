@@ -60,6 +60,12 @@ session:
   # the maximum is 10000.
   # Env: ISOLA_NETWORK_LOG_MAX_ENTRIES
   network_log_max_entries: 1000
+  # Page-visible sandbox identity, used when a session request does not name
+  # its own (the `timezone` / `locale` fields of POST /api/sessions win). Both
+  # are validated at startup. Empty (default) keeps the image's UTC / en-US.
+  # timezone: "Europe/Stockholm"
+  # locale: "sv-SE"
+  # Env: ISOLA_SESSION_TIMEZONE, ISOLA_SESSION_LOCALE
 
 # Concurrency: isola is multisession — each POST /api/sessions adds a session and
 # does not terminate the caller's others, and each session is a container, so RAM

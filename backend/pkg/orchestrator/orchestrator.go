@@ -192,7 +192,12 @@ type CreateSessionParams struct {
 	TorEnabled    bool
 	// TorCountry pins Tor exits to these ISO 3166-1 alpha-2 countries; only
 	// meaningful when TorEnabled. Empty allows any exit.
-	TorCountry     string
+	TorCountry string
+	// Timezone / Locale are the page-visible identity values baked into the
+	// container. The streamer applies them over CDP at target creation; the
+	// container's own TZ follows Timezone. Empty = image defaults (UTC, en-US).
+	Timezone       string
+	Locale         string
 	DNSMode        string   // "plain" | "tls" | "https" — how containers resolve names
 	DNSServers     []string // plaintext resolvers passed via `docker run --dns` (empty = runtime embedded resolver)
 	NetworkMonitor bool     // isola: stream CDP network events to the viewer
@@ -311,6 +316,21 @@ func dnsArgs(servers []string) []string {
 	return args
 }
 
+// identitySessionArgs: only non-empty values are passed, so a session with no
+// declared identity keeps the image's UTC / en-US untouched. TZ moves the
+// container clock; ISOLA_SESSION_TZ / ISOLA_SESSION_LOCALE feed the streamer's
+// CDP overrides, which are what the page actually reads. Pure function.
+func identitySessionArgs(timezone, locale string) []string {
+	args := make([]string, 0, 6)
+	if timezone = strings.TrimSpace(timezone); timezone != "" {
+		args = append(args, "-e", "TZ="+timezone, "-e", "ISOLA_SESSION_TZ="+timezone)
+	}
+	if locale = strings.TrimSpace(locale); locale != "" {
+		args = append(args, "-e", "ISOLA_SESSION_LOCALE="+locale)
+	}
+	return args
+}
+
 // CreateSession starts a new browser-node container.
 func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionParams) (*SessionInfo, error) {
 	name := "isola-" + params.SessionID[:12]
@@ -336,6 +356,7 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 		"-e", "ISOLA_PROXY_IP=" + o.proxyIPOnBrowserNet(),
 		"--network", "browser-net",
 	}
+	cmdArgs = append(cmdArgs, identitySessionArgs(params.Timezone, params.Locale)...)
 	gpuPassthrough := os.Getenv("ISOLA_GPU") == "1"
 	if gpuPassthrough {
 		if _, err := os.Stat("/dev/dri/renderD128"); err != nil {

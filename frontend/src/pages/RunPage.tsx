@@ -17,6 +17,9 @@ type LaunchConfig = {
   tor_enabled?: boolean;
   transport?: string;
   network_monitor?: boolean;
+  // Page-visible identity; omitted (not empty) when the user declared none.
+  timezone?: string;
+  locale?: string;
 };
 
 // The launch request carries the resolution the user picked — the session's
@@ -65,6 +68,10 @@ export default function RunPage() {
       body.browser_theme = theme;
     }
     body.transport = 'isola';
+    // An empty identity field means "deployment default" — never send a blank
+    // timezone/locale for the backend to reject.
+    if (!body.timezone) delete body.timezone;
+    if (!body.locale) delete body.locale;
 
     // Launch admission can refuse with 429 while the instance is at its session
     // cap (ISOLA_MAX_SESSIONS). That is transient — sessions expire on a timer —
