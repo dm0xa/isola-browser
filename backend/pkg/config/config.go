@@ -6,9 +6,13 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/dm0xa/isola-browser/backend/pkg/capture"
 )
 
 // isolaEnvPrefix: ISOLA_<NAME> first, then the legacy unprefixed <NAME>.
@@ -210,6 +214,10 @@ type Config struct {
 	// no child processes. Env only: ISOLA_MODULES_DIR.
 	ModulesDir string `yaml:"-"`
 
+	// Capture is the resource-capture configuration (host-side archives of
+	// downloaded bodies). The manager is only built when Capture.Enabled.
+	Capture capture.Config `yaml:"-"`
+
 	// Extension fields: round-trip storage only; absent from YAML/env and /api/config.
 	InstalledModules         map[string]string `json:"installed_modules,omitempty"`
 	LicenseServerURL         string            `json:"license_server_url,omitempty"`
@@ -341,6 +349,47 @@ type configFile struct {
 	API struct {
 		Token TokenList `yaml:"token"`
 	} `yaml:"api"`
+	Capture captureFile `yaml:"capture"`
+}
+
+// captureFile is the YAML shape of the capture block.
+type captureFile struct {
+	Enabled         bool   `yaml:"enabled"`
+	Dir             string `yaml:"dir"` // empty = <ISOLA_DATA_DIR>/captures
+	MaxFileBytes    int64  `yaml:"max_file_bytes"`
+	MaxRecordBytes  int64  `yaml:"max_record_bytes"`
+	TotalQuotaBytes int64  `yaml:"total_quota_bytes"`
+	RetentionDays   int    `yaml:"retention_days"`
+}
+
+// loadCaptureConfig layers env overrides over the YAML block and resolves the
+// default archive directory under the same root the session snapshot uses.
+func loadCaptureConfig(file captureFile) capture.Config {
+	retentionDays := envOrDefaultInt("CAPTURE_RETENTION_DAYS", file.RetentionDays)
+	if retentionDays < 0 {
+		retentionDays = 0
+	}
+	dir := strings.TrimSpace(envOrDefault("CAPTURE_DIR", file.Dir))
+	if dir == "" {
+		dir = filepath.Join(defaultDataDir(), "captures")
+	}
+	return capture.Config{
+		Enabled:         envOrDefaultBool("CAPTURE_ENABLED", file.Enabled),
+		Dir:             dir,
+		MaxFileBytes:    envOrDefaultInt64("CAPTURE_MAX_FILE_BYTES", file.MaxFileBytes),
+		MaxRecordBytes:  envOrDefaultInt64("CAPTURE_MAX_RECORD_BYTES", file.MaxRecordBytes),
+		TotalQuotaBytes: envOrDefaultInt64("CAPTURE_TOTAL_QUOTA_BYTES", file.TotalQuotaBytes),
+		Retention:       time.Duration(retentionDays) * 24 * time.Hour,
+	}
+}
+
+// defaultDataDir mirrors cmd/single-user's ISOLA_DATA_DIR resolution: the
+// sessions snapshot and capture archives live under the same root.
+func defaultDataDir() string {
+	if v := os.Getenv(isolaEnvPrefix + "DATA_DIR"); v != "" {
+		return v
+	}
+	return "/var/lib/isola"
 }
 
 // TokenList is one or more secrets. YAML may be a scalar (optionally
@@ -421,6 +470,13 @@ func LoadFrom(path string) (*Config, error) {
 	cfg.Browser.Theme = "dark"
 	cfg.Browser.Image = DefaultBrowserImage
 	cfg.Logging.Level = "info"
+
+	// Resource capture is opt-in: archival writes real bytes to the host disk.
+	cfg.Capture.Enabled = false
+	cfg.Capture.MaxFileBytes = capture.DefaultMaxFileBytes
+	cfg.Capture.MaxRecordBytes = capture.DefaultMaxRecordBytes
+	cfg.Capture.TotalQuotaBytes = capture.DefaultTotalQuotaBytes
+	cfg.Capture.RetentionDays = int(capture.DefaultRetention / (24 * time.Hour))
 
 	cfg.Browser.Chromium = BrowserEntry{Enabled: true}
 
@@ -514,6 +570,7 @@ func LoadFrom(path string) (*Config, error) {
 		MCPTokens:            envOrDefaultList("MCP_TOKEN", []string(cfg.MCP.Token)),
 		APITokens:            envOrDefaultList("API_TOKEN", []string(cfg.API.Token)),
 		ModulesDir:           envOrDefault("MODULES_DIR", ""),
+		Capture:              loadCaptureConfig(cfg.Capture),
 	}
 
 	// Fail closed: authentication cannot be enabled with a missing or weak
@@ -593,6 +650,16 @@ func envOrDefault(key, defaultVal string) string {
 func envOrDefaultInt(key string, defaultVal int) int {
 	if val := getenv(key); val != "" {
 		var n int
+		if _, err := fmt.Sscanf(val, "%d", &n); err == nil {
+			return n
+		}
+	}
+	return defaultVal
+}
+
+func envOrDefaultInt64(key string, defaultVal int64) int64 {
+	if val := getenv(key); val != "" {
+		var n int64
 		if _, err := fmt.Sscanf(val, "%d", &n); err == nil {
 			return n
 		}

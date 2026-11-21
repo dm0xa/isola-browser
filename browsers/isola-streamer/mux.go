@@ -75,6 +75,7 @@ func setupMux(port string, wsHandler http.HandlerFunc) (net.Listener, error) {
 	})
 	mux.HandleFunc("/debug/encoder", writeDebugEncoder)
 	registerRecordRoutes(mux)
+	registerCaptureRoutes(mux)
 	mux.HandleFunc("/resize", func(w http.ResponseWriter, r *http.Request) {
 		// Resizing is a state change for every viewer: POST only, or a prefetch re-keys every encoder.
 		if r.Method != http.MethodPost {

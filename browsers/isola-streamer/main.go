@@ -42,6 +42,7 @@ func main() {
 	globalBroadcaster = newFrameBroadcaster(incoming)
 
 	initInput()
+	initCapture()
 	initActivityTracker()
 	startTabCtrl()
 	startInputTargetWatchdog()

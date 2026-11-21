@@ -40,6 +40,10 @@ var openAPISpec = []byte(`{
     {
       "name": "Config",
       "description": "Client-visible configuration"
+    },
+    {
+      "name": "Capture",
+      "description": "Resource archives recorded from a session"
     }
   ],
   "components": {
@@ -49,6 +53,12 @@ var openAPISpec = []byte(`{
         "in": "header",
         "name": "X-Session-Token",
         "description": "Session control token returned on session creation. Grants owner-level access to a specific session."
+      },
+      "archiveKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "Archive key returned by POST /api/sessions/{id}/capture/start, sent as 'Bearer <archive_key>'. Required to read or delete an archive; the operator listing uses the create-gate API token instead."
       }
     },
     "schemas": {
@@ -207,7 +217,99 @@ var openAPISpec = []byte(`{
           "default_transport": { "type": "string" },
           "tor_exit_country": { "type": "string", "description": "Default Tor exit country/countries (ISO 3166-1 alpha-2, comma-separated) applied to tor-enabled sessions; omitted when unset." },
           "network_log_max_entries": { "type": "integer", "description": "Number of network requests retained by the session capture window; omitted when unset (default 1000)." },
+          "capture_enabled": { "type": "boolean", "description": "Whether the viewer should offer resource recording (capture.enabled)." },
           "plugins": { "type": "array" }
+        }
+      },
+      "CaptureStartResponse": {
+        "type": "object",
+        "properties": {
+          "archive_id": { "type": "string", "description": "Archive identifier (equal to the session id)" },
+          "archive_key": { "type": "string", "description": "Secret key for the archive. Store it; it is never returned again." },
+          "started_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "CaptureStopResponse": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "integer" },
+          "bytes": { "type": "integer", "format": "int64" },
+          "deduped": { "type": "integer", "format": "int64" },
+          "complete": { "type": "boolean", "description": "False when the final pull could not complete (a tombstone marks the archive)" }
+        }
+      },
+      "CaptureStatusResponse": {
+        "type": "object",
+        "properties": {
+          "archive_id": { "type": "string" },
+          "session_id": { "type": "string" },
+          "recording": { "type": "boolean" },
+          "items": { "type": "integer" },
+          "bytes": { "type": "integer", "format": "int64" },
+          "deduped": { "type": "integer", "format": "int64" },
+          "truncated": { "type": "boolean", "description": "The record budget or the streamer's disk budget was exhausted" },
+          "started_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "CaptureItem": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "url": { "type": "string" },
+          "final_url": { "type": "string" },
+          "method": { "type": "string" },
+          "status": { "type": "integer" },
+          "mime": { "type": "string" },
+          "type": { "type": "string", "description": "CDP resource type (Script, Stylesheet, XHR, ...)" },
+          "size_wire": { "type": "integer", "format": "int64" },
+          "size_decoded": { "type": "integer", "format": "int64" },
+          "sha256": { "type": "string", "description": "Content hash of the decoded body; the blob key" },
+          "sha1": { "type": "string", "description": "Display-only hash from the network panel" },
+          "filename": { "type": "string", "description": "Host-recomputed download name (<host>_<sha256[:12]><ext>)" },
+          "tab": { "type": "integer" },
+          "origin_host": { "type": "string" },
+          "ts_requested": { "type": "integer", "format": "int64" },
+          "ts_finished": { "type": "integer", "format": "int64" },
+          "ts_saved": { "type": "integer", "format": "int64" },
+          "from_disk_cache": { "type": "boolean" },
+          "from_service_worker": { "type": "boolean" },
+          "state": { "type": "string", "enum": ["captured", "too_large", "missing_body", "excluded_type", "failed"] }
+        }
+      },
+      "CaptureArchive": {
+        "type": "object",
+        "properties": {
+          "schema_version": { "type": "integer" },
+          "archive_id": { "type": "string" },
+          "session_id": { "type": "string" },
+          "target_url": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "ended_at": { "type": "string", "description": "RFC3339 timestamp, empty while recording" },
+          "complete": { "type": "boolean" },
+          "stop_reason": { "type": "string", "enum": ["", "viewer_stop", "session_end", "quota", "crash"] },
+          "key_sha256": { "type": "string", "description": "sha256 of the archive key; the key itself is never stored" },
+          "counts": { "type": "object", "additionalProperties": { "type": "integer", "format": "int64" } },
+          "sizes": { "type": "object", "additionalProperties": { "type": "integer", "format": "int64" } },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/CaptureItem" } }
+        }
+      },
+      "CaptureSummary": {
+        "type": "object",
+        "properties": {
+          "archive_id": { "type": "string" },
+          "session_id": { "type": "string" },
+          "target_url": { "type": "string" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "ended_at": { "type": "string", "format": "date-time" },
+          "complete": { "type": "boolean" },
+          "items": { "type": "integer" },
+          "bytes": { "type": "integer", "format": "int64" }
+        }
+      },
+      "CaptureListResponse": {
+        "type": "object",
+        "properties": {
+          "captures": { "type": "array", "items": { "$ref": "#/components/schemas/CaptureSummary" } }
         }
       }
     }
@@ -451,6 +553,142 @@ var openAPISpec = []byte(`{
           },
           "404": { "description": "Share link expired or invalid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "410": { "description": "Session no longer active", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/sessions/{id}/capture/start": {
+      "post": {
+        "tags": ["Capture"],
+        "summary": "Start recording downloaded resources",
+        "description": "Starts resource capture in the sandbox and creates a host archive under the configured capture directory. Returns the archive key exactly once; store it, because only its sha256 is persisted. Requires owner authorization (X-Session-Token).",
+        "operationId": "startCapture",
+        "security": [{ "sessionToken": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Session ID" }
+        ],
+        "responses": {
+          "200": { "description": "Recording started", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptureStartResponse" } } } },
+          "403": { "description": "Not authorized, or resource capture is disabled", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Session not found or not running", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "409": { "description": "Container not ready, or a capture is already recording", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "502": { "description": "The streamer could not be reached (capture_failed)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/sessions/{id}/capture/stop": {
+      "post": {
+        "tags": ["Capture"],
+        "summary": "Stop recording and finalize the archive",
+        "description": "Stops the sandbox capture, performs one final pull and marks the archive complete. Idempotent: a second stop returns the stored totals. Requires owner authorization (X-Session-Token).",
+        "operationId": "stopCapture",
+        "security": [{ "sessionToken": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Session ID" }
+        ],
+        "responses": {
+          "200": { "description": "Recording stopped", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptureStopResponse" } } } },
+          "403": { "description": "Not authorized, or resource capture is disabled", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Session not found or not running", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "409": { "description": "No capture is recording (capture_not_recording)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "502": { "description": "The final pull failed (capture_failed); the archive is marked with a tombstone", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/sessions/{id}/capture": {
+      "get": {
+        "tags": ["Capture"],
+        "summary": "Live capture status",
+        "description": "Returns the recording state and totals for a session, or 404 when it was never recorded. Requires owner authorization (X-Session-Token).",
+        "operationId": "getCaptureStatus",
+        "security": [{ "sessionToken": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Session ID" }
+        ],
+        "responses": {
+          "200": { "description": "Capture status", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptureStatusResponse" } } } },
+          "403": { "description": "Not authorized, or resource capture is disabled", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Session not found, not running, or never recorded (archive_not_found)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/captures": {
+      "get": {
+        "tags": ["Capture"],
+        "summary": "List resource archives",
+        "description": "Operator listing of every archive on the host, newest first. Uses the same bearer posture as session creation: when api.token is configured, Authorization: Bearer is required.",
+        "operationId": "listCaptures",
+        "security": [{}, { "archiveKey": [] }],
+        "responses": {
+          "200": { "description": "Archive summaries", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptureListResponse" } } } },
+          "401": { "description": "Operator bearer token missing or invalid", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "Resource capture is disabled", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/captures/{archiveID}": {
+      "get": {
+        "tags": ["Capture"],
+        "summary": "Get an archive's metadata",
+        "description": "Returns meta.json for one archive, including every captured item. Authorized by the archive key (Authorization: Bearer <archive_key>).",
+        "operationId": "getCaptureArchive",
+        "security": [{ "archiveKey": [] }],
+        "parameters": [
+          { "name": "archiveID", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Archive ID (the session ID)" }
+        ],
+        "responses": {
+          "200": { "description": "Archive metadata with items", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CaptureArchive" } } } },
+          "403": { "description": "Missing or invalid archive key (archive_key_invalid)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Archive not found (archive_not_found)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      },
+      "delete": {
+        "tags": ["Capture"],
+        "summary": "Delete an archive",
+        "description": "Removes the archive directory. Authorized by the archive key or the operator bearer token.",
+        "operationId": "deleteCaptureArchive",
+        "security": [{ "archiveKey": [] }],
+        "parameters": [
+          { "name": "archiveID", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Archive ID (the session ID)" }
+        ],
+        "responses": {
+          "200": { "description": "Archive deleted", "content": { "application/json": { "schema": { "type": "object", "properties": { "status": { "type": "string", "example": "deleted" } } } } } },
+          "403": { "description": "Missing or invalid archive key (archive_key_invalid)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Archive not found (archive_not_found)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/captures/{archiveID}/blobs/{sha256}": {
+      "get": {
+        "tags": ["Capture"],
+        "summary": "Download one archived resource body",
+        "description": "Serves the decoded response body. Content-Type comes from the archive metadata, the response is an attachment, nosniff and never cached. Authorized by the archive key.",
+        "operationId": "getCaptureBlob",
+        "security": [{ "archiveKey": [] }],
+        "parameters": [
+          { "name": "archiveID", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Archive ID (the session ID)" },
+          { "name": "sha256", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "description": "Blob content hash" }
+        ],
+        "responses": {
+          "200": { "description": "Resource body", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
+          "403": { "description": "Missing or invalid archive key (archive_key_invalid)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Archive or blob not found (blob_not_found)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/captures/{archiveID}/download": {
+      "get": {
+        "tags": ["Capture"],
+        "summary": "Download an archive as a zip",
+        "description": "Streams a zip containing meta.json and every captured blob. Authorized by the archive key.",
+        "operationId": "downloadCaptureArchive",
+        "security": [{ "archiveKey": [] }],
+        "parameters": [
+          { "name": "archiveID", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Archive ID (the session ID)" }
+        ],
+        "responses": {
+          "200": { "description": "Zip archive", "content": { "application/zip": { "schema": { "type": "string", "format": "binary" } } } },
+          "403": { "description": "Missing or invalid archive key (archive_key_invalid)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Archive not found (archive_not_found)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
     },

@@ -21,6 +21,9 @@ let networkLogMaxEntries = DEFAULT_NETWORK_LOG_MAX_ENTRIES;
 // On-demand recon (intel.enabled / ISOLA_INTEL_ENABLED). The viewer hides the
 // recon actions when the operator turned them off.
 let intelEnabled = true;
+// Resource capture (capture.enabled). When false the viewer hides the Record
+// row and the review page reports the feature as unavailable.
+let captureEnabled = false;
 let version = 'dev';
 let commit = 'unknown';
 let backendReachable = false;
@@ -48,6 +51,7 @@ export function initAppConfig(config: {
   max_sessions?: number;
   network_log_max_entries?: number;
   intel_enabled?: boolean;
+  capture_enabled?: boolean;
   version?: string;
   commit?: string;
 }) {
@@ -63,6 +67,7 @@ export function initAppConfig(config: {
   maxSessions = Number(config.max_sessions) > 0 ? Number(config.max_sessions) : 0;
   networkLogMaxEntries = normalizeNetworkLogMaxEntries(config.network_log_max_entries);
   intelEnabled = config.intel_enabled !== false;
+  captureEnabled = config.capture_enabled === true;
   version = config.version || 'dev';
   commit = config.commit || 'unknown';
 }
@@ -88,6 +93,11 @@ export function getNetworkLogMaxEntries(): number {
 // Whether the deployment allows on-demand recon (intel.enabled).
 export function isIntelEnabled(): boolean {
   return intelEnabled;
+}
+
+// Whether the deployment allows saving downloaded resources (capture.enabled).
+export function isCaptureEnabled(): boolean {
+  return captureEnabled;
 }
 
 export function getResolutions(): { value: string; label: string }[] {

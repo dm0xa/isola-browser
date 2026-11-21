@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
 import ViewerPage from './pages/ViewerPage';
 import NetworkPage from './pages/NetworkPage';
+import CapturesPage from './pages/CapturesPage';
 import RunPage from './pages/RunPage';
 import SharePage from './pages/SharePage';
 import { ThemeProvider } from './lib/ThemeContext';
@@ -41,7 +42,11 @@ export default function App() {
           {pluginRoutes.map((r) => (
             <Route key={r.path} path={r.path} element={r.element} />
           ))}
+          {/* Static segments outrank the /session/:id viewer route; order here
+              does not matter to the router, only to the reader. */}
           <Route path="/session/:id/network" element={<NetworkPage />} />
+          <Route path="/session/:id/captures" element={<CapturesPage />} />
+          <Route path="/captures/:id" element={<CapturesPage />} />
           <Route path="/session/:id" element={<ViewerPage />} />
           <Route path="/run" element={<RunPage />} />
           <Route path="/share/:token" element={<SharePage />} />

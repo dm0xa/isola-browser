@@ -6,11 +6,12 @@ import { LoadingOverlay } from '../components/LoadingOverlay';
 import { getToolbarButtons, getPluginProviders, usePlugins } from '../plugins/registry';
 import { useTheme } from '../lib/ThemeContext';
 import { api } from '../lib/api';
-import { getCommit, getVersion, isIntelEnabled, isTimerEnabled } from '../lib/config';
+import { getCommit, getVersion, isCaptureEnabled, isIntelEnabled, isTimerEnabled } from '../lib/config';
 import { fetchSessionIntel, type DocumentHeaders, type IntelFetch } from '../lib/intel';
 import { clearSessionToken, getSessionToken, storeSessionToken } from '../lib/sessionToken';
 import { endLaunch, setLaunchStatus, useLaunchProgress } from '../lib/launchProgress';
 import { useSessionTimer } from './viewer/useSessionTimer';
+import { useCaptureRecording } from '../hooks/useCaptureRecording';
 import { useIsolaMonitorEvents } from './viewer/useIsolaMonitorEvents';
 import { ViewerToolbar } from './viewer/ViewerToolbar';
 import { ViewerStreamShell } from './viewer/ViewerStreamShell';
@@ -78,6 +79,11 @@ export default function ViewerPage() {
   // panel still shows the full history. Capped for long sessions.
   const [netEntries, setNetEntries] = useState<NetEntry[]>([]);
   const [netPanel, setNetPanel] = useState<PanelLayout | 'off'>('off');
+  // Resource capture (record downloaded files). Owned here beside the network
+  // panel state: the toolbar renders it, the panel marks saved rows, and the
+  // review page is a route away.
+  const capture = useCaptureRecording(id);
+  const captureEnabled = isCaptureEnabled();
   const netEntriesRef = useRef<NetEntry[]>([]);
   const [netTab, setNetTab] = useState<PanelTab>('network');
   const [consoleEntries, setConsoleEntries] = useState<ConsoleEntry[]>([]);
@@ -157,6 +163,20 @@ export default function ViewerPage() {
     const url = `/session/${id}/network${token ? `#token=${encodeURIComponent(token)}` : ''}`;
     window.open(url, '_blank', 'noopener,noreferrer');
   }, [id]);
+
+  const openCaptures = useCallback(() => {
+    if (!id) return;
+    // Same handoff as the network pop-out: the control token rides in the URL
+    // fragment (never sent to the server, never in a query string), and the
+    // archive key stays in localStorage.
+    const token = sessionTokenRef.current || getSessionToken(id) || '';
+    navigate(`/session/${id}/captures${token ? `#token=${encodeURIComponent(token)}` : ''}`);
+  }, [id, navigate]);
+
+  const toggleCapture = useCallback(() => {
+    if (capture.state === 'recording') void capture.stop();
+    else void capture.start();
+  }, [capture]);
 
   // Recon goes through the API proxy, which validates the query and forwards it
   // to the streamer. Nothing runs until the user presses a recon button.
@@ -946,6 +966,13 @@ export default function ViewerPage() {
         debugEnabled={debugEnabled}
         toggleDebug={toggleDebug}
         networkCaptureEnabled={networkCaptureEnabled}
+        captureEnabled={captureEnabled}
+        captureState={capture.state}
+        captureStatus={capture.status}
+        captureSummary={capture.summary}
+        captureError={capture.error}
+        onToggleCapture={toggleCapture}
+        onOpenCaptures={openCaptures}
         netPanel={netPanel}
         setNetPanel={setNetPanel}
         openNetworkPopOut={openNetworkPopOut}
@@ -974,6 +1001,7 @@ export default function ViewerPage() {
         setNetTab={setNetTab}
         setNetPanel={setNetPanel}
         openNetworkPopOut={openNetworkPopOut}
+        savedHashes={capture.savedHashes}
         browserTabs={isola.browserTabs}
         theme={theme}
       />

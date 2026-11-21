@@ -185,7 +185,29 @@ func netMonitorTap(scope, sessionID, method string, params json.RawMessage, tab 
 	if emitHeaders && broadcast != nil {
 		hmsg = netHeadersMessage(broadcast)
 	}
+	// A record turns the same event stream into manifest rows: a finished
+	// request the hash worker did not take is still recorded as
+	// excluded_type/too_large (or failed), using only fields already parsed
+	// here — no extra CDP calls.
+	var row *captureItem
+	var rec *captureStore
+	if captureActive() {
+		rec = captureRec
+		finished := method == "Network.loadingFinished"
+		if finished || method == "Network.loadingFailed" {
+			if r := netRequests[key]; r != nil {
+				if it, ok := captureRowFor(r, !finished); ok {
+					row = &it
+				}
+			}
+		}
+	}
 	netMu.Unlock()
+
+	if row != nil {
+		// Never fsync while netMu is held: the capture loop must not wait on disk.
+		rec.AppendRow(*row)
+	}
 
 	if msg != nil {
 		broadcastNetMessage(msg)
@@ -491,12 +513,17 @@ func shouldHashBody(r *netRequest, sessionID string) bool {
 	if !hashableType(r.typ) || !strings.HasPrefix(r.url, "http") {
 		return false
 	}
-	return r.bytes <= netBodyHashMaxBytes
+	// The hash cap doubles as the fetch cap: a record raises it to its
+	// per-file limit, so a body the archive can store is worth reading even
+	// when it is larger than the plain hash gate.
+	return r.bytes <= captureFetchLimit()
 }
 
-// hashNetBody fetches one response body, stores its hex SHA-1 on the entry and
+// hashNetBody fetches one response body, stores its hex SHA-1 on the entry,
+// hands the same bytes to the record (sha256 blob) when one is active, and
 // publishes the finished entry. A body that cannot be read (evicted, rejected,
-// timed out) simply yields no hash — the entry still goes out, just without one.
+// timed out) simply yields no hash — the entry still goes out, just without
+// one; a record gets a missing_body row instead.
 func hashNetBody(job *netHashJob) {
 	body, ok := fetchResponseBody(job.sessionID, job.r.cdpID, netBodyHashTimeout)
 
@@ -506,6 +533,15 @@ func hashNetBody(job *netHashJob) {
 		sum := sha1.Sum(body)
 		job.r.sha1 = hex.EncodeToString(sum[:])
 	}
+	var item captureItem
+	var rec *captureStore
+	if captureActive() {
+		rec = captureRec
+		item = captureItemFromNet(job.r)
+		if !ok {
+			item.State = captureItemStateMissingBody
+		}
+	}
 	// Publish only if still live; build the message under the lock — a viewer
 	// WS write must never run while netMu is held.
 	var msg map[string]any
@@ -513,8 +549,39 @@ func hashNetBody(job *netHashJob) {
 		msg = netWireMessage(job.r)
 	}
 	netMu.Unlock()
+
+	// Persist before the body slice is dropped; outside the lock so the fsync
+	// never stalls the capture loop.
+	if rec != nil {
+		if ok {
+			rec.SaveBody(item, body)
+		} else {
+			rec.AppendRow(item)
+		}
+	}
 	if msg != nil {
 		broadcastNetMessage(msg)
+	}
+}
+
+// captureItemFromNet snapshots a finished request as a manifest row. Callers
+// hold netMu; the store assigns the id and the save timestamp.
+func captureItemFromNet(r *netRequest) captureItem {
+	return captureItem{
+		URL:               r.url,
+		FinalURL:          r.url,
+		Method:            r.method,
+		Status:            r.status,
+		Mime:              r.mime,
+		Type:              r.typ,
+		SizeWire:          r.bytes,
+		SHA1:              r.sha1,
+		Tab:               r.tab,
+		OriginHost:        r.originHost,
+		TSRequested:       r.startedAt,
+		TSFinished:        time.Now().UnixMilli(),
+		FromDiskCache:     r.cached,
+		FromServiceWorker: r.sw,
 	}
 }
 
@@ -523,11 +590,23 @@ func hashNetBody(job *netHashJob) {
 func publishEntryWithoutHash(job *netHashJob) {
 	netMu.Lock()
 	job.r.hashPending = false
+	// The body was never fetched, so a record gets a missing_body row rather
+	// than silently dropping the request from the manifest.
+	var item captureItem
+	var rec *captureStore
+	if captureActive() {
+		rec = captureRec
+		item = captureItemFromNet(job.r)
+		item.State = captureItemStateMissingBody
+	}
 	var msg map[string]any
 	if netRequests[job.key] == job.r {
 		msg = netWireMessage(job.r)
 	}
 	netMu.Unlock()
+	if rec != nil {
+		rec.AppendRow(item)
+	}
 	if msg != nil {
 		broadcastNetMessage(msg)
 	}

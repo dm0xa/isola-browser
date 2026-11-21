@@ -23,6 +23,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/dm0xa/isola-browser/backend/pkg/capture"
 	"github.com/dm0xa/isola-browser/backend/pkg/config"
 	"github.com/dm0xa/isola-browser/backend/pkg/graphopts"
 	isomw "github.com/dm0xa/isola-browser/backend/pkg/middleware"
@@ -73,6 +74,11 @@ type Handler struct {
 	ext   *HandlerExt
 	warm  *orchestrator.WarmPool
 
+	// Capture pulls resource archives out of a sandbox before it stops. Nil or
+	// disabled when capture.enabled is false; the handlers answer
+	// capture_disabled in that case.
+	Capture *capture.Manager
+
 	// warmPinWarnOnce logs the DNS-pin downgrade for warm claims once per
 	// process instead of on every claim.
 	warmPinWarnOnce sync.Once
@@ -122,6 +128,9 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Post("/sessions/{id}/audio", h.ToggleAudio)
 		r.Get("/sessions/{id}/graph.png", h.GetResourceGraph)
 		r.Get("/sessions/{id}/intel", h.GetSessionIntel)
+		r.Post("/sessions/{id}/capture/start", h.StartCapture)
+		r.Post("/sessions/{id}/capture/stop", h.StopCapture)
+		r.Get("/sessions/{id}/capture", h.GetCaptureStatus)
 		r.Delete("/sessions/{id}", h.DeleteSession)
 
 		// Share management for a session
@@ -184,6 +193,9 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	// On-demand recon (intel.enabled). The viewer hides the recon actions when
 	// the operator disabled it.
 	resp["intel_enabled"] = h.cfg.IntelEnabled
+	// Resource capture (capture.enabled): the viewer hides the Record row when
+	// the operator disabled it.
+	resp["capture_enabled"] = h.Capture != nil && h.Capture.Enabled()
 	// Whether an operator CA bundle is installed for recon. The certificate
 	// itself is never exposed.
 	resp["intel_ca_configured"] = h.cfg.IntelCAPEM != ""
@@ -1880,6 +1892,22 @@ func errorMessageForCode(code string) string {
 		return "Invalid session"
 	case "session_gone":
 		return "Session no longer active"
+	case "session_not_running":
+		return "Session is not running"
+	case "capture_disabled":
+		return "Resource capture is disabled"
+	case "capture_not_recording":
+		return "No resource capture is recording for this session"
+	case "capture_failed":
+		return "Resource capture failed"
+	case "capture_quota_exceeded":
+		return "Resource capture quota exceeded"
+	case "archive_not_found":
+		return "Resource archive not found"
+	case "archive_key_invalid":
+		return "Invalid or missing archive key"
+	case "blob_not_found":
+		return "Resource blob not found"
 	default:
 		return code
 	}

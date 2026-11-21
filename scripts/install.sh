@@ -222,6 +222,13 @@ ISOLA_DATA_DIR=${INSTALL_DIR}/data
 # The sandbox refuses to start without one. Uncomment to allow a host that has
 # no LSM (not recommended):
 # ISOLA_REQUIRE_MAC=0
+# Resource capture (the viewer's Record button): saves downloaded bodies under
+# ${INSTALL_DIR}/data/captures/<session_id>/. Off by default.
+# ISOLA_CAPTURE_ENABLED=true
+# ISOLA_CAPTURE_MAX_FILE_BYTES=8388608
+# ISOLA_CAPTURE_MAX_RECORD_BYTES=268435456
+# ISOLA_CAPTURE_TOTAL_QUOTA_BYTES=2147483648
+# ISOLA_CAPTURE_RETENTION_DAYS=30
 ENVEOF
     chmod 600 "$env_file"
     info "Created env file: ${env_file}"

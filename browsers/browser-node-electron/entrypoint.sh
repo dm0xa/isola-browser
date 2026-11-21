@@ -493,6 +493,12 @@ if [ "${ISOLA_AUDIO:-1}" = "1" ]; then
 fi
 
 # ── Start isola-streamer (UDS listener on /run/isola/frame.sock) ──────
+# Resource capture writes on the 512m /home tmpfs, which the runtime mounts
+# root-owned: prepare the one directory the streamer may write to before it
+# starts, or it disables capture at boot.
+CAPTURE_DIR="${ISOLA_CAPTURE_DIR:-/home/isolauser/capture}"
+mkdir -p "${CAPTURE_DIR}"
+chown isolauser:isolauser "${CAPTURE_DIR}" 2>/dev/null || true
 echo "[browser-node-electron] Starting isola-streamer on :5900"
 if [ -n "$RUN_AS_USER" ]; then
     $RUN_AS_USER /usr/local/bin/isola-streamer &

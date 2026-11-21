@@ -427,9 +427,12 @@ interface Props {
   // When provided, offer a "new tab" action in the header.
   onPopOut?: () => void;
   closeTitle?: string;
+  // SHA-1 digests of response bodies already persisted to the capture archive.
+  // The panel never fetches the manifest itself; the viewer passes the set.
+  savedHashes?: ReadonlySet<string>;
 }
 
-export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layout, tab, onTab, onLayout, onClose, onSizeChange, tabs, docHeaders, onIntel, intelDisabled, full, onPopOut, closeTitle }: Props) {
+export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layout, tab, onTab, onLayout, onClose, onSizeChange, tabs, docHeaders, onIntel, intelDisabled, full, onPopOut, closeTitle, savedHashes }: Props) {
   const { theme } = useTheme();
   const [filter, setFilter] = useState('');
   const [onlyFlagged, setOnlyFlagged] = useState(false);
@@ -1124,17 +1127,27 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
                     </span>
                     <span className="w-16 shrink-0 truncate text-zinc-400 dark:text-gray-500">{e.t || '—'}</span>
                     <span className="w-14 shrink-0 text-right text-zinc-600 dark:text-gray-400">{fmtSize(e.b)}</span>
-                    {e.h ? (
-                      <button
-                        onClick={(ev) => { ev.stopPropagation(); copyText(e.h as string, `${rowKey}:sha1`); }}
-                        className="w-28 shrink-0 truncate text-left font-mono text-[10px] text-zinc-500 hover:text-cyan-700 dark:text-gray-500 dark:hover:text-cyan-200"
-                        title={`sha1 ${e.h} — click to copy`}
-                      >
-                        {copiedTag === `${rowKey}:sha1` ? '✓ copied' : shortHash(e.h)}
-                      </button>
-                    ) : (
-                      <span className="w-28 shrink-0 truncate font-mono text-[10px] text-zinc-300 dark:text-gray-600" title="no hash (not hashable, too large, still hashing, or capture off)">—</span>
-                    )}
+                    <span className="flex w-28 shrink-0 items-center gap-1">
+                      {e.h ? (
+                        <button
+                          onClick={(ev) => { ev.stopPropagation(); copyText(e.h as string, `${rowKey}:sha1`); }}
+                          className="min-w-0 flex-1 truncate text-left font-mono text-[10px] text-zinc-500 hover:text-cyan-700 dark:text-gray-500 dark:hover:text-cyan-200"
+                          title={`sha1 ${e.h} — click to copy`}
+                        >
+                          {copiedTag === `${rowKey}:sha1` ? '✓ copied' : shortHash(e.h)}
+                        </button>
+                      ) : (
+                        <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-300 dark:text-gray-600" title="no hash (not hashable, too large, still hashing, or capture off)">—</span>
+                      )}
+                      {e.h && savedHashes?.has(e.h) && (
+                        <span
+                          className="shrink-0 rounded bg-emerald-500/15 px-1 text-[9px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300"
+                          title="Saved in the capture archive"
+                        >
+                          saved
+                        </span>
+                      )}
+                    </span>
                     <span className="w-24 shrink-0 truncate text-zinc-400 dark:text-gray-500">{e.ip || '—'}</span>
                     <button
                       onClick={(ev) => { ev.stopPropagation(); copyText(e.url, rowKey); }}
@@ -1190,6 +1203,11 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
                           <button onClick={() => copyText(e.h as string, 'detail-sha1')} className="rounded border border-zinc-300 px-1.5 py-0.5 text-[10px] text-cyan-600 hover:bg-zinc-200 dark:border-gray-700 dark:text-cyan-400 dark:hover:bg-gray-800">
                             {copiedTag === 'detail-sha1' ? '✓ copied' : 'Copy SHA-1'}
                           </button>
+                        )}
+                        {e.h && savedHashes?.has(e.h) && (
+                          <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                            saved in archive
+                          </span>
                         )}
                         <button
                           onClick={() => copyText(JSON.stringify({ time: e.ts ? new Date(e.ts).toISOString() : undefined, method: e.m || 'GET', url: e.url, status: e.s, type: e.t, size: e.b, ip: e.ip, sha1: e.h || '', failed: !!e.f, error: e.e || undefined }, null, 2), 'detail-json')}

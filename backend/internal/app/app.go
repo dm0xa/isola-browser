@@ -24,6 +24,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/dm0xa/isola-browser/backend/pkg/api"
+	"github.com/dm0xa/isola-browser/backend/pkg/capture"
 	"github.com/dm0xa/isola-browser/backend/pkg/config"
 	"github.com/dm0xa/isola-browser/backend/pkg/mcp"
 	isomw "github.com/dm0xa/isola-browser/backend/pkg/middleware"
@@ -185,6 +186,22 @@ func Run(opts Options) error {
 	})
 	orch.SetSessionCleanup(apiHandler.OnBackgroundSessionEnd)
 
+	// Resource capture (opt-in): pulls verified response bodies out of a
+	// sandbox while it is alive. With capture disabled no directory is touched
+	// and no goroutine runs.
+	var captureMgr *capture.Manager
+	if cfg.Capture.Enabled {
+		captureMgr = capture.NewManager(cfg.Capture, log.Logger)
+		apiHandler.Capture = captureMgr
+		defer captureMgr.Close()
+		// The final pull must happen before `docker stop` kills the streamer.
+		orch.SetPreStopHook(func(ctx context.Context, sessionID string) {
+			pullCtx, cancelPull := context.WithTimeout(ctx, 20*time.Second)
+			defer cancelPull()
+			captureMgr.Finalize(pullCtx, sessionID)
+		})
+	}
+
 	// Warm pool: pre-started containers so POST /api/sessions activates
 	// instantly when enabled. Runs only when explicitly configured.
 	var warmPool *orchestrator.WarmPool
@@ -218,6 +235,10 @@ func Run(opts Options) error {
 
 	// WebSocket proxy route (no timeout — long-lived connection).
 	r.HandleFunc("/ws/{sessionId}", proxy.HandleWebSocket)
+
+	// Capture archive routes (no chi timeout — blob/zip bodies are streamed and
+	// the handlers extend the write deadline themselves).
+	apiHandler.RegisterCaptureRoutes(r)
 
 	// Module frontend chunks (only when module support is active).
 	if moduleHost != nil {

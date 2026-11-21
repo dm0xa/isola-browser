@@ -2,13 +2,16 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import {
   Share2, X, Check, RotateCw, Bug, Maximize2, Minimize2, MoreVertical,
-  Activity, Gauge, SignalHigh, SignalLow, SignalMedium, ExternalLink, AlertTriangle,
+  Activity, Gauge, SignalHigh, SignalLow, SignalMedium, ExternalLink, AlertTriangle, Circle,
 } from 'lucide-react';
 import { AudioToggleButton } from '../../components/AudioToggleButton';
 import { IsolaLogo } from '../../components/IsolaLogo';
 import SessionTimeControl from '../../components/SessionTimeControl';
 import type { useIsolaStream } from '../../hooks/useIsolaStream';
 import type { ToolbarButton } from '../../plugins/types';
+import type { CaptureStatus, CaptureStopResult } from '../../lib/captureApi';
+import { elapsedSeconds, formatBytes, formatDuration } from '../../lib/captureFormat';
+import type { CaptureState } from '../../hooks/useCaptureRecording';
 import { ViewerMenuItem } from './ViewerMenuItem';
 
 export type ViewerToolbarProps = {
@@ -42,6 +45,14 @@ export type ViewerToolbarProps = {
   debugEnabled: boolean;
   toggleDebug: () => void;
   networkCaptureEnabled: boolean;
+  /** The deployment offers resource capture (GET /api/config capture_enabled). */
+  captureEnabled: boolean;
+  captureState: CaptureState;
+  captureStatus: CaptureStatus | null;
+  captureSummary: CaptureStopResult | null;
+  captureError: string;
+  onToggleCapture: () => void;
+  onOpenCaptures: () => void;
   netPanel: import('../../components/IsolaNetworkPanel').PanelLayout | 'off';
   setNetPanel: React.Dispatch<React.SetStateAction<import('../../components/IsolaNetworkPanel').PanelLayout | 'off'>>;
   openNetworkPopOut: () => void;
@@ -61,7 +72,9 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
     remainingSec, isUnlimited, status, torEnabled, torCountry, extendAvailable, viewOnly, onExtend, isFullscreen,
     tabBarSlotRef, rendererStallVisible, rendererStalledSec, captureStallVisible, clipboardSynced,
     menuOpen, setMenuOpen, audioMuted, toggleAudio, toggleFullscreen, debugEnabled,
-    toggleDebug, networkCaptureEnabled, netPanel, setNetPanel, openNetworkPopOut,
+    toggleDebug, networkCaptureEnabled, captureEnabled, captureState, captureStatus,
+    captureSummary, captureError, onToggleCapture, onOpenCaptures,
+    netPanel, setNetPanel, openNetworkPopOut,
     shareCopied, handleShare, toolbarButtons, restarting, sessionTargetUrl, handleRestart, handleEndSession,
     onRecoverRenderer,
   } = props;
@@ -84,6 +97,18 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
       cancelAnimationFrame(inner);
     };
   }, [torEnabled]);
+  // The REC chip counts up locally between status polls (the hook only polls
+  // every 5 s); `now` re-renders it once a second while recording.
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (captureState !== 'recording') return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [captureState]);
+  const recElapsed = captureState === 'recording'
+    ? elapsedSeconds(captureStatus?.started_at, now)
+    : null;
   // End session takes two clicks. The first arms the button; the second, while
   // it stays armed, actually ends. A stray single click no longer kills the
   // session. A quick double-click still counts, because the first click arms
@@ -183,6 +208,38 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
           {viewerCount > 0 && (
             <span className="text-xs text-zinc-500 dark:text-gray-400 font-mono ml-1" title={`${viewerCount} watcher${viewerCount !== 1 ? 's' : ''}`}>
               {viewerCount}
+            </span>
+          )}
+          {/* Capture status lives in the left cluster so it is visible while
+              the menu is closed. Both states open the review page. */}
+          {captureState === 'recording' && (
+            <button
+              type="button"
+              onClick={onOpenCaptures}
+              title="Recording downloaded resources — click to review what has been saved"
+              className="flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-mono text-red-700 ring-1 ring-inset ring-red-500/40 bg-red-500/10 hover:bg-red-500/20 dark:text-red-300"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" aria-hidden />
+              REC {formatDuration(recElapsed ?? 0)} · {formatBytes(captureStatus?.bytes ?? 0)}
+            </button>
+          )}
+          {captureState !== 'recording' && !!captureSummary && captureSummary.items > 0 && (
+            <button
+              type="button"
+              onClick={onOpenCaptures}
+              title="Open the saved-resources review page"
+              className="flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-mono text-emerald-700 ring-1 ring-inset ring-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 dark:text-emerald-300"
+            >
+              Saved {captureSummary.items} {captureSummary.items === 1 ? 'file' : 'files'} · Review
+            </button>
+          )}
+          {captureError && (
+            <span
+              title={captureError}
+              className="flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-mono text-red-700 ring-1 ring-inset ring-red-500/40 bg-red-500/10 dark:text-red-300"
+            >
+              <AlertTriangle size={11} aria-hidden />
+              capture failed
             </span>
           )}
         </div>
@@ -324,6 +381,26 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
                         <ExternalLink size={15} />
                       </button>
                     </div>
+                  )}
+                  {/* Resource capture: downloads every response body the
+                      sandbox fetches into a host-side archive, reviewable
+                      after the session is gone. Disabled (not hidden) when the
+                      operator turned capture off, so the row is discoverable
+                      and explains itself. */}
+                  {!viewOnly && (
+                    <ViewerMenuItem
+                      icon={<Circle size={15} className={captureState === 'recording' ? 'fill-red-500 text-red-500' : ''} />}
+                      label={captureState === 'recording' ? 'Stop recording' : 'Record resources'}
+                      dimmed
+                      toggled={captureState === 'recording'}
+                      disabled={
+                        !captureEnabled ||
+                        !isConnected ||
+                        captureState === 'starting' ||
+                        captureState === 'stopping'
+                      }
+                      onClick={() => { setMenuOpen(false); onToggleCapture(); }}
+                    />
                   )}
                   {/* Stream quality (isola): adaptive Auto is the only mode
                       exposed, so the row is informational — no selected state. */}

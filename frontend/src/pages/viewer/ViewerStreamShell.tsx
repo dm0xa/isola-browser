@@ -20,6 +20,8 @@ export type ViewerStreamShellProps = {
   setNetTab: React.Dispatch<React.SetStateAction<PanelTab>>;
   setNetPanel: React.Dispatch<React.SetStateAction<PanelLayout | 'off'>>;
   openNetworkPopOut: () => void;
+  /** SHA-1 digests already persisted to the capture archive (row markers). */
+  savedHashes?: ReadonlySet<string>;
   browserTabs: ReturnType<typeof useIsolaStream>['browserTabs'];
   theme: 'dark' | 'light';
 };
@@ -31,7 +33,7 @@ export const ViewerStreamShell = React.memo(function ViewerStreamShell(props: Vi
   const {
     shellRef, canvasRef, containerStyle, networkCaptureEnabled, netPanel, netEntries,
     consoleEntries, cookieEntries, docHeaders, onIntel, intelDisabled, netTab, setNetTab, setNetPanel, openNetworkPopOut,
-    browserTabs, theme,
+    savedHashes, browserTabs, theme,
   } = props;
   return (
     <>
@@ -56,6 +58,7 @@ export const ViewerStreamShell = React.memo(function ViewerStreamShell(props: Vi
             onLayout={setNetPanel}
             onClose={() => setNetPanel('off')}
             onPopOut={openNetworkPopOut}
+            savedHashes={savedHashes}
             tabs={browserTabs}
           />
         )}

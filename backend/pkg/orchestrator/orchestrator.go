@@ -32,6 +32,9 @@ type SessionCleanupFunc func(ctx context.Context, sess *models.Session)
 type Orchestrator struct {
 	host             string
 	onSessionCleanup SessionCleanupFunc
+	// preStopHook runs before the container is stopped, while the streamer is
+	// still reachable. Resource capture uses it for its final pull.
+	preStopHook func(ctx context.Context, sessionID string)
 
 	proxyIPOnce sync.Once
 	proxyIP     string // this process's IP on browser-net, passed to containers
@@ -493,6 +496,12 @@ func (o *Orchestrator) SetSessionCleanup(fn SessionCleanupFunc) {
 	o.onSessionCleanup = fn
 }
 
+// SetPreStopHook installs a callback that runs before a session's container is
+// stopped, while the streamer is still reachable. Optional.
+func (o *Orchestrator) SetPreStopHook(fn func(ctx context.Context, sessionID string)) {
+	o.preStopHook = fn
+}
+
 // sessionCacheKeys lists every per-session cache entry. FinalizeRunningSession
 // and CleanupOrphanContainers both clear this set: a key added to only one of
 // them survives the other teardown path and leaks for the life of the cache.
@@ -514,6 +523,12 @@ func (o *Orchestrator) FinalizeRunningSession(ctx context.Context, st *store.Mem
 	}
 	sid := sess.ID.String()
 	log.Info().Str("session_id", sid).Msg("session: terminate")
+
+	// The container is still alive here: capture (or another consumer) gets its
+	// final chance to drain state from the streamer.
+	if o.preStopHook != nil {
+		o.preStopHook(ctx, sid)
+	}
 
 	if sess.ContainerID != "" {
 		if err := o.TerminateSession(ctx, sess.ContainerID); err != nil {
