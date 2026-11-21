@@ -96,7 +96,17 @@ pool warms up over several browser boots instead of booting every container at
 once. A failed fill ends that pass and is retried on the next one rather than
 looping.
 
-The pool serves a claim only when the request matches what it was built with: Isola transport, the configured theme and frame rate, and a resolution no larger than the configured one — a smaller request is claimed and the display is reshaped to it inside that box, the same way `POST /api/sessions/{id}/resize` does. A larger resolution, a different theme or frame rate, or a Tor/bandwidth override transparently falls back to a cold start. The session timer starts at entry either way.
+The pool serves a claim only when the request matches what it was built with:
+Isola transport, the configured theme and frame rate, and exactly the
+configured resolution (`session.resolution`) — an idle window is never resized,
+because Chromium applies that lazily and costs more to first frame than a cold
+start. The web UI launches at the resolution picked in the launcher, so the
+preset that equals `session.resolution` (both default to `1920x1080`) is served
+warm; the viewer then reshapes the capture to the window's aspect with
+`POST /api/sessions/{id}/resize`, the same path a window drag uses. Requests
+the pool was not built for — another resolution ("My screen", an API caller's
+own size), a different theme or frame rate, a Tor or bandwidth override —
+fall back to a cold start. The session timer starts at entry either way.
 
 ### `browser`
 

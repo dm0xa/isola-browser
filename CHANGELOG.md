@@ -6,6 +6,14 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- The warm pool now serves ordinary launches. The launcher sent a resolution
+  fitted to the browser window, which could never equal the pooled container's
+  baked resolution, so every UI launch cold-started while an idle warm container
+  sat unused. It sends the picked resolution instead; the viewer reshapes the
+  capture to the window once the stream connects, as it already did on a resize.
+
 ## [1.6.5] - 2026-11-20
 
 ### Fixed

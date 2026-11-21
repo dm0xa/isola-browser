@@ -5,10 +5,9 @@ import { IsolaLogo } from '../components/IsolaLogo';
 import { beginLaunch, endLaunch, setLaunchStatus } from '../lib/launchProgress';
 import { apiErrorMessage } from '../lib/apiError';
 import { storeSessionToken } from '../lib/sessionToken';
-import { getIsolaTabs, getMaxSessions } from '../lib/config';
+import { getMaxSessions } from '../lib/config';
 import { MAX_CAPACITY_RETRIES, capacityRetryDelayMs, isCapacityLimit } from '../lib/launchRetry';
 import { sessionCreateAuthHeaders } from '../lib/createAuth';
-import { fitResolutionToAspect } from '../lib/resolution';
 
 type LaunchConfig = {
   url?: string;
@@ -20,21 +19,12 @@ type LaunchConfig = {
   network_monitor?: boolean;
 };
 
-// The viewer's capture box is the window minus the app's own chrome: a 48px
-// toolbar, plus the 36px isola tab strip when it is enabled. The isola
-// transport draws the capture into #vnc-container with object-fit: contain, so
-// any leftover space between that box and the sandbox screen shows up as dark
-// letterbox bars on the sides. Sizing the sandbox to the box's aspect ratio
-// keeps it filled edge-to-edge without cropping.
-const VIEWER_TOOLBAR_PX = 48;
-const ISOLA_TABBAR_PX = 36;
-
-function viewerAspect(): number {
-  const width = document.documentElement.clientWidth;
-  const chrome = VIEWER_TOOLBAR_PX + (getIsolaTabs() ? ISOLA_TABBAR_PX : 0);
-  const height = window.innerHeight - chrome;
-  return width > 0 && height > 0 ? width / height : 0;
-}
+// The launch request carries the resolution the user picked — the session's
+// pixel budget. It is deliberately NOT fitted to this window: the warm pool
+// serves a container only when the requested resolution equals the baked one,
+// so fitting here made every UI launch miss the pool (a 1440-wide window asked
+// for 1560x1080 against a 1920x1080 container). ViewerPage reshapes the capture
+// to the box's aspect once the stream is connected.
 
 export default function RunPage() {
   const navigate = useNavigate();
@@ -75,9 +65,6 @@ export default function RunPage() {
       body.browser_theme = theme;
     }
     body.transport = 'isola';
-    if (body.resolution) {
-      body.resolution = fitResolutionToAspect(body.resolution, viewerAspect());
-    }
 
     // Launch admission can refuse with 429 while the instance is at its session
     // cap (ISOLA_MAX_SESSIONS). That is transient — sessions expire on a timer —
