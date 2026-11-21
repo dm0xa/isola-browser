@@ -91,13 +91,17 @@ bodies are stored once.
 
 - The chip shows `REC mm:ss · X MB` while recording. Stop it from the same menu,
   or let it stop when the session ends.
-- **Review** opens the archive at `/session/<id>/captures`: one row per stored
-  file, with the URLs that served it and a version badge when a URL changed
-  during the recording. Download single files, the whole archive as a zip, or
-  preview text and images (HTML is shown as source, never executed).
-- Archives live under `<ISOLA_DATA_DIR>/captures/<session_id>/` and outlive the
-  session. The one-time archive key is kept in the browser's `localStorage`;
-  without it, archives are still served to an operator bearing the create token.
+- **Saved files** opens the Resources panel over the live view (dock it bottom
+  or side, drag to resize); **↗ new tab** opens the same archive at
+  `/session/<id>/captures`. One row per stored file, with the readable
+  `files/<host>/<path>` path, the URLs that served it and a version badge when
+  a URL changed. Download single files, the whole archive as a zip, or preview
+  text and images (HTML is shown as source, never executed).
+- Archives live under `<ISOLA_DATA_DIR>/captures/<session_id>/` as a readable
+  URL tree (`files/<host>/<path>…`, with `index.txt` mapping URLs to files) and
+  outlive the session. The one-time archive key is kept in the browser's
+  `localStorage`; without it, archives are still served to an operator bearing
+  the create token.
 - Media (`Media` responses), WebSocket/SSE frames, POST bodies and worker
   requests are not captured. See [Configuration](configuration.md#capture).
 

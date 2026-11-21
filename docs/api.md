@@ -31,8 +31,9 @@ Base URL for a local deployment: `http://localhost:8080`.
 | `GET` | `/api/sessions/{id}/capture` | session | Live recording status for the session. |
 | `GET` | `/api/captures` | optional bearer | List archives (same bearer posture as session creation). |
 | `GET` | `/api/captures/{archiveID}` | archive key | Archive `meta.json`, including every resource row. |
-| `GET` | `/api/captures/{archiveID}/blobs/{sha256}` | archive key | One stored body, as an attachment. |
-| `GET` | `/api/captures/{archiveID}/download` | archive key | Zip of `meta.json` plus every blob. |
+| `GET` | `/api/captures/{archiveID}/blobs/{sha256}` | archive key | One stored body by digest, as an attachment. |
+| `GET` | `/api/captures/{archiveID}/files/{path...}` | archive key | One stored body by its readable archive path. |
+| `GET` | `/api/captures/{archiveID}/download` | archive key | Zip of `meta.json`, `index.txt` and every stored file at its readable path. |
 | `DELETE` | `/api/captures/{archiveID}` | archive key or create bearer | Delete the archive directory. |
 | `POST` | `/api/sessions/{id}/shares` | session | Create a view-only share link. |
 | `GET` | `/api/sessions/{id}/shares` | session | List share links. |
@@ -258,14 +259,17 @@ curl -s -o "$ID.zip" "http://localhost:8080/api/captures/$ID/download" \
 `meta.json` records the session, start URL, `created_at`/`ended_at`, `complete`,
 counts and sizes, and one row per request: `url`, `final_url`, `method`,
 `status`, `mime`, `type`, `size_wire`, `size_decoded`, `sha256`, `sha1`,
-`filename`, `tab`, `origin_host`, `ts_requested`/`ts_finished`/`ts_saved`,
-cache/service-worker flags, and `state` (`captured`, `too_large`,
-`excluded_type`, `missing_body`, `failed`). Rows with `state != captured` have
-no stored bytes. The same URL can appear more than once with different
-`sha256` values; identical bodies are stored once.
+`file` (readable path under the archive), `filename`, `tab`, `origin_host`,
+`ts_requested`/`ts_finished`/`ts_saved`, cache/service-worker flags, and `state`
+(`captured`, `too_large`, `excluded_type`, `missing_body`, `failed`). Rows with
+`state != captured` have no stored bytes. The same URL can appear more than
+once with different `sha256` values; identical bodies are stored once.
 
-Storage is `$ISOLA_DATA_DIR/captures/<archive_id>/` with `meta.json` and
-`blobs/<sha[:2]>/<sha256>`. Blob responses are always
+Storage is a readable URL tree under
+`$ISOLA_DATA_DIR/captures/<archive_id>/files/<host>/<path>…`, with `index.txt`
+(one `url<TAB>file<TAB>status<TAB>mime<TAB>size<TAB>sha256[:12]` line each) and
+`meta.json`. `GET /api/captures/{id}/files/{path...}` serves the readable path;
+`/blobs/{sha256}` remains as a digest-addressed alias. Both responses are
 `Content-Disposition: attachment` with `X-Content-Type-Options: nosniff` — a
 captured document is hostile input and must never be rendered on the isola
 origin. The viewer therefore previews text/images only, and shows HTML as

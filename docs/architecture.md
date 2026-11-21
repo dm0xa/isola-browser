@@ -63,13 +63,14 @@ warm container's environment is baked before its session exists.
 
 1. The streamer already reads a finished response body to compute the SHA-1 the
    viewer shows. While a record is active it computes SHA-256 from the same
-   bytes and writes them to `/home/isolauser/capture/<session_id>/files/…`
-   (content-addressed, tmp+rename) plus an append-only manifest. Nothing is
+   bytes and writes them to `/home/isolauser/capture/<session_id>/files/…` in a
+   readable host/path tree (tmp+rename) plus an append-only manifest. Nothing is
    re-fetched, and no extra CDP calls are made.
 2. The control plane polls that manifest every 10 seconds, pulls new blobs over
    the loopback-published streamer port, re-verifies each SHA-256 and writes
-   them to `$ISOLA_DATA_DIR/captures/<session_id>/`. A final pull runs in
-   `FinalizeRunningSession` *before* the container is stopped.
+   them to `$ISOLA_DATA_DIR/captures/<session_id>/files/…` (hardlinking a body
+   already stored for another URL, and refreshing `index.txt`). A final pull
+   runs in `FinalizeRunningSession` *before* the container is stopped.
 3. No host volume is mounted into the sandbox and the read-only rootfs is
    unchanged: data leaves through the same HTTP proxy path as intel and the
    resource graph.

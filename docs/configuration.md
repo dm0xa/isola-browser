@@ -155,8 +155,21 @@ running, the streamer keeps every decoded response body it already reads to
 compute a hash — documents, scripts, stylesheets, fonts, images, XHR/fetch — and
 the control plane pulls those bytes to the host. Media (`Media` responses),
 WebSocket/SSE frames, POST bodies and worker/OOPIF traffic are not captured.
-Archives live under `<dir>/<session_id>/` (`meta.json` plus content-addressed
-`blobs/`), deduped by SHA-256 within one record, and survive the session.
+Archives live under `<dir>/<session_id>/` as a readable URL tree —
+`files/<host>/<path>…`, plus `index.txt` (URL → file) and `meta.json`; identical
+bodies are hardlinked and deduped by SHA-256 within one record, and the archive
+survives the session. Examples:
+
+```
+captures/<session_id>/files/example.com/index.html
+captures/<session_id>/files/www.wikipedia.org/w/load.php
+captures/<session_id>/files/api.example.org/v2/items.json__q_page_2
+captures/<session_id>/files/www.wikipedia.org/w/load~3f2a1c9b7d.css   # changed content
+```
+
+The same URL with the same hash is not written twice; changed content adds a
+`~<sha256[:12]>` version; bytes served by several URLs get one file and several
+hardlinks.
 
 | Key | Default | Env | Meaning |
 | :--- | :--- | :--- | :--- |
