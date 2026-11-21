@@ -6,6 +6,7 @@ import {
   filterCaptureFiles,
   groupCaptureFiles,
   groupCaptureFilesByHost,
+  groupCaptureFilesByMime,
   hostRelativePath,
   truncatePathLeft,
   truncatePathTail,
@@ -155,7 +156,9 @@ describe('groupCaptureFilesByHost', () => {
 
   it('splits by host with counts and unique bytes, hosts in natural order', () => {
     const groups = groupCaptureFilesByHost(mixed);
-    expect(groups.map((g) => g.host)).toEqual(['a2.example', 'b.example']);
+    expect(groups.map((g) => g.key)).toEqual(['a2.example', 'b.example']);
+    expect(groups.map((g) => g.label)).toEqual(['a2.example', 'b.example']);
+    expect(groups.every((g) => g.kind === 'host')).toBe(true);
     expect(groups[1].count).toBe(2);
     expect(groups[1].bytes).toBe(400);
   });
@@ -176,5 +179,29 @@ describe('groupCaptureFilesByHost', () => {
     expect(filterCaptureFiles(mixed, 'a2.example')).toHaveLength(1);
     expect(filterCaptureFiles(mixed, 'b'.repeat(64))).toHaveLength(1);
     expect(filterCaptureFiles(mixed, 'b.example')).toHaveLength(2);
+  });
+});
+
+describe('groupCaptureFilesByMime', () => {
+  const mixed = groupCaptureFiles([
+    item({ id: 'r1', sha256: 'a'.repeat(64), file: 'files/a.example/z.js', url: 'https://a.example/z.js', mime: 'text/javascript', size_decoded: 100 }),
+    item({ id: 'r2', sha256: 'b'.repeat(64), file: 'files/b.example/a10.webp', url: 'https://b.example/a10.webp', mime: 'IMAGE/WebP', size_decoded: 200 }),
+    item({ id: 'r3', sha256: 'c'.repeat(64), file: 'files/a.example/a2.js', url: 'https://a.example/a2.js', mime: 'text/javascript', size_decoded: 300 }),
+    item({ id: 'r4', sha256: 'd'.repeat(64), file: 'files/a.example/blob.bin', url: 'https://a.example/blob.bin', mime: '', size_decoded: 50 }),
+  ]);
+
+  it('groups by lowercased full mime, with an unknown bucket, alphabetically', () => {
+    const groups = groupCaptureFilesByMime(mixed);
+    expect(groups.map((g) => g.label)).toEqual(['image/webp', 'text/javascript', 'unknown']);
+    expect(groups.map((g) => g.key)).toEqual(['image/webp', 'text/javascript', 'unknown']);
+    expect(groups.every((g) => g.kind === 'mime')).toBe(true);
+    expect(groups[1].count).toBe(2);
+    expect(groups[1].bytes).toBe(400);
+    expect(groups[2].files[0].file).toBe('files/a.example/blob.bin');
+  });
+
+  it('sorts files by path inside a mime group', () => {
+    const js = groupCaptureFilesByMime(mixed).find((g) => g.label === 'text/javascript')!;
+    expect(js.files.map((f) => f.file)).toEqual(['files/a.example/a2.js', 'files/a.example/z.js']);
   });
 });

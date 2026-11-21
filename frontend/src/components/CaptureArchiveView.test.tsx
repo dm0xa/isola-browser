@@ -314,6 +314,72 @@ describe('CaptureArchiveView', () => {
     expect(screen.getAllByTitle('Save this file')).toHaveLength(1);
   });
 
+  it('groups by MIME type with counts, bytes, unknown bucket and tooltips', async () => {
+    vi.mocked(getArchive).mockResolvedValue(
+      archiveOf([
+        item({ id: 'r1', sha256: 'a'.repeat(64), file: 'files/a.example/app.js', mime: 'text/javascript', size_decoded: 1000 }),
+        item({ id: 'r2', sha256: 'b'.repeat(64), file: 'files/a.example/lib.js', url: 'https://a.example/lib.js', mime: 'text/javascript', size_decoded: 24 }),
+        item({ id: 'r3', sha256: 'c'.repeat(64), file: 'files/b.example/photo.webp', url: 'https://b.example/photo.webp', mime: 'image/webp', size_decoded: 2048 }),
+        item({ id: 'r4', sha256: 'd'.repeat(64), file: 'files/a.example/blob.bin', url: 'https://a.example/blob.bin', mime: '', size_decoded: 10 }),
+      ]),
+    );
+
+    renderView({ layout: 'panel' });
+    fireEvent.click(await screen.findByRole('button', { name: 'type' }));
+
+    const jsGroup = screen.getByRole('button', { name: /^text\/javascript/ });
+    expect(jsGroup).toHaveAttribute('aria-expanded', 'true');
+    expect(jsGroup).toHaveTextContent('2 files · 1.0 KB');
+    expect(screen.getByRole('button', { name: /^image\/webp/ })).toHaveTextContent('1 file · 2.0 KB');
+    expect(screen.getByRole('button', { name: /^unknown/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'type' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'type' })).toHaveAttribute('title', 'Group by MIME type');
+    expect(screen.getByRole('button', { name: 'path' })).toHaveAttribute('title', 'Group by host, sort by path');
+  });
+
+  it('collapses MIME groups and regroups by host when switching back', async () => {
+    vi.mocked(getArchive).mockResolvedValue(
+      archiveOf([
+        item({ id: 'r1', sha256: 'a'.repeat(64), file: 'files/a.example/app.js', mime: 'text/javascript' }),
+        item({ id: 'r2', sha256: 'b'.repeat(64), file: 'files/b.example/photo.webp', url: 'https://b.example/photo.webp', mime: 'image/webp' }),
+      ]),
+    );
+
+    renderView({ layout: 'panel' });
+    fireEvent.click(await screen.findByRole('button', { name: 'type' }));
+
+    const jsGroup = screen.getByRole('button', { name: /^text\/javascript/ });
+    fireEvent.click(jsGroup);
+    expect(jsGroup).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTitle('files/a.example/app.js')).toBeNull();
+    expect(screen.getByTitle('files/b.example/photo.webp')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'path' }));
+    expect(screen.getByRole('button', { name: /^a\.example/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByRole('button', { name: /^text\/javascript/ })).toBeNull();
+  });
+
+  it('shows the host inside the path line in type mode', async () => {
+    const full = 'files/a.example/grid.webp';
+    vi.mocked(getArchive).mockResolvedValue(
+      archiveOf([
+        item({
+          sha256: 'a'.repeat(64),
+          url: 'https://a.example/grid.webp',
+          filename: 'grid.webp',
+          file: full,
+          mime: 'image/webp',
+        }),
+      ]),
+    );
+
+    renderView({ layout: 'panel' });
+    fireEvent.click(await screen.findByRole('button', { name: 'type' }));
+    const label = await screen.findByTitle(full);
+    expect(label.textContent).toBe('a.example/grid.webp');
+    expect(label).toHaveAttribute('aria-label', full);
+  });
+
   it('lists every shared URL in the detail and copies the chosen one', async () => {
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });

@@ -22,11 +22,13 @@ import {
   type CaptureArchive,
 } from '../lib/captureApi';
 import {
+  captureFileHost,
   filterCaptureFiles,
   formatBytes,
   formatSavedAt,
   groupCaptureFiles,
   groupCaptureFilesByHost,
+  groupCaptureFilesByMime,
   hostRelativePath,
   previewKind,
   saveBlob,
@@ -35,7 +37,7 @@ import {
   truncatePathTail,
   truncateUrlMiddle,
   type CaptureFile,
-  type CaptureSort,
+  type CaptureGroupMode,
   type PreviewKind,
 } from '../lib/captureFormat';
 
@@ -80,8 +82,8 @@ export function CaptureArchiveView({
   const [loadError, setLoadError] = useState('');
   const [actionError, setActionError] = useState('');
   const [query, setQuery] = useState('');
-  const [sort, setSort] = useState<CaptureSort>('path');
-  const [collapsedHosts, setCollapsedHosts] = useState<Set<string>>(() => new Set());
+  const [mode, setMode] = useState<CaptureGroupMode>('path');
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
   const [expandedSha, setExpandedSha] = useState('');
   const [copied, setCopied] = useState('');
   const [preview, setPreview] = useState<OpenPreview | null>(null);
@@ -162,7 +164,10 @@ export function CaptureArchiveView({
   const compact = layout === 'panel';
   const files = useMemo(() => groupCaptureFiles(archive?.items ?? []), [archive]);
   const visible = useMemo(() => filterCaptureFiles(files, query), [files, query]);
-  const groups = useMemo(() => groupCaptureFilesByHost(visible, sort), [visible, sort]);
+  const groups = useMemo(
+    () => (mode === 'type' ? groupCaptureFilesByMime(visible) : groupCaptureFilesByHost(visible, mode)),
+    [visible, mode],
+  );
 
   // The docked panel is opened by an explicit action, so the cursor belongs in
   // the filter: typing narrows immediately. The full page does not steal focus.
@@ -170,11 +175,11 @@ export function CaptureArchiveView({
     if (compact) filterRef.current?.focus();
   }, [compact]);
 
-  const toggleHost = useCallback((host: string) => {
-    setCollapsedHosts((cur) => {
+  const toggleGroup = useCallback((key: string) => {
+    setCollapsedGroups((cur) => {
       const next = new Set(cur);
-      if (next.has(host)) next.delete(host);
-      else next.add(host);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }, []);
@@ -432,17 +437,17 @@ export function CaptureArchiveView({
         <div
           className="flex items-center gap-0.5 rounded border border-zinc-300 p-0.5 dark:border-gray-700"
           role="group"
-          aria-label="Sort saved files"
+          aria-label="Group and sort saved files"
         >
-          {(['path', 'time', 'size'] as const).map((key) => (
+          {(['path', 'time', 'size', 'type'] as const).map((key) => (
             <button
               key={key}
               type="button"
-              onClick={() => setSort(key)}
-              aria-pressed={sort === key}
-              title={`Sort by ${key}`}
+              onClick={() => setMode(key)}
+              aria-pressed={mode === key}
+              title={key === 'type' ? 'Group by MIME type' : `Group by host, sort by ${key}`}
               className={`rounded px-1.5 py-0.5 ${
-                sort === key
+                mode === key
                   ? 'bg-cyan-600 text-white'
                   : 'text-zinc-600 hover:bg-zinc-100 dark:text-gray-300 dark:hover:bg-gray-800'
               }`}
@@ -584,18 +589,18 @@ export function CaptureArchiveView({
               </p>
             )}
             {groups.map((group) => {
-              const isCollapsed = collapsedHosts.has(group.host);
+              const isCollapsed = collapsedGroups.has(group.key);
               return (
-                <section key={group.host} className="border-b border-zinc-200 last:border-b-0 dark:border-gray-800">
+                <section key={group.key} className="border-b border-zinc-200 last:border-b-0 dark:border-gray-800">
                   <button
                     type="button"
-                    onClick={() => toggleHost(group.host)}
+                    onClick={() => toggleGroup(group.key)}
                     aria-expanded={!isCollapsed}
                     className="sticky top-0 z-10 flex w-full items-center gap-1.5 border-b border-zinc-200 bg-zinc-100 px-2 py-1 text-left hover:bg-zinc-200 dark:border-gray-800 dark:bg-gray-900 dark:hover:bg-gray-800"
                   >
                     {isCollapsed ? <ChevronRight size={12} aria-hidden /> : <ChevronDown size={12} aria-hidden />}
                     <span className="min-w-0 flex-1 truncate font-mono font-semibold text-zinc-800 dark:text-gray-200">
-                      {group.host}
+                      {group.label}
                     </span>
                     <span className="shrink-0 whitespace-nowrap text-[10px] font-normal text-zinc-500 dark:text-gray-500">
                       {group.count} {group.count === 1 ? 'file' : 'files'} · {formatBytes(group.bytes)}
@@ -607,6 +612,12 @@ export function CaptureArchiveView({
                     const pathLabel = file.file || file.filename;
                     const detailOpen = expandedSha === file.sha256;
                     const singleUrl = file.urls.length === 1 ? file.urls[0] : '';
+                    // In MIME mode the host is no longer the section header, so
+                    // the row path has to carry it again.
+                    const host = captureFileHost(file);
+                    const rowPath = group.kind === 'mime'
+                      ? `${host}/${hostRelativePath(file, host)}`
+                      : hostRelativePath(file, group.key);
                     return (
                       <div key={file.sha256} className="border-b border-zinc-100 last:border-b-0 dark:border-gray-800/60">
                         <div
@@ -638,7 +649,7 @@ export function CaptureArchiveView({
                                 title={pathLabel}
                                 aria-label={pathLabel}
                               >
-                                {truncatePathTail(hostRelativePath(file, group.host))}
+                                {truncatePathTail(rowPath)}
                               </span>
                               {file.versionCount > 1 && (
                                 <span
@@ -727,9 +738,9 @@ export function CaptureArchiveView({
               </tbody>
             )}
             {groups.map((group) => {
-              const isCollapsed = collapsedHosts.has(group.host);
+              const isCollapsed = collapsedGroups.has(group.key);
               return (
-                <tbody key={group.host}>
+                <tbody key={group.key}>
                   <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-gray-800 dark:bg-gray-900/50">
                     <th
                       colSpan={6}
@@ -738,7 +749,7 @@ export function CaptureArchiveView({
                     >
                       <button
                         type="button"
-                        onClick={() => toggleHost(group.host)}
+                        onClick={() => toggleGroup(group.key)}
                         aria-expanded={!isCollapsed}
                         className="flex w-full items-center gap-1.5 px-2 py-1 text-left hover:bg-zinc-100 dark:hover:bg-gray-800/60"
                       >
@@ -748,7 +759,7 @@ export function CaptureArchiveView({
                           <ChevronDown size={12} aria-hidden />
                         )}
                         <span className="min-w-0 flex-1 truncate font-mono font-semibold text-zinc-800 dark:text-gray-200">
-                          {group.host}
+                          {group.label}
                         </span>
                         <span className="shrink-0 whitespace-nowrap text-[10px] font-normal text-zinc-500 dark:text-gray-500">
                           {group.count} {group.count === 1 ? 'file' : 'files'} · {formatBytes(group.bytes)}

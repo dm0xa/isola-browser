@@ -236,7 +236,7 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
               title="Open the saved resources recorded in this session"
               className="flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-mono text-emerald-700 ring-1 ring-inset ring-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 dark:text-emerald-300"
             >
-              Saved {captureSummary.items} {captureSummary.items === 1 ? 'file' : 'files'} · Review
+              Saved {captureSummary.items} {captureSummary.items === 1 ? 'file' : 'files'} · {formatBytes(captureSummary.bytes)}
             </button>
           )}
           {captureError && (

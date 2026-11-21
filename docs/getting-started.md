@@ -93,7 +93,8 @@ bodies are stored once.
   or let it stop when the session ends.
 - **Saved files** opens the Resources panel over the live view (dock it bottom
   or side, drag to resize); **↗ new tab** opens the same archive at
-  `/session/<id>/captures`. Files are grouped by host, collapsible, and
+  `/session/<id>/captures`. Files are grouped by host, or by MIME type with the
+  **type** mode, collapsible, and
   searchable; each row shows the readable path relative to that host, the URL,
   MIME type, size and save time, with a version badge when a URL changed.
   Download single files, the whole archive as a zip, or preview text and images

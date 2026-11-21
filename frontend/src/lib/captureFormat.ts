@@ -275,9 +275,16 @@ export function compareNatural(a: string, b: string): number {
 }
 
 export type CaptureSort = 'path' | 'time' | 'size';
+/** Segmented control: three host groupings plus MIME grouping. */
+export type CaptureGroupMode = CaptureSort | 'type';
 
-export interface CaptureHostGroup {
-  host: string;
+export interface CaptureGroup {
+  /** Stable collapse key: host folder or normalized MIME label. */
+  key: string;
+  /** Header text (the host or the MIME label). */
+  label: string;
+  /** Decides whether a compact row must repeat the host in its path line. */
+  kind: 'host' | 'mime';
   files: CaptureFile[];
   count: number;
   bytes: number;
@@ -295,6 +302,24 @@ function compareCaptureFiles(a: CaptureFile, b: CaptureFile, sort: CaptureSort):
   return compareNatural(a.file || a.filename, b.file || b.filename);
 }
 
+/** Groups keep their file order and shared count/byte totals. */
+function finalizeGroup(
+  key: string,
+  kind: CaptureGroup['kind'],
+  bucket: CaptureFile[],
+  sort: CaptureSort,
+): CaptureGroup {
+  const files = [...bucket].sort((a, b) => compareCaptureFiles(a, b, sort));
+  return {
+    key,
+    label: key,
+    kind,
+    files,
+    count: files.length,
+    bytes: files.reduce((sum, file) => sum + (file.size || 0), 0),
+  };
+}
+
 /**
  * Browser view of the deduped rows: one section per host folder, files sorted
  * inside it. Hosts stay in name order so a reload never reshuffles the tree.
@@ -302,7 +327,7 @@ function compareCaptureFiles(a: CaptureFile, b: CaptureFile, sort: CaptureSort):
 export function groupCaptureFilesByHost(
   files: CaptureFile[],
   sort: CaptureSort = 'path',
-): CaptureHostGroup[] {
+): CaptureGroup[] {
   const byHost = new Map<string, CaptureFile[]>();
   for (const file of files) {
     const host = captureFileHost(file);
@@ -310,17 +335,32 @@ export function groupCaptureFilesByHost(
     if (bucket) bucket.push(file);
     else byHost.set(host, [file]);
   }
-  const groups: CaptureHostGroup[] = [];
+  const groups: CaptureGroup[] = [];
   for (const [host, bucket] of byHost) {
-    const sorted = [...bucket].sort((a, b) => compareCaptureFiles(a, b, sort));
-    groups.push({
-      host,
-      files: sorted,
-      count: sorted.length,
-      bytes: sorted.reduce((sum, file) => sum + (file.size || 0), 0),
-    });
+    groups.push(finalizeGroup(host, 'host', bucket, sort));
   }
-  groups.sort((a, b) => compareNatural(a.host, b.host));
+  groups.sort((a, b) => compareNatural(a.label, b.label));
+  return groups;
+}
+
+/**
+ * Browser view grouped by response type: lowercased full MIME (`text/javascript`,
+ * `image/webp`), with an `unknown` bucket for rows the streamer never labelled.
+ * MIME labels sort alphabetically and files always sort by path inside.
+ */
+export function groupCaptureFilesByMime(files: CaptureFile[]): CaptureGroup[] {
+  const byMime = new Map<string, CaptureFile[]>();
+  for (const file of files) {
+    const mime = (file.mime || '').trim().toLowerCase() || 'unknown';
+    const bucket = byMime.get(mime);
+    if (bucket) bucket.push(file);
+    else byMime.set(mime, [file]);
+  }
+  const groups: CaptureGroup[] = [];
+  for (const [mime, bucket] of byMime) {
+    groups.push(finalizeGroup(mime, 'mime', bucket, 'path'));
+  }
+  groups.sort((a, b) => compareNatural(a.label, b.label));
   return groups;
 }
 

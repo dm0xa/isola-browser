@@ -161,7 +161,7 @@ describe('ViewerToolbar capture row', () => {
       onToggleCapturePanel,
     });
 
-    const chip = screen.getByRole('button', { name: /Saved 3 files · Review/ });
+    const chip = screen.getByRole('button', { name: /Saved 3 files · 4\.0 KB/ });
     fireEvent.click(chip);
     expect(onToggleCapturePanel).toHaveBeenCalledTimes(1);
   });
