@@ -14,8 +14,9 @@ publishes the section matching the tag.
   timestamps, deduplicated by content hash. Archives are written to
   `<ISOLA_DATA_DIR>/captures/<session_id>/` as a readable URL tree
   (`files/<host>/<path>…` plus `index.txt`), survive the session, and can be
-  reviewed, downloaded individually or as a zip. Bodies are pulled to the host
-  while the session runs, with a final pull before the container stops. See
+  reviewed in a host-grouped, dockable Resources panel (or its own tab),
+  downloaded individually or as a zip. Bodies are pulled to the host while the
+  session runs, with a final pull before the container stops. See
   [Configuration → capture](docs/configuration.md#capture) and
   [API → Resource capture](docs/api.md#resource-capture).
 - **Timezone and locale per session**: `POST /api/sessions` accepts `timezone`

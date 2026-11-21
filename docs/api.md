@@ -269,9 +269,11 @@ once with different `sha256` values; identical bodies are stored once.
 
 Storage is a readable URL tree under
 `$ISOLA_DATA_DIR/captures/<archive_id>/files/<host>/<path>…`, with `index.txt`
-(one `url<TAB>file<TAB>status<TAB>mime<TAB>size<TAB>sha256[:12]` line each) and
-`meta.json`. `GET /api/captures/{id}/files/{path...}` serves the readable path;
-`/blobs/{sha256}` remains as a digest-addressed alias. Both responses are
+(one `url<TAB>file<TAB>status<TAB>mime<TAB>size<TAB>sha256[:12]` line each;
+identical repeated requests collapse into one line with a trailing `xN`) and
+`meta.json`. `filename` is always the basename of `file`. `GET
+/api/captures/{id}/files/{path...}` serves the readable path; `/blobs/{sha256}`
+remains as a digest-addressed alias. Both responses are
 `Content-Disposition: attachment` with `X-Content-Type-Options: nosniff` — a
 captured document is hostile input and must never be rendered on the isola
 origin. The viewer therefore previews text/images only, and shows HTML as

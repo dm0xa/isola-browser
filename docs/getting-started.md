@@ -93,10 +93,11 @@ bodies are stored once.
   or let it stop when the session ends.
 - **Saved files** opens the Resources panel over the live view (dock it bottom
   or side, drag to resize); **↗ new tab** opens the same archive at
-  `/session/<id>/captures`. One row per stored file, with the readable
-  `files/<host>/<path>` path, the URLs that served it and a version badge when
-  a URL changed. Download single files, the whole archive as a zip, or preview
-  text and images (HTML is shown as source, never executed).
+  `/session/<id>/captures`. Files are grouped by host, collapsible, and
+  searchable; each row shows the readable path relative to that host, the URL,
+  MIME type, size and save time, with a version badge when a URL changed.
+  Download single files, the whole archive as a zip, or preview text and images
+  (HTML is shown as source, never executed).
 - Archives live under `<ISOLA_DATA_DIR>/captures/<session_id>/` as a readable
   URL tree (`files/<host>/<path>…`, with `index.txt` mapping URLs to files) and
   outlive the session. The one-time archive key is kept in the browser's
