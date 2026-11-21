@@ -1908,6 +1908,8 @@ func errorMessageForCode(code string) string {
 		return "Invalid or missing archive key"
 	case "blob_not_found":
 		return "Resource blob not found"
+	case "invalid_path":
+		return "Invalid archive file path"
 	default:
 		return code
 	}

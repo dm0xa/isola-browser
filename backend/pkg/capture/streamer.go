@@ -52,6 +52,7 @@ type streamerItem struct {
 	SHA256            string `json:"sha256"`
 	SHA1              string `json:"sha1"`
 	Filename          string `json:"filename"`
+	File              string `json:"file"`
 	Tab               int    `json:"tab"`
 	OriginHost        string `json:"origin_host"`
 	TSRequested       int64  `json:"ts_requested"`

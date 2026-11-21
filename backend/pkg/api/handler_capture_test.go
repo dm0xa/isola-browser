@@ -455,8 +455,193 @@ func TestCaptureDownloadZip(t *testing.T) {
 	for _, f := range zr.File {
 		names[f.Name] = true
 	}
-	if !names["meta.json"] || !names["blobs/"+sha[:2]+"/"+sha] {
+	if !names["meta.json"] || !names["index.txt"] || !names["files/a.example/app.js"] {
 		t.Fatalf("zip entries = %v", names)
+	}
+}
+
+func TestCaptureFileRoute(t *testing.T) {
+	data := []byte("console.log('hi')")
+	sha := shaOfBytes(data)
+	h, sid, token, mgr, _ := captureFixture(t, nil,
+		[]map[string]any{captureItem("https://a.example/app.js", "text/javascript", data)},
+		map[string][]byte{sha: data})
+
+	w := httptest.NewRecorder()
+	h.StartCapture(w, sessionCaptureRequest(http.MethodPost, sid.String(), token))
+	key := decodeJSONBody(t, w)["archive_key"].(string)
+	waitForArchiveItems(t, mgr, sid.String(), 1)
+
+	w = httptest.NewRecorder()
+	h.GetArchiveFile(w, archiveFileRequest(http.MethodGet, sid.String(), "files/a.example/app.js", ""))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("file without key = %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.GetArchiveFile(w, archiveFileRequest(http.MethodGet, sid.String(), "files/a.example/app.js", "Bearer "+key))
+	if w.Code != http.StatusOK {
+		t.Fatalf("file = %d: %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Type"); got != "text/javascript" {
+		t.Fatalf("content-type = %q", got)
+	}
+	if cd := w.Header().Get("Content-Disposition"); !strings.Contains(cd, `filename="app.js"`) {
+		t.Fatalf("content-disposition = %q", cd)
+	}
+	if got := w.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("nosniff = %q", got)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("cache-control = %q", got)
+	}
+	if !bytes.Equal(w.Body.Bytes(), data) {
+		t.Fatalf("body = %q", w.Body.Bytes())
+	}
+
+	// Unknown paths and paths outside files/ never reach the filesystem.
+	w = httptest.NewRecorder()
+	h.GetArchiveFile(w, archiveFileRequest(http.MethodGet, sid.String(), "files/a.example/missing.js", "Bearer "+key))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("missing file = %d: %s", w.Code, w.Body.String())
+	}
+	if code := decodeJSONBody(t, w)["error"].(map[string]any)["code"]; code != "blob_not_found" {
+		t.Fatalf("missing file code = %v", code)
+	}
+
+	for _, rel := range []string{"../meta.json", "files/a/../../meta.json"} {
+		w = httptest.NewRecorder()
+		h.GetArchiveFile(w, archiveFileRequest(http.MethodGet, sid.String(), rel, "Bearer "+key))
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("file %q = %d: %s", rel, w.Code, w.Body.String())
+		}
+		if code := decodeJSONBody(t, w)["error"].(map[string]any)["code"]; code != "invalid_path" {
+			t.Fatalf("file %q code = %v", rel, code)
+		}
+	}
+
+	// A valid-shaped path with no recorded item is a 404, never a file read.
+	w = httptest.NewRecorder()
+	h.GetArchiveFile(w, archiveFileRequest(http.MethodGet, sid.String(), "meta.json", "Bearer "+key))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("meta.json file = %d: %s", w.Code, w.Body.String())
+	}
+
+	// The sha route still resolves through the readable tree.
+	w = httptest.NewRecorder()
+	h.GetArchiveBlob(w, archiveRequest(http.MethodGet, sid.String(), sha, "Bearer "+key))
+	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), data) {
+		t.Fatalf("sha route = %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func archiveFileRequest(method, archiveID, rel, auth string) *http.Request {
+	req := httptest.NewRequest(method, "/api/captures/"+archiveID+"/files/"+rel, nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("archiveID", archiveID)
+	rctx.URLParams.Add("*", rel)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	if auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+	return req
+}
+
+// The wildcard route must match multi-segment paths; a nil manager answers
+// capture_disabled only after the route matched (otherwise chi's 404).
+func TestCaptureFileRoutePattern(t *testing.T) {
+	h := &Handler{}
+	r := chi.NewRouter()
+	h.RegisterCaptureRoutes(r)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/captures/abc/files/a.example/blog/index.html", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("nested files route = %d: %s", w.Code, w.Body.String())
+	}
+	if code := decodeJSONBody(t, w)["error"].(map[string]any)["code"]; code != "capture_disabled" {
+		t.Fatalf("error code = %v", code)
+	}
+}
+
+// End-to-end through the real router: chi's wildcard is the path after
+// /files/ with a leading slash, so the handler must add "files/" itself.
+func TestCaptureFileRouteServesReadablePath(t *testing.T) {
+	jsData := []byte("console.log('live')")
+	cssData := []byte("body{color:red}")
+	jsItem := captureItem("https://example.com/s.js", "text/javascript", jsData)
+	jsItem["id"] = "r-js"
+	cssItem := captureItem("https://example.com/assets/css/site.css", "text/css", cssData)
+	cssItem["id"] = "r-css"
+	h, sid, token, mgr, _ := captureFixture(t, nil,
+		[]map[string]any{jsItem, cssItem},
+		map[string][]byte{shaOfBytes(jsData): jsData, shaOfBytes(cssData): cssData})
+
+	w := httptest.NewRecorder()
+	h.StartCapture(w, sessionCaptureRequest(http.MethodPost, sid.String(), token))
+	if w.Code != http.StatusOK {
+		t.Fatalf("start = %d: %s", w.Code, w.Body.String())
+	}
+	key := decodeJSONBody(t, w)["archive_key"].(string)
+	waitForArchiveItems(t, mgr, sid.String(), 2)
+
+	router := chi.NewRouter()
+	h.RegisterCaptureRoutes(router)
+	get := func(rel string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/captures/"+sid.String()+"/files/"+rel, nil)
+		req.Header.Set("Authorization", "Bearer "+key)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := get("example.com/s.js")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET files/example.com/s.js = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/javascript" {
+		t.Fatalf("content-type = %q", got)
+	}
+	if cd := rec.Header().Get("Content-Disposition"); !strings.HasPrefix(cd, "attachment;") || !strings.Contains(cd, `filename="s.js"`) {
+		t.Fatalf("content-disposition = %q", cd)
+	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("nosniff = %q", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("cache-control = %q", got)
+	}
+	if !bytes.Equal(rec.Body.Bytes(), jsData) {
+		t.Fatalf("body = %q", rec.Body.Bytes())
+	}
+
+	rec = get("example.com/assets/css/site.css")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("nested GET = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/css" {
+		t.Fatalf("nested content-type = %q", got)
+	}
+	if !bytes.Equal(rec.Body.Bytes(), cssData) {
+		t.Fatalf("nested body = %q", rec.Body.Bytes())
+	}
+
+	rec = get("example.com/missing.js")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown file = %d: %s", rec.Code, rec.Body.String())
+	}
+	if code := decodeJSONBody(t, rec)["error"].(map[string]any)["code"]; code != "blob_not_found" {
+		t.Fatalf("unknown file code = %v", code)
+	}
+
+	// A .. segment inside the wildcard must be rejected, not resolved.
+	rec = get("example.com/%2e%2e/%2e%2e/meta.json")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("traversal = %d: %s", rec.Code, rec.Body.String())
+	}
+	if code := decodeJSONBody(t, rec)["error"].(map[string]any)["code"]; code != "invalid_path" {
+		t.Fatalf("traversal code = %v", code)
 	}
 }
 

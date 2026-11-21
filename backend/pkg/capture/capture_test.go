@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -170,16 +171,38 @@ func TestPollerIngestsDedupesAndStops(t *testing.T) {
 		t.Fatalf("deduped = %d, want 1", meta.Counts["deduped"])
 	}
 
-	// One blob on disk, named by its verified sha256.
-	path := blobPath(archiveDir(m.cfg.Dir, "session-1"), sha)
-	info, err := os.Stat(path)
+	// Readable tree: one copy of the bytes under two names (hardlinked).
+	dir := archiveDir(m.cfg.Dir, "session-1")
+	first := filepath.Join(dir, "files", "a.example", "app.js")
+	info, err := os.Stat(first)
 	if err != nil {
-		t.Fatalf("blob file: %v", err)
+		t.Fatalf("readable file: %v", err)
 	}
 	if info.Mode().Perm() != 0o644 {
-		t.Fatalf("blob mode = %v, want 0644", info.Mode().Perm())
+		t.Fatalf("file mode = %v, want 0644", info.Mode().Perm())
 	}
-	metaInfo, err := os.Stat(metaPath(archiveDir(m.cfg.Dir, "session-1")))
+	second := filepath.Join(dir, "files", "a.example", "app__v_2.js")
+	secondInfo, err := os.Stat(second)
+	if err != nil {
+		t.Fatalf("deduped file: %v", err)
+	}
+	if !os.SameFile(info, secondInfo) {
+		t.Fatal("dedupe did not hardlink the second name")
+	}
+	if fileExists(blobPath(dir, sha)) {
+		t.Fatal("CAS blob path still written")
+	}
+	if meta.Items[0].File != "files/a.example/app.js" || meta.Items[1].File != "files/a.example/app__v_2.js" {
+		t.Fatalf("item files = %q, %q", meta.Items[0].File, meta.Items[1].File)
+	}
+	indexRaw, err := os.ReadFile(filepath.Join(dir, indexName))
+	if err != nil {
+		t.Fatalf("index.txt: %v", err)
+	}
+	if !strings.Contains(string(indexRaw), "https://a.example/app.js\tfiles/a.example/app.js\tcaptured\ttext/javascript") {
+		t.Fatalf("index.txt = %q", indexRaw)
+	}
+	metaInfo, err := os.Stat(metaPath(dir))
 	if err != nil {
 		t.Fatalf("meta file: %v", err)
 	}
@@ -372,7 +395,7 @@ func TestFinalizeWritesTombstoneWhenStreamerGone(t *testing.T) {
 	}
 }
 
-func TestZipContainsMetaAndBlobs(t *testing.T) {
+func TestZipContainsReadableTree(t *testing.T) {
 	data := []byte("body-bytes")
 	sha := shaOf(data)
 	items := []streamerItem{
@@ -415,9 +438,12 @@ func TestZipContainsMetaAndBlobs(t *testing.T) {
 	if _, ok := got["meta.json"]; !ok {
 		t.Fatalf("zip has no meta.json: %v", len(got))
 	}
-	blobName := "blobs/" + sha[:2] + "/" + sha
-	if string(got[blobName]) != string(data) {
-		t.Fatalf("zip blob %q = %q", blobName, got[blobName])
+	if _, ok := got[indexName]; !ok {
+		t.Fatalf("zip has no %s", indexName)
+	}
+	filePath := "files/a.example/a.txt"
+	if string(got[filePath]) != string(data) {
+		t.Fatalf("zip file %q = %q entries=%v", filePath, got[filePath], len(got))
 	}
 }
 
@@ -443,6 +469,352 @@ func TestPathTraversalRejected(t *testing.T) {
 	if m.CheckKey("../escape", "x") {
 		t.Fatal("CheckKey accepted a traversal id")
 	}
+
+	// The readable-file lookup must never leave files/.
+	for _, rel := range []string{
+		"../meta.json",
+		"files/../meta.json",
+		"files/a/../../etc/passwd",
+		"/files/a/x",
+		"files/a\\x",
+		"files//x",
+		"files/./x",
+	} {
+		if _, _, _, err := m.File("ok", rel); !errors.Is(err, ErrInvalidPath) {
+			t.Fatalf("File(%q) err = %v, want ErrInvalidPath", rel, err)
+		}
+	}
+	if _, _, _, err := m.File("../escape", "files/a/x"); !errors.Is(err, ErrInvalidArchiveID) {
+		t.Fatalf("File traversal id err = %v", err)
+	}
+}
+
+func TestFileAcceptsRelAndFullPath(t *testing.T) {
+	m := newTestManager(t, Config{Enabled: true})
+	dir := archiveDir(m.cfg.Dir, "shape")
+	rel := "files/a.example/x.js"
+	target := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha := shaOf([]byte("body"))
+	meta := &metaFile{
+		SchemaVersion: 1,
+		ArchiveID:     "shape",
+		SessionID:     "shape",
+		Items: []Item{{
+			URL: "https://a.example/x.js", SHA256: sha, File: rel,
+			State: "captured", Mime: "text/javascript",
+		}},
+	}
+	if err := writeMeta(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, wantPath := range []string{"a.example/x.js", rel} {
+		p, mime, name, err := m.File("shape", wantPath)
+		if err != nil {
+			t.Fatalf("File(%q): %v", wantPath, err)
+		}
+		if p != target || mime != "text/javascript" || name != "x.js" {
+			t.Fatalf("File(%q) = %q, %q, %q", wantPath, p, mime, name)
+		}
+	}
+}
+
+func TestDeriveRel(t *testing.T) {
+	cases := []struct {
+		name      string
+		url, mime string
+		want      string
+	}{
+		{"document", "https://Example.COM/", "text/html", "files/example.com/index.html"},
+		{"script", "https://a.example/app.js", "text/javascript", "files/a.example/app.js"},
+		{"query", "https://a.example/app.js?v=2", "text/javascript", "files/a.example/app__v_2.js"},
+		{"default port", "https://a.example:443/x.css", "text/css", "files/a.example/x.css"},
+		{"custom port", "http://a.example:8080/x", "text/plain", "files/a.example__8080/x.txt"},
+		{"no host", "file:///tmp/notes", "text/plain", "files/local/tmp/notes.txt"},
+		{"nested", "https://a.example/blog/posts/one", "text/html", "files/a.example/blog/posts/one.html"},
+		{"trailing slash", "https://a.example/blog/", "text/html", "files/a.example/blog/index.html"},
+		{"mime ext", "https://a.example/style", "text/css", "files/a.example/style.css"},
+		{"no mime ext", "https://a.example/data", "application/octet-stream", "files/a.example/data"},
+		{"sanitize", "https://a.example/a b/c%3Fd", "application/octet-stream", "files/a.example/a_b/c_d"},
+	}
+	for _, tc := range cases {
+		got, err := deriveRel(tc.url, "", tc.mime)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%s: got %q want %q", tc.name, got, tc.want)
+		}
+	}
+
+	for _, bad := range []string{
+		"https://a.example/%2e%2e/secret",
+		"https://a.example/a/../../b",
+		"https://a.example/a%2F..%2Fb",
+		"https://a.example/a\\b",
+	} {
+		if _, err := deriveRel(bad, "", "text/plain"); !errors.Is(err, ErrInvalidPath) {
+			t.Fatalf("deriveRel(%q) err = %v, want ErrInvalidPath", bad, err)
+		}
+	}
+
+	// Deeper than 8 segments: first 7 plus the last.
+	deep, err := deriveRel("https://a.example/1/2/3/4/5/6/7/8/9.js", "", "text/javascript")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deep != "files/a.example/1/2/3/4/5/6/7/9.js" {
+		t.Fatalf("deep path = %q", deep)
+	}
+}
+
+func TestVersionedNameOnChangedContent(t *testing.T) {
+	first := []byte("one")
+	second := []byte("two")
+	sha1, sha2 := shaOf(first), shaOf(second)
+	items := []streamerItem{
+		{ID: "r1", URL: "https://a.example/load.php", Mime: "text/html", SizeDecoded: int64(len(first)), SHA256: sha1, State: "captured"},
+		{ID: "r2", URL: "https://a.example/load.php", Mime: "text/html", SizeDecoded: int64(len(second)), SHA256: sha2, State: "captured"},
+	}
+	fake := newFakeStreamer(items, map[string][]byte{sha1: first, sha2: second})
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+
+	m := newTestManager(t, Config{Enabled: true})
+	if _, err := m.Start(context.Background(), "session-ver", "https://a.example/", strings.TrimPrefix(srv.URL, "http://")); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "two items", func() bool {
+		meta, err := readMeta(archiveDir(m.cfg.Dir, "session-ver"))
+		return err == nil && len(meta.Items) == 2
+	})
+
+	meta := readArchive(t, m, "session-ver")
+	wantVersioned := "files/a.example/load~" + sha2[:12] + ".php"
+	if meta.Items[0].File != "files/a.example/load.php" {
+		t.Fatalf("first file = %q", meta.Items[0].File)
+	}
+	if meta.Items[1].File != wantVersioned {
+		t.Fatalf("versioned file = %q want %q", meta.Items[1].File, wantVersioned)
+	}
+	dir := archiveDir(m.cfg.Dir, "session-ver")
+	if !fileExists(filepath.Join(dir, filepath.FromSlash(wantVersioned))) {
+		t.Fatal("versioned file missing on disk")
+	}
+	if meta.Items[1].SHA256 != sha2 {
+		t.Fatalf("versioned item sha = %q", meta.Items[1].SHA256)
+	}
+}
+
+func TestIndexSortedByURLThenTime(t *testing.T) {
+	m := newTestManager(t, Config{Enabled: true})
+	dir := archiveDir(m.cfg.Dir, "index-order")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	items := []Item{
+		{URL: "https://b.example/", File: "files/b.example/index.html", State: "captured", Mime: "text/html", SizeDecoded: 11, SHA256: strings.Repeat("b", 64), TSRequested: 100},
+		{URL: "https://a.example/", File: "files/a.example/index.html", State: "captured", Mime: "text/html", SizeDecoded: 3, SHA256: strings.Repeat("a", 64), TSRequested: 200},
+		{URL: "https://a.example/", File: "files/a.example/index~2.html", State: "captured", Mime: "text/html", SizeDecoded: 4, SHA256: strings.Repeat("c", 64), TSRequested: 100},
+		{URL: "https://c.example/x", State: "too_large", Mime: "image/png", SizeDecoded: 9000},
+	}
+	if err := writeIndex(dir, items); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, indexName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	want := []string{
+		"https://a.example/\tfiles/a.example/index~2.html\tcaptured\ttext/html\t4\tcccccccccccc",
+		"https://a.example/\tfiles/a.example/index.html\tcaptured\ttext/html\t3\taaaaaaaaaaaa",
+		"https://b.example/\tfiles/b.example/index.html\tcaptured\ttext/html\t11\tbbbbbbbbbbbb",
+		"https://c.example/x\t-\ttoo_large\timage/png\t9000\t-",
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("index lines = %d: %q", len(lines), lines)
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Fatalf("line %d = %q want %q", i, lines[i], want[i])
+		}
+	}
+}
+
+func TestIngestRejectsTraversalURL(t *testing.T) {
+	data := []byte("evil")
+	sha := shaOf(data)
+	items := []streamerItem{
+		{ID: "r1", URL: "https://a.example/..%2f..%2fescape.txt", Mime: "text/plain", SizeDecoded: int64(len(data)), SHA256: sha, State: "captured", File: "files/../../escape.txt"},
+	}
+	fake := newFakeStreamer(items, map[string][]byte{sha: data})
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+
+	m := newTestManager(t, Config{Enabled: true})
+	if _, err := m.Start(context.Background(), "session-evil", "https://a.example/", strings.TrimPrefix(srv.URL, "http://")); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(t, "rejected item", func() bool {
+		meta, err := readMeta(archiveDir(m.cfg.Dir, "session-evil"))
+		return err == nil && len(meta.Items) == 1 && meta.Items[0].State == "failed"
+	})
+	meta := readArchive(t, m, "session-evil")
+	if meta.Items[0].File != "" {
+		t.Fatalf("traversal item kept a file path: %q", meta.Items[0].File)
+	}
+	if meta.Counts["failed"] != 1 {
+		t.Fatalf("failed count = %d", meta.Counts["failed"])
+	}
+	dir := archiveDir(m.cfg.Dir, "session-evil")
+	if fileExists(filepath.Join(dir, "escape.txt")) || fileExists(filepath.Join(dir, "..", "escape.txt")) {
+		t.Fatal("traversal item wrote outside files/")
+	}
+}
+
+func TestMigrateLegacyCASArchive(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "captures")
+	id := "31e43100-f1dd-460b-9f73-74b693a80c67"
+	dir := archiveDir(root, id)
+
+	jsData := []byte("console.log('legacy')")
+	jsSHA := shaOf(jsData)
+	cssData := []byte("body{color:red}")
+	cssSHA := shaOf(cssData)
+	goneSHA := shaOf([]byte("gone"))
+
+	for sha, data := range map[string][]byte{jsSHA: jsData, cssSHA: cssData} {
+		if err := os.MkdirAll(blobDir(dir, sha), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(blobPath(dir, sha), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	meta := &metaFile{
+		SchemaVersion: 1,
+		ArchiveID:     id,
+		SessionID:     id,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+		Complete:      true,
+		Items: []Item{
+			{ID: "r1", URL: "https://example.com/s.js", Mime: "text/javascript", SizeDecoded: int64(len(jsData)), SHA256: jsSHA, State: "captured"},
+			// Legacy streamer-supplied path that does not exist on the host.
+			{ID: "r2", URL: "https://example.com/nested/app.css", Mime: "text/css", SizeDecoded: int64(len(cssData)), SHA256: cssSHA, File: "files/aa/" + cssSHA, State: "captured"},
+			// No legacy bytes at all: skipped, never fatal.
+			{ID: "r3", URL: "https://example.com/gone.png", Mime: "image/png", SHA256: goneSHA, State: "captured"},
+		},
+	}
+	if err := writeMeta(dir, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	// NewManager migrates before its GC pass.
+	m := newTestManager(t, Config{Enabled: true, Dir: root})
+
+	got := readArchive(t, m, id)
+	if got.Items[0].File != "files/example.com/s.js" {
+		t.Fatalf("item 0 file = %q", got.Items[0].File)
+	}
+	if got.Items[1].File != "files/example.com/nested/app.css" {
+		t.Fatalf("item 1 file = %q", got.Items[1].File)
+	}
+	if got.Items[2].File != "" {
+		t.Fatalf("item without legacy bytes got a file: %q", got.Items[2].File)
+	}
+
+	jsPath := filepath.Join(dir, "files", "example.com", "s.js")
+	info, err := os.Stat(jsPath)
+	if err != nil {
+		t.Fatalf("migrated file: %v", err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("migrated mode = %v, want 0644", info.Mode().Perm())
+	}
+	blobInfo, err := os.Stat(blobPath(dir, jsSHA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(info, blobInfo) {
+		t.Fatal("migration copied instead of hardlinking")
+	}
+	if !fileExists(filepath.Join(dir, "files", "example.com", "nested", "app.css")) {
+		t.Fatal("nested legacy file not migrated")
+	}
+
+	indexRaw, err := os.ReadFile(filepath.Join(dir, indexName))
+	if err != nil {
+		t.Fatalf("index.txt after migration: %v", err)
+	}
+	if !strings.Contains(string(indexRaw), "https://example.com/s.js\tfiles/example.com/s.js\tcaptured\ttext/javascript") {
+		t.Fatalf("index.txt = %q", indexRaw)
+	}
+
+	// The sha route still resolves the old bytes.
+	p, mime, _, err := m.Blob(id, jsSHA)
+	if err != nil {
+		t.Fatalf("Blob after migration: %v", err)
+	}
+	if p != jsPath || mime != "text/javascript" {
+		t.Fatalf("Blob = %q, %q", p, mime)
+	}
+	if body, err := os.ReadFile(p); err != nil || !bytes.Equal(body, jsData) {
+		t.Fatalf("blob bytes = %q, %v", body, err)
+	}
+
+	// Idempotent: a second pass rewrites nothing and adds no versioned files.
+	beforeMeta, err := os.ReadFile(metaPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeFiles := archiveFileTree(t, dir)
+	m.Migrate()
+	afterMeta, err := os.ReadFile(metaPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeMeta, afterMeta) {
+		t.Fatal("second migration rewrote meta.json")
+	}
+	afterFiles := archiveFileTree(t, dir)
+	if len(afterFiles) != len(beforeFiles) {
+		t.Fatalf("second migration changed the tree: %v -> %v", beforeFiles, afterFiles)
+	}
+	for i := range afterFiles {
+		if afterFiles[i] != beforeFiles[i] {
+			t.Fatalf("second migration changed the tree: %v -> %v", beforeFiles, afterFiles)
+		}
+	}
+}
+
+// archiveFileTree lists the readable files under files/ for idempotency checks.
+func archiveFileTree(t *testing.T, dir string) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(filepath.Join(dir, "files"), func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !d.IsDir() {
+			rel, relErr := filepath.Rel(dir, p)
+			if relErr == nil {
+				out = append(out, filepath.ToSlash(rel))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk files tree: %v", err)
+	}
+	return out
 }
 
 func TestStatusAndList(t *testing.T) {

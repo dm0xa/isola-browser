@@ -388,18 +388,18 @@ const RECON_CHECKS: Array<[string, string]> = [
 
 const DEFAULT_RECON_CHECKS = ['robots', 'securitytxt', 'sitemap'];
 
-const LS_BOTTOM_HEIGHT = 'isola-panel-bottom-h';
-const LS_SIDE_WIDTH = 'isola-panel-side-w';
-const DEFAULT_BOTTOM_HEIGHT = () => clampBottom(Math.round(window.innerHeight * 0.45));
-const DEFAULT_SIDE_WIDTH = 480;
+export const LS_BOTTOM_HEIGHT = 'isola-panel-bottom-h';
+export const LS_SIDE_WIDTH = 'isola-panel-side-w';
+export const DEFAULT_BOTTOM_HEIGHT = () => clampBottom(Math.round(window.innerHeight * 0.45));
+export const DEFAULT_SIDE_WIDTH = 480;
 const MIN_BOTTOM_HEIGHT = 120;
 const MIN_SIDE_WIDTH = 260;
 
 // Keep the panel from swallowing the toolbar/viewer area.
 const MAX_BOTTOM_HEIGHT = () => Math.max(MIN_BOTTOM_HEIGHT + 40, window.innerHeight - 140);
 const MAX_SIDE_WIDTH = () => Math.max(MIN_SIDE_WIDTH + 40, window.innerWidth - 220);
-const clampBottom = (v: number) => Math.min(Math.max(v, MIN_BOTTOM_HEIGHT), MAX_BOTTOM_HEIGHT());
-const clampSide = (v: number) => Math.min(Math.max(v, MIN_SIDE_WIDTH), MAX_SIDE_WIDTH());
+export const clampBottom = (v: number) => Math.min(Math.max(v, MIN_BOTTOM_HEIGHT), MAX_BOTTOM_HEIGHT());
+export const clampSide = (v: number) => Math.min(Math.max(v, MIN_SIDE_WIDTH), MAX_SIDE_WIDTH());
 
 interface Props {
   entries: NetEntry[];

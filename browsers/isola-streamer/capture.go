@@ -8,13 +8,17 @@ package main
 //
 // Layout of one record directory (<ISOLA_CAPTURE_DIR>/<session_id>):
 //
-//	items.jsonl              one item per line, fsynced on every append
-//	meta.json                atomic rewrite on start/stop/truncation
-//	files/<aa>/<sha256>      decoded response body, 0644
-//	tmp-<random>             blob being written, renamed into place
+//	items.jsonl                            one item per line, fsynced on every append
+//	meta.json                              atomic rewrite on start/stop/truncation
+//	files/<host>/<segments>/<name>.<ext>   decoded response body, 0644
+//	tmp-<random>                           blob being written, renamed into place
 //
-// Nothing here is served from a path the caller controls: session ids and
-// hashes are validated strictly before they touch the filesystem.
+// The files/ tree is readable on purpose: a human must be able to find a body
+// by its URL rather than by its SHA-256. One body is stored once per sha256
+// under its first URL; later rows pointing at the same bytes reuse that path
+// (File repeats) and the backend builds the host-side hardlinks. Every path
+// atom is sanitized and the assembled rel is re-validated before it touches
+// the filesystem, so no URL can escape files/.
 
 import (
 	"bytes"
@@ -26,6 +30,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -97,8 +102,9 @@ type captureMeta struct {
 	Limits        captureLimits `json:"limits"`
 }
 
-// captureItem is one request's manifest row. sha256/filename are empty for
-// every state except captured; the backend never trusts the filename.
+// captureItem is one request's manifest row. sha256/filename/file are empty
+// for every state except captured; the backend recomputes the readable path
+// from the URL rather than trusting it.
 type captureItem struct {
 	ID                string `json:"id"`
 	URL               string `json:"url"`
@@ -112,6 +118,7 @@ type captureItem struct {
 	SHA256            string `json:"sha256,omitempty"`
 	SHA1              string `json:"sha1,omitempty"`
 	Filename          string `json:"filename,omitempty"`
+	File              string `json:"file,omitempty"`
 	Tab               int    `json:"tab"`
 	OriginHost        string `json:"origin_host"`
 	TSRequested       int64  `json:"ts_requested"`
@@ -178,7 +185,12 @@ type captureStore struct {
 	bytes  int64
 	dedup  int
 	counts captureCounts
-	blobs  map[string]bool // sha256 → blob present in this record
+
+	// blobs maps sha256 → its canonical record-relative path ("files/…");
+	// rels is the reverse index used to keep two different bodies off the
+	// same readable name. Both are rebuilt from scratch on Start.
+	blobs map[string]string
+	rels  map[string]string
 
 	// warnWrite logs the first blob write failure only; a full disk would
 	// otherwise emit one line per resource.
@@ -186,7 +198,7 @@ type captureStore struct {
 }
 
 func newCaptureStore(baseDir string) *captureStore {
-	return &captureStore{baseDir: baseDir, blobs: map[string]bool{}}
+	return &captureStore{baseDir: baseDir, blobs: map[string]string{}, rels: map[string]string{}}
 }
 
 // captureDirFromEnv resolves the configured capture directory.
@@ -306,7 +318,8 @@ func (s *captureStore) Start(sessionID string, maxFileBytes, maxRecordBytes int6
 	s.bytes = 0
 	s.dedup = 0
 	s.counts = captureCounts{}
-	s.blobs = map[string]bool{}
+	s.blobs = map[string]string{}
+	s.rels = map[string]string{}
 	s.warnWrite = false
 
 	if err := s.writeMetaLocked(); err != nil {
@@ -382,7 +395,8 @@ func (s *captureStore) Clear() error {
 	s.bytes = 0
 	s.dedup = 0
 	s.counts = captureCounts{}
-	s.blobs = map[string]bool{}
+	s.blobs = map[string]string{}
+	s.rels = map[string]string{}
 	if dir == "" {
 		return nil
 	}
@@ -480,10 +494,14 @@ func (s *captureStore) SaveBody(it captureItem, body []byte) {
 	}
 
 	it.SHA256 = digest
-	it.Filename = captureFilename(it.URL, it.Mime, digest)
 	it.State = captureItemStateCaptured
 
-	if s.blobs[digest] {
+	rel, created := s.relForLocked(it.URL, it.Mime, digest)
+	it.File = rel
+	it.Filename = path.Base(rel)
+	if !created {
+		// The bytes are already on disk under this sha256: one canonical file,
+		// one row per request, and the backend links the extra readable names.
 		s.dedup++
 		it.TSSaved = time.Now().UnixMilli()
 		s.appendLocked(it)
@@ -495,8 +513,12 @@ func (s *captureStore) SaveBody(it captureItem, body []byte) {
 		return
 	}
 
-	dir := filepath.Join(s.dir, "files", digest[:2])
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	dest := filepath.Join(s.dir, filepath.FromSlash(rel))
+	if !captureRelValid(rel) || !captureInsideDir(filepath.Join(s.dir, "files"), dest) {
+		s.failItemLocked(it, errors.New("unsafe capture path: "+rel))
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		s.failItemLocked(it, err)
 		return
 	}
@@ -506,15 +528,46 @@ func (s *captureStore) SaveBody(it captureItem, body []byte) {
 		s.handleWriteErrLocked(it, err)
 		return
 	}
-	if err := os.Rename(tmp, filepath.Join(dir, digest)); err != nil {
+	if err := os.Rename(tmp, dest); err != nil {
 		_ = os.Remove(tmp)
 		s.handleWriteErrLocked(it, err)
 		return
 	}
-	s.blobs[digest] = true
+	s.blobs[digest] = rel
+	s.rels[rel] = digest
 	s.bytes += it.SizeDecoded
 	it.TSSaved = time.Now().UnixMilli()
 	s.appendLocked(it)
+}
+
+// relForLocked resolves the readable archive path for one body. A sha256 the
+// record already stores keeps its first path (created=false) — the streamer
+// deliberately writes exactly one copy per sha256 and lets several manifest
+// rows name the same file; the backend turns those extra rows into host-side
+// hardlinks so Finder still shows the readable names.
+//
+// Collisions on the readable name are resolved as the layout contract says:
+// a different body behind the same path gets "~<sha256[:12]>", and if that is
+// taken too, the full sha256. The result is deterministic per URL+mime+digest
+// sequence.
+func (s *captureStore) relForLocked(rawURL, mimeType, digest string) (string, bool) {
+	if prev, ok := s.blobs[digest]; ok {
+		return prev, false
+	}
+	spec := capturePathSpecFor(rawURL, mimeType)
+	rel := spec.rel("")
+	if _, taken := s.rels[rel]; !taken {
+		return rel, true
+	}
+	short := digest
+	if len(short) > 12 {
+		short = short[:12]
+	}
+	rel = spec.rel("~" + short)
+	if _, taken := s.rels[rel]; !taken {
+		return rel, true
+	}
+	return spec.rel("~" + digest), true
 }
 
 // handleWriteErrLocked treats a full disk as the quota stop; anything else is
@@ -535,6 +588,7 @@ func (s *captureStore) failItemLocked(it captureItem, err error) {
 	it.State = captureItemStateFailed
 	it.SHA256 = ""
 	it.Filename = ""
+	it.File = ""
 	s.appendLocked(it)
 }
 
@@ -651,18 +705,27 @@ func readCaptureItems(dir string) ([]captureItem, error) {
 	return items, nil
 }
 
-// BlobPath resolves a validated sha256 to a file inside the current record.
+// BlobPath resolves a validated sha256 to the readable file the record stores
+// it under. Every row for that sha names the same path; the backend pulls by
+// sha256 and writes its own path from the URL, so this is the only place the
+// streamer has to map hash → file.
 func (s *captureStore) BlobPath(sha string) (string, error) {
 	if !captureSHA256Re.MatchString(sha) {
 		return "", errCaptureBadSHA256
 	}
 	s.mu.Lock()
-	dir := s.dir
+	dir, rel := s.dir, s.blobs[sha]
 	s.mu.Unlock()
 	if dir == "" {
 		return "", errCaptureNotActive
 	}
-	p := filepath.Join(dir, "files", sha[:2], sha)
+	if rel == "" {
+		return "", errCaptureBlobMissing
+	}
+	p := filepath.Join(dir, filepath.FromSlash(rel))
+	if !captureRelValid(rel) || !captureInsideDir(filepath.Join(dir, "files"), p) {
+		return "", errCaptureBlobMissing
+	}
 	st, err := os.Stat(p)
 	if err != nil || st.IsDir() {
 		return "", errCaptureBlobMissing
@@ -680,103 +743,279 @@ func captureRandSuffix() string {
 	return hex.EncodeToString(b[:])
 }
 
+// ---------- readable path derivation ----------
+
+const (
+	capturePathMaxHost     = 80
+	capturePathMaxSegment  = 80
+	capturePathMaxSegments = 8
+	capturePathMaxQuery    = 40
+	// capturePathMaxName bounds the composed file name (query + version
+	// suffix + extension included) so a hostile URL cannot produce a name the
+	// filesystem rejects; the stem is truncated to fit.
+	capturePathMaxName = 160
+)
+
+// captureItemExtRe: an extension is kept only when it looks like one.
+var captureItemExtRe = regexp.MustCompile(`^\.[A-Za-z0-9]{1,5}$`)
+
+// capturePathSpec is the readable location of one body, before versioning:
+// files/<host>/<dirs…>/<stem><query><version><ext>.
+type capturePathSpec struct {
+	Host  string
+	Dirs  []string
+	Stem  string
+	Ext   string
+	Query string
+}
+
+// rel renders the record-relative path (forward slashes, always "files/…").
+func (p capturePathSpec) rel(version string) string {
+	var b strings.Builder
+	b.WriteString("files/")
+	b.WriteString(p.Host)
+	for _, d := range p.Dirs {
+		b.WriteString("/")
+		b.WriteString(d)
+	}
+	b.WriteString("/")
+	b.WriteString(p.name(version))
+	return b.String()
+}
+
+// name builds the final segment: <stem>__<query><version><ext>. The version
+// suffix ("" or "~<hex>") sits immediately before the extension, as the layout
+// contract specifies.
+func (p capturePathSpec) name(version string) string {
+	tail := ""
+	if p.Query != "" {
+		tail += "__" + p.Query
+	}
+	tail += version + p.Ext
+	stem := p.Stem
+	if max := capturePathMaxName - len(tail); len(stem) > max {
+		stem = stem[:max]
+	}
+	if stem == "" {
+		stem = "index"
+	}
+	return stem + tail
+}
+
+// capturePathSpecFor derives the spec from the URL and mime type. Pure and
+// deterministic: identical input always yields the identical spec, which is
+// what makes the on-disk name stable across runs.
+func capturePathSpecFor(rawURL, mimeType string) capturePathSpec {
+	spec := capturePathSpec{Host: capturePathHost(rawURL)}
+	var segs []string
+	if u, err := url.Parse(rawURL); err == nil {
+		if u.RawQuery != "" {
+			spec.Query = captureQueryToken(u.RawQuery)
+		}
+		if p := strings.TrimPrefix(u.Path, "/"); p != "" {
+			segs = strings.Split(p, "/")
+		}
+	}
+	if len(segs) == 0 {
+		segs = []string{""} // no path, or a path ending in "/"
+	}
+	if len(segs) > capturePathMaxSegments {
+		// Deeper paths keep the first 7 components and the last one; the last
+		// becomes the file name, so at most 7 directories survive.
+		trimmed := make([]string, 0, capturePathMaxSegments)
+		trimmed = append(trimmed, segs[:capturePathMaxSegments-1]...)
+		trimmed = append(trimmed, segs[len(segs)-1])
+		segs = trimmed
+	}
+	last := segs[len(segs)-1]
+	for _, s := range segs[:len(segs)-1] {
+		if atom := captureAtom(s, capturePathMaxSegment); atom != "" {
+			spec.Dirs = append(spec.Dirs, atom)
+		} else {
+			spec.Dirs = append(spec.Dirs, "_")
+		}
+	}
+
+	stem, ext := captureSplitExt(captureAtom(last, capturePathMaxSegment))
+	if ext == "" {
+		ext = captureExtFromMime(mimeType)
+	}
+	spec.Stem = stem
+	spec.Ext = ext
+	return spec
+}
+
+// capturePathHost: lowercased hostname, non-default port appended as "__<port>",
+// sanitized to [a-z0-9._-] and capped; no host (or an unusable one) → "local".
+// The port suffix is reserved before the clamp, so a very long hostname loses
+// its tail rather than the port that distinguishes the origin.
+func capturePathHost(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "local"
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return "local"
+	}
+	suffix := ""
+	if p := u.Port(); p != "" && p != captureDefaultPort(u.Scheme) {
+		suffix = "__" + p
+	}
+	host = captureAtom(host, capturePathMaxHost-len(suffix))
+	if host == "" {
+		return "local"
+	}
+	return host + suffix
+}
+
+func captureDefaultPort(scheme string) string {
+	switch strings.ToLower(scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	}
+	return ""
+}
+
+// captureAtom sanitizes one path component: only [A-Za-z0-9._-] survive,
+// everything else becomes "_", runs of dots collapse to one dot (so ".." can
+// never be assembled), the result is capped at maxLen bytes, and an atom that
+// is empty or a lone dot is reported as "" for the caller to replace.
+func captureAtom(s string, maxLen int) string {
+	var b strings.Builder
+	prevDot := false
+	for _, r := range s {
+		if r == '.' {
+			if prevDot {
+				continue
+			}
+			prevDot = true
+			b.WriteRune(r)
+		} else {
+			prevDot = false
+			switch {
+			case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+				b.WriteRune(r)
+			default:
+				b.WriteByte('_')
+			}
+		}
+		if b.Len() >= maxLen {
+			break
+		}
+	}
+	out := b.String()
+	if out == "." {
+		return ""
+	}
+	return out
+}
+
+// captureSplitExt splits a file name into stem and a kept extension; an
+// extension outside [A-Za-z0-9]{1,5} is left on the stem so the mime-derived
+// one can be appended instead.
+func captureSplitExt(name string) (string, string) {
+	if i := strings.LastIndexByte(name, '.'); i > 0 {
+		if cand := name[i:]; captureItemExtRe.MatchString(cand) {
+			return name[:i], strings.ToLower(cand)
+		}
+	}
+	return name, ""
+}
+
+// captureExtFromMime is the layout contract's table, verbatim: anything not
+// listed gets no extension at all.
 var captureMimeExt = map[string]string{
 	"text/html":                ".html",
+	"application/xhtml+xml":    ".html",
 	"text/css":                 ".css",
-	"text/plain":               ".txt",
-	"text/xml":                 ".xml",
-	"text/javascript":          ".js",
-	"application/javascript":   ".js",
 	"application/json":         ".json",
+	"text/json":                ".json",
+	"text/xml":                 ".xml",
 	"application/xml":          ".xml",
-	"application/wasm":         ".wasm",
-	"application/pdf":          ".pdf",
-	"application/octet-stream": ".bin",
+	"image/svg+xml":            ".svg",
 	"image/png":                ".png",
 	"image/jpeg":               ".jpg",
 	"image/gif":                ".gif",
 	"image/webp":               ".webp",
 	"image/avif":               ".avif",
-	"image/svg+xml":            ".svg",
 	"image/x-icon":             ".ico",
+	"image/vnd.microsoft.icon": ".ico",
 	"font/woff":                ".woff",
 	"font/woff2":               ".woff2",
 	"font/ttf":                 ".ttf",
-	"font/otf":                 ".otf",
+	"text/plain":               ".txt",
+	"application/wasm":         ".wasm",
+	"application/pdf":          ".pdf",
+	"application/octet-stream": ".bin",
+	"application/zip":          ".zip",
 }
 
-var capturePathExtRe = regexp.MustCompile(`^\.[A-Za-z0-9]{1,8}$`)
-
-// captureFilename derives <sanitized host>_<sha256[:12]><ext>. The extension
-// comes from the URL path when it looks like one, else from the mime type.
-func captureFilename(rawURL, mimeType, digest string) string {
-	host := captureSafeHost(hostOfURL(rawURL))
-	ext := ""
-	if u, err := parseURLForExt(rawURL); err == nil {
-		cand := path.Ext(u)
-		if capturePathExtRe.MatchString(cand) {
-			ext = strings.ToLower(cand)
-		}
+func captureExtFromMime(mimeType string) string {
+	mt := mimeType
+	if parsed, _, err := mime.ParseMediaType(mimeType); err == nil {
+		mt = parsed
 	}
-	if ext == "" {
-		mt, _, _ := mime.ParseMediaType(mimeType)
-		ext = captureMimeExt[strings.ToLower(mt)]
+	if i := strings.IndexByte(mt, ';'); i >= 0 {
+		mt = mt[:i]
 	}
-	if ext == "" {
-		ext = ".bin"
+	mt = strings.ToLower(strings.TrimSpace(mt))
+	if ext, ok := captureMimeExt[mt]; ok {
+		return ext
 	}
-	short := digest
-	if len(short) > 12 {
-		short = short[:12]
+	switch {
+	case strings.Contains(mt, "javascript"), strings.Contains(mt, "ecmascript"):
+		return ".js"
+	case strings.HasSuffix(mt, "+json"):
+		return ".json"
+	case strings.HasSuffix(mt, "+xml"):
+		return ".xml"
 	}
-	return host + "_" + short + ext
+	return ""
 }
 
-// captureSafeHost keeps only characters a filename can carry; the same
-// posture as safeRecordName, minus the fixed prefix check.
-func captureSafeHost(host string) string {
-	if host == "" {
-		return "unknown"
-	}
+// captureQueryToken renders a query string as one filename token: runs outside
+// [A-Za-z0-9] collapse to "_", the ends are trimmed, and it is capped.
+func captureQueryToken(q string) string {
 	var b strings.Builder
-	for _, r := range host {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+	dirty := false
+	for _, r := range q {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
 			b.WriteRune(r)
-		default:
+			dirty = false
+		} else if !dirty {
 			b.WriteByte('_')
+			dirty = true
 		}
-		if b.Len() >= 80 {
+		if b.Len() >= capturePathMaxQuery {
 			break
 		}
 	}
-	out := strings.Trim(b.String(), "._-")
-	if out == "" {
-		return "unknown"
-	}
-	return out
+	return strings.Trim(b.String(), "_")
 }
 
-func parseURLForExt(rawURL string) (string, error) {
-	// urlPathOnly avoids pulling net/url in just for the path; the suffix after
-	// the host is all the extension needs.
-	u := rawURL
-	if i := strings.Index(u, "?"); i >= 0 {
-		u = u[:i]
+// captureRelValid is the last gate before bytes hit the filesystem: the rel
+// must live under files/, carry forward slashes only, and contain no empty,
+// "." or ".." component.
+func captureRelValid(rel string) bool {
+	if !strings.HasPrefix(rel, "files/") || strings.ContainsAny(rel, `\`) || strings.Contains(rel, "//") {
+		return false
 	}
-	if i := strings.Index(u, "#"); i >= 0 {
-		u = u[:i]
-	}
-	if !strings.HasPrefix(u, "http") {
-		return "", errors.New("not http")
-	}
-	if i := strings.Index(u, "://"); i >= 0 {
-		u = u[i+3:]
-		if j := strings.IndexByte(u, '/'); j >= 0 {
-			return u[j:], nil
+	for _, part := range strings.Split(rel, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
 		}
 	}
-	return "", errors.New("no path")
+	return true
+}
+
+// captureInsideDir reports whether target stays inside root after cleaning.
+func captureInsideDir(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	return target == root || strings.HasPrefix(target, root+string(os.PathSeparator))
 }
 
 // ---------- HTTP surface ----------

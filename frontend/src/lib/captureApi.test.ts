@@ -9,10 +9,12 @@ import { api } from './api';
 import {
   archiveBlobUrl,
   archiveDownloadUrl,
+  archiveFileUrl,
   captureErrorText,
   clearArchiveKey,
   deleteArchive,
   fetchArchiveBlob,
+  fetchArchiveFile,
   getArchive,
   getArchiveKey,
   getCaptureStatus,
@@ -131,11 +133,38 @@ describe('archive calls', () => {
     });
   });
 
-  it('builds blob and zip URLs', () => {
+  it('builds blob, file and zip URLs', () => {
     expect(archiveBlobUrl('sess-1', 'a'.repeat(64))).toBe(
       `/api/captures/sess-1/blobs/${'a'.repeat(64)}`,
     );
+    // `item.file` is archive-root relative; the route takes the path INSIDE
+    // files/, so the leading `files/` is stripped and slashes stay slashes.
+    expect(archiveFileUrl('sess-1', 'files/example.com/lib/app.js')).toBe(
+      '/api/captures/sess-1/files/example.com/lib/app.js',
+    );
+    // A caller that already passes the route-relative shape is left alone.
+    expect(archiveFileUrl('sess-1', 'example.com/lib/app.js')).toBe(
+      '/api/captures/sess-1/files/example.com/lib/app.js',
+    );
+    // Each segment is encoded on its own, never the whole path.
+    expect(archiveFileUrl('sess-1', 'files/example.com/a b/c#d?e.js')).toBe(
+      '/api/captures/sess-1/files/example.com/a%20b/c%23d%3Fe.js',
+    );
     expect(archiveDownloadUrl('sess-1')).toBe('/api/captures/sess-1/download');
+  });
+
+  it('downloads by readable path through an authenticated fetch', async () => {
+    const blob = new Blob(['hello'], { type: 'text/plain' });
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, blob: async () => blob }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const out = await fetchArchiveFile('sess-1', 'files/a.example/w/load.php', 'archive-key');
+    expect(out).toBe(blob);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/api/captures/sess-1/files/a.example/w/load.php');
+    expect(init.headers).toEqual({ Authorization: 'Bearer archive-key' });
+
+    vi.unstubAllGlobals();
   });
 
   it('downloads bytes through an authenticated fetch', async () => {

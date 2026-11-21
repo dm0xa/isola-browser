@@ -69,6 +69,8 @@ export function previewKind(mime: string | undefined): PreviewKind {
 export interface CaptureFile {
   sha256: string;
   filename: string;
+  /** Readable archive path (`files/host/…`) of the first item with this sha256. */
+  file?: string;
   mime: string;
   size: number;
   savedAt: number;
@@ -129,7 +131,10 @@ export function groupCaptureFiles(items: CaptureItem[]): CaptureFile[] {
     hashes.sort((a, b) => (seen.get(a) || 0) - (seen.get(b) || 0));
   }
 
-  const groups = new Map<string, { item: CaptureItem; urls: Set<string>; captured: boolean }>();
+  const groups = new Map<
+    string,
+    { item: CaptureItem; file?: string; urls: Set<string>; captured: boolean }
+  >();
   for (const item of items) {
     if (!item.sha256) continue;
     const url = item.final_url || item.url || '';
@@ -137,6 +142,7 @@ export function groupCaptureFiles(items: CaptureItem[]): CaptureFile[] {
     if (!group) {
       groups.set(item.sha256, {
         item,
+        file: item.file,
         urls: new Set(url ? [url] : []),
         captured: item.state === 'captured',
       });
@@ -144,11 +150,13 @@ export function groupCaptureFiles(items: CaptureItem[]): CaptureFile[] {
     }
     if (url) group.urls.add(url);
     if (item.state === 'captured') group.captured = true;
+    // The group label keeps the FIRST item's readable path even though `item`
+    // moves to the newest one for size/saved-at.
     if (savedTime(item) > savedTime(group.item)) group.item = item;
   }
 
   const files: CaptureFile[] = [];
-  for (const [sha256, { item, urls, captured }] of groups) {
+  for (const [sha256, { item, file, urls, captured }] of groups) {
     let version = 1;
     let versionCount = 1;
     for (const url of urls) {
@@ -160,6 +168,7 @@ export function groupCaptureFiles(items: CaptureItem[]): CaptureFile[] {
     files.push({
       sha256,
       filename: item.filename || basename(item.final_url || item.url || '') || sha256.slice(0, 12),
+      file,
       mime: item.mime || '',
       size: item.size_decoded || item.size_wire || 0,
       savedAt: savedTime(item),
@@ -174,13 +183,26 @@ export function groupCaptureFiles(items: CaptureItem[]): CaptureFile[] {
   return files;
 }
 
-/** Search over URL, filename and mime — the three things a user remembers. */
+/**
+ * Cut a long archive path from the left, landing on a segment boundary:
+ * `files/example.com/wp-admin/w/load.php` → `…/w/load.php`. The tail is what
+ * identifies the file; the host tree is what the eye can drop.
+ */
+export function truncatePathLeft(path: string, max = 48): string {
+  if (path.length <= max) return path;
+  const tail = path.slice(path.length - (max - 1));
+  const cut = tail.indexOf('/');
+  return `…${cut >= 0 ? tail.slice(cut) : tail}`;
+}
+
+/** Search over URL, filename, readable path and mime — what a user remembers. */
 export function filterCaptureFiles(files: CaptureFile[], query: string): CaptureFile[] {
   const q = query.trim().toLowerCase();
   if (!q) return files;
   return files.filter(
     (f) =>
       f.filename.toLowerCase().includes(q) ||
+      (f.file || '').toLowerCase().includes(q) ||
       f.mime.toLowerCase().includes(q) ||
       f.urls.some((u) => u.toLowerCase().includes(q)),
   );

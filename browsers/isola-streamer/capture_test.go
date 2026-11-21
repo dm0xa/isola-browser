@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -309,10 +310,264 @@ func TestCaptureRejectsTraversal(t *testing.T) {
 		t.Fatal("an unknown hash must not resolve")
 	}
 
-	// The derived filename is a pair of safe tokens, never a path.
-	if name := captureFilename("https://a.example.app/../../etc/passwd", "text/plain", strings.Repeat("a", 64)); strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
-		t.Fatalf("filename is not path-safe: %q", name)
+	// The derived rel is rebuilt from safe atoms, never a path from the URL.
+	for _, raw := range []string{
+		"https://a.example.app/../../etc/passwd",
+		`https://a.example/..\..\Windows\win.ini`,
+	} {
+		rel := capturePathSpecFor(raw, "text/plain").rel("")
+		if strings.Contains(rel, "..") || strings.ContainsAny(rel, `\`) || !captureRelValid(rel) {
+			t.Fatalf("rel is not path-safe: %q", rel)
+		}
 	}
+}
+
+// Derived layout: readable host/path/name, extension from the path or the mime
+// type, query collapsed into the name, and the port only when non-default.
+func TestCaptureRelReadablePaths(t *testing.T) {
+	cases := []struct{ url, mime, want string }{
+		{"https://Example.COM/index.html", "text/html", "files/example.com/index.html"},
+		{"https://a.example/assets/app.js?v=3", "application/javascript", "files/a.example/assets/app__v_3.js"},
+		{"https://a.example:8443/api/data", "application/json", "files/a.example__8443/api/data.json"},
+		{"https://a.example:443/secure.js", "text/javascript", "files/a.example/secure.js"},
+		{"https://a.example/", "text/html", "files/a.example/index.html"},
+		{"https://a.example", "text/html", "files/a.example/index.html"},
+		{"https://a.example/css/site", "text/css", "files/a.example/css/site.css"},
+		{"https://a.example/fonts/f.woff2", "font/woff2", "files/a.example/fonts/f.woff2"},
+		{"https://a.example/logo", "image/svg+xml", "files/a.example/logo.svg"},
+		{"https://a.example/x", "application/octet-stream", "files/a.example/x.bin"},
+		{"https://a.example/file", "application/pdf", "files/a.example/file.pdf"},
+		{"https://a.example/pack", "application/zip", "files/a.example/pack.zip"},
+		{"https://a.example/favicon", "image/x-icon", "files/a.example/favicon.ico"},
+		{"data:,hello", "text/plain", "files/local/index.txt"},
+	}
+	for _, c := range cases {
+		got := capturePathSpecFor(c.url, c.mime).rel("")
+		if got != c.want {
+			t.Errorf("rel(%q, %q) = %q, want %q", c.url, c.mime, got, c.want)
+		}
+		if !captureRelValid(got) {
+			t.Errorf("rel(%q) failed validation: %q", c.url, got)
+		}
+	}
+}
+
+// Two bodies for one URL: the second gets a ~<sha256[:12]> version suffix before
+// the extension, and both files exist under their own names.
+func TestCaptureVersionSuffixOnChangedContent(t *testing.T) {
+	s := newTestStore(t)
+	mustStart(t, s, "sess-1", 1<<20, 1<<20)
+
+	const rawURL = "https://a.example/load.php?x=1"
+	v1, v2 := []byte("one"), []byte("two")
+	s.SaveBody(itemURL(rawURL), v1)
+	s.SaveBody(itemURL(rawURL), v2)
+
+	m := manifestOf(t, s)
+	if len(m.Items) != 2 {
+		t.Fatalf("items = %d, want 2", len(m.Items))
+	}
+	if want := "files/a.example/load__x_1.php"; m.Items[0].File != want {
+		t.Fatalf("first file = %q, want %q", m.Items[0].File, want)
+	}
+	want2 := "files/a.example/load__x_1~" + sha256Hex(v2)[:12] + ".php"
+	if m.Items[1].File != want2 {
+		t.Fatalf("second file = %q, want %q", m.Items[1].File, want2)
+	}
+	for i, body := range [][]byte{v1, v2} {
+		p, err := s.BlobPath(m.Items[i].SHA256)
+		if err != nil {
+			t.Fatalf("blob %d: %v", i, err)
+		}
+		if want := filepath.Join(s.dir, filepath.FromSlash(m.Items[i].File)); p != want {
+			t.Fatalf("blob path %d = %q, want the readable rel %q", i, p, want)
+		}
+		got, err := os.ReadFile(p)
+		if err != nil || !bytes.Equal(got, body) {
+			t.Fatalf("blob %d content = %q (err %v)", i, got, err)
+		}
+	}
+}
+
+// Same bytes at two URLs: two manifest rows naming the same readable file, one
+// file on disk, and the dedupe counter moved.
+func TestCaptureSameHashTwoURLsOneFile(t *testing.T) {
+	s := newTestStore(t)
+	mustStart(t, s, "sess-1", 1<<20, 1<<20)
+
+	body := []byte("console.log(1)\n")
+	s.SaveBody(itemURL("https://a.example/app.js"), body)
+	s.SaveBody(itemURL("https://b.example/app.js"), body)
+
+	m := manifestOf(t, s)
+	if len(m.Items) != 2 {
+		t.Fatalf("items = %d, want 2", len(m.Items))
+	}
+	if m.Items[0].File == "" || m.Items[0].File != m.Items[1].File {
+		t.Fatalf("files = %q / %q, want one shared rel", m.Items[0].File, m.Items[1].File)
+	}
+	if n := countCaptureFiles(t, s.dir); n != 1 {
+		t.Fatalf("files on disk = %d, want 1", n)
+	}
+	s.mu.Lock()
+	dedup, bytes := s.dedup, s.bytes
+	s.mu.Unlock()
+	if dedup != 1 {
+		t.Fatalf("deduped = %d, want 1", dedup)
+	}
+	if bytes != int64(len(body)) {
+		t.Fatalf("bytes = %d, want %d", bytes, len(body))
+	}
+}
+
+// Same URL and same bytes twice: one file, two rows, dedupe counted.
+func TestCaptureSameURLSameHashDedupes(t *testing.T) {
+	s := newTestStore(t)
+	mustStart(t, s, "sess-1", 1<<20, 1<<20)
+
+	body := []byte("body{}")
+	s.SaveBody(itemURL("https://a.example/app.js"), body)
+	s.SaveBody(itemURL("https://a.example/app.js"), body)
+
+	m := manifestOf(t, s)
+	if len(m.Items) != 2 {
+		t.Fatalf("items = %d, want 2", len(m.Items))
+	}
+	if m.Items[0].File != "files/a.example/app.js" || m.Items[1].File != m.Items[0].File {
+		t.Fatalf("files = %q / %q", m.Items[0].File, m.Items[1].File)
+	}
+	if n := countCaptureFiles(t, s.dir); n != 1 {
+		t.Fatalf("files on disk = %d, want 1", n)
+	}
+	if got := s.Status().Deduped; got != 1 {
+		t.Fatalf("deduped = %d, want 1", got)
+	}
+}
+
+// Traversal input cannot produce a rel outside files/; the store writes only
+// inside the record and the served file stays there.
+func TestCapturePathTraversalRejected(t *testing.T) {
+	for _, raw := range []string{
+		"https://a.example/../../etc/passwd",
+		"https://a.example/%2e%2e/%2e%2e/etc/passwd",
+		"https://a.example/a/..%2Fb/secret.js",
+		`https://a.example/..\..\Windows\win.ini`,
+		"https://a.example//etc//passwd",
+		"https://../etc/passwd",
+		"file:///etc/passwd",
+	} {
+		spec := capturePathSpecFor(raw, "text/plain")
+		rel := spec.rel("")
+		if !captureRelValid(rel) {
+			t.Fatalf("rel(%q) = %q failed validation", raw, rel)
+		}
+		if strings.Contains(rel, "..") || strings.ContainsAny(rel, `\`) || strings.Contains(rel, "//") {
+			t.Fatalf("rel(%q) = %q is not path-safe", raw, rel)
+		}
+		base := t.TempDir()
+		dest := filepath.Join(base, "files", filepath.FromSlash(strings.TrimPrefix(rel, "files/")))
+		if !captureInsideDir(filepath.Join(base, "files"), dest) {
+			t.Fatalf("rel(%q) = %q escapes files/", raw, rel)
+		}
+	}
+
+	s := newTestStore(t)
+	mustStart(t, s, "sess-1", 1<<20, 1<<20)
+	s.SaveBody(itemURL("https://a.example/../../etc/passwd"), []byte("x"))
+	m := manifestOf(t, s)
+	if len(m.Items) != 1 || m.Items[0].State != captureItemStateCaptured {
+		t.Fatalf("items = %+v", m.Items)
+	}
+	p, err := s.BlobPath(m.Items[0].SHA256)
+	if err != nil {
+		t.Fatalf("blob: %v", err)
+	}
+	if !captureInsideDir(filepath.Join(s.dir, "files"), p) {
+		t.Fatalf("stored blob %q escaped files/", p)
+	}
+}
+
+// Long segments and deep paths are capped deterministically, never rejected.
+func TestCaptureRelCapsLongAndDeepPaths(t *testing.T) {
+	deep := make([]string, 20)
+	for i := range deep {
+		deep[i] = strings.Repeat("Z", 500) + strconv.Itoa(i)
+	}
+	rawURL := "https://a.example/" + strings.Join(deep, "/")
+
+	spec := capturePathSpecFor(rawURL, "text/html")
+	rel := spec.rel("")
+	if rel != capturePathSpecFor(rawURL, "text/html").rel("") {
+		t.Fatal("rel derivation is not deterministic")
+	}
+	if !captureRelValid(rel) {
+		t.Fatalf("long rel failed validation: %q", rel)
+	}
+	parts := strings.Split(rel, "/")
+	if parts[0] != "files" || parts[1] != "a.example" {
+		t.Fatalf("rel prefix = %v", parts[:2])
+	}
+	// files/ + host + at most 7 kept directories + one name.
+	if len(parts) > 2+capturePathMaxSegments {
+		t.Fatalf("rel has %d components: %q", len(parts), rel)
+	}
+	for _, p := range parts[2:] {
+		if len(p) > capturePathMaxName {
+			t.Fatalf("component %q is longer than %d", p, capturePathMaxName)
+		}
+	}
+	if len(parts[2]) > capturePathMaxSegment {
+		t.Fatalf("first directory %q exceeds the %d-byte segment cap", parts[2], capturePathMaxSegment)
+	}
+	if strings.Contains(rel, "..") {
+		t.Fatalf("rel contains a dot-dot: %q", rel)
+	}
+}
+
+// A host longer than the cap must still carry a non-default port: the suffix is
+// reserved before the clamp, so the hostname loses its tail, not the port.
+func TestCapturePathHostKeepsPortSuffix(t *testing.T) {
+	longHost := strings.Repeat("a", 120) + ".example"
+	rawURL := "https://" + longHost + ":8443/app.js"
+
+	host := capturePathHost(rawURL)
+	if !strings.HasSuffix(host, "__8443") {
+		t.Fatalf("host = %q, want the __8443 suffix", host)
+	}
+	if len(host) > capturePathMaxHost {
+		t.Fatalf("host = %q is %d bytes, want <= %d", host, len(host), capturePathMaxHost)
+	}
+	rel := capturePathSpecFor(rawURL, "text/javascript").rel("")
+	if want := "files/" + host + "/app.js"; rel != want {
+		t.Fatalf("rel = %q, want %q", rel, want)
+	}
+	if !captureRelValid(rel) {
+		t.Fatalf("rel failed validation: %q", rel)
+	}
+
+	// A default port is not part of the path.
+	if h := capturePathHost("https://a.example:443/app.js"); strings.Contains(h, "__") {
+		t.Fatalf("host = %q, want no port suffix for the default https port", h)
+	}
+}
+
+// countCaptureFiles counts regular files under dir/files.
+func countCaptureFiles(t *testing.T, dir string) int {
+	t.Helper()
+	n := 0
+	err := filepath.WalkDir(filepath.Join(dir, "files"), func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			n++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk files/: %v", err)
+	}
+	return n
 }
 
 func TestCaptureBlobRouteHeaders(t *testing.T) {
@@ -369,6 +624,20 @@ func TestCaptureBlobRouteHeaders(t *testing.T) {
 	}
 	if len(m.Items) != 1 || m.Items[0].SHA256 != digest {
 		t.Fatalf("manifest = %+v", m)
+	}
+	// The blob is served from the readable file the row names.
+	if want := "files/a.example/index.html"; m.Items[0].File != want {
+		t.Fatalf("item file = %q, want %q", m.Items[0].File, want)
+	}
+	p, err := s.BlobPath(digest)
+	if err != nil {
+		t.Fatalf("blob path: %v", err)
+	}
+	if want := filepath.Join(s.dir, "files", "a.example", "index.html"); p != want {
+		t.Fatalf("blob path = %q, want %q", p, want)
+	}
+	if got, err := os.ReadFile(p); err != nil || string(got) != string(body) {
+		t.Fatalf("readable file = %q (err %v)", got, err)
 	}
 
 	rec = httptest.NewRecorder()

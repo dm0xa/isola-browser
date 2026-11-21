@@ -25,6 +25,12 @@ export interface CaptureItem {
   sha256: string;
   sha1?: string;
   filename?: string;
+  /**
+   * Readable path inside the archive, relative to its root and starting
+   * `files/` (e.g. `files/example.com/lib/app.js`). The sha-addressed blob is
+   * the same bytes, but this is the path a human can find in Finder.
+   */
+  file?: string;
   tab?: number;
   origin_host?: string;
   ts_requested?: number;
@@ -186,6 +192,23 @@ export function archiveBlobUrl(archiveId: string, sha256: string): string {
   return `/api/captures/${archiveId}/blobs/${sha256}`;
 }
 
+/**
+ * Download URL for an item's readable path. The backend route is
+ * `files/{path...}` where `{path...}` is relative to the archive's `files/`
+ * directory, so a leading `files/` from `item.file` is stripped first. Each
+ * remaining segment is encoded on its own — encoding the whole path would turn
+ * every separator into %2F and the route would never match.
+ */
+export function archiveFileUrl(archiveId: string, file: string): string {
+  const rel = file.startsWith('files/') ? file.slice('files/'.length) : file;
+  const encoded = rel
+    .split('/')
+    .filter((segment) => segment !== '')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  return `/api/captures/${archiveId}/files/${encoded}`;
+}
+
 export function archiveDownloadUrl(archiveId: string): string {
   return `/api/captures/${archiveId}/download`;
 }
@@ -204,6 +227,15 @@ export async function fetchArchiveBlob(
   key: string,
 ): Promise<Blob> {
   return fetchAuthed(archiveBlobUrl(archiveId, sha256), key, 'Could not download file');
+}
+
+/** Fetch an item by its readable archive path (preferred over the sha route). */
+export async function fetchArchiveFile(
+  archiveId: string,
+  file: string,
+  key: string,
+): Promise<Blob> {
+  return fetchAuthed(archiveFileUrl(archiveId, file), key, 'Could not download file');
 }
 
 export async function fetchArchiveZip(archiveId: string, key: string): Promise<Blob> {

@@ -10,6 +10,7 @@ vi.mock('../lib/captureApi', async (importOriginal) => {
     ...actual,
     getArchive: vi.fn(),
     fetchArchiveBlob: vi.fn(),
+    fetchArchiveFile: vi.fn(),
     fetchArchiveZip: vi.fn(),
   };
 });
@@ -22,7 +23,9 @@ vi.mock('../lib/captureFormat', async (importOriginal) => {
 import CapturesPage from './CapturesPage';
 import { initAppConfig } from '../lib/config';
 import {
+  archiveFileUrl,
   fetchArchiveBlob,
+  fetchArchiveFile,
   getArchive,
   setArchiveKey,
   type CaptureItem,
@@ -95,12 +98,14 @@ describe('CapturesPage', () => {
     setArchiveKey('sess-1', 'key-1');
     vi.mocked(getArchive).mockReset();
     vi.mocked(fetchArchiveBlob).mockReset();
+    vi.mocked(fetchArchiveFile).mockReset();
     vi.mocked(saveBlob).mockReset();
   });
 
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
   });
 
   it('dedupes one row per sha256 and reports URL sharing and versions', async () => {
@@ -131,7 +136,7 @@ describe('CapturesPage', () => {
     expect(screen.getByText('v1')).toBeInTheDocument();
   });
 
-  it('downloads a file through the authenticated blob helper', async () => {
+  it('downloads by sha256 when the item has no readable path', async () => {
     vi.mocked(getArchive).mockResolvedValue(archiveOf([item({ filename: 'app.js' })]));
     const blob = new Blob(['x'], { type: 'text/javascript' });
     vi.mocked(fetchArchiveBlob).mockResolvedValue(blob);
@@ -143,6 +148,65 @@ describe('CapturesPage', () => {
       expect(fetchArchiveBlob).toHaveBeenCalledWith('sess-1', 'a'.repeat(64), 'key-1'),
     );
     await waitFor(() => expect(saveBlob).toHaveBeenCalledWith(blob, 'app.js'));
+    expect(fetchArchiveFile).not.toHaveBeenCalled();
+  });
+
+  it('shows the readable path in the row and downloads through the file route', async () => {
+    const file = 'files/example.com/s.js';
+    vi.mocked(getArchive).mockResolvedValue(
+      archiveOf([item({ filename: 's.js', file })]),
+    );
+    const blob = new Blob(['x'], { type: 'text/javascript' });
+    vi.mocked(fetchArchiveFile).mockResolvedValue(blob);
+
+    renderPage();
+
+    const label = await screen.findByText(file);
+    expect(label).toHaveAttribute('title', file);
+
+    fireEvent.click(screen.getByTitle('Save this file'));
+
+    // The page hands the item's archive-root path to the API helper unchanged;
+    // the helper drops the leading `files/` the route already scopes.
+    await waitFor(() => expect(fetchArchiveFile).toHaveBeenCalledWith('sess-1', file, 'key-1'));
+    const [calledId, calledFile] = vi.mocked(fetchArchiveFile).mock.calls[0];
+    expect(archiveFileUrl(calledId, calledFile)).toBe('/api/captures/sess-1/files/example.com/s.js');
+    await waitFor(() => expect(saveBlob).toHaveBeenCalledWith(blob, 's.js'));
+    expect(fetchArchiveBlob).not.toHaveBeenCalled();
+  });
+
+  it('truncates a long path from the left, keeping the file name', async () => {
+    const file = 'files/example.com/very/deep/tree/that/keeps/going/w/load.php';
+    vi.mocked(getArchive).mockResolvedValue(archiveOf([item({ filename: 'load.php', file })]));
+
+    renderPage();
+
+    const label = await screen.findByTitle(file);
+    expect(label.textContent?.startsWith('…/')).toBe(true);
+    expect(label.textContent?.endsWith('/w/load.php')).toBe(true);
+    expect(label.textContent?.length).toBeLessThan(file.length);
+  });
+
+  it('copies the readable path from the expanded detail', async () => {
+    const file = 'files/a.example/app.js';
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    vi.mocked(getArchive).mockResolvedValue(
+      archiveOf([item({ filename: 'app.js', file })]),
+    );
+    vi.mocked(fetchArchiveBlob).mockResolvedValue(new Blob(['x'], { type: 'text/javascript' }));
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Open' }));
+
+    const button = await screen.findByRole('button', { name: 'Copy file path' });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(file));
+    expect(await screen.findByText('copied')).toBeInTheDocument();
   });
 
   it('shows archived HTML as source text, never as markup', async () => {

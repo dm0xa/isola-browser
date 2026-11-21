@@ -12,6 +12,8 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -43,8 +45,9 @@ type recording struct {
 	done   chan struct{}
 
 	mu         sync.Mutex
-	seen       map[string]bool // streamer item id -> ingested (captured or not)
-	hashes     map[string]bool // sha256 -> blob present in this archive
+	seen       map[string]bool   // streamer item id -> ingested (captured or not)
+	paths      map[string]string // files/<rel> -> sha256 stored there
+	files      map[string]string // sha256 -> first archive-relative rel holding it
 	items      []Item
 	counts     map[string]int64
 	bytes      int64
@@ -93,6 +96,9 @@ func NewManager(cfg Config, log zerolog.Logger) *Manager {
 		m.log.Error().Err(err).Str("dir", cfg.Dir).Msg("capture: create archive dir")
 		return m
 	}
+	// Archives from the previous CAS layout become readable before GC can
+	// evict them.
+	m.Migrate()
 	m.gcNow()
 	m.wg.Add(1)
 	go m.gcLoop()
@@ -180,7 +186,8 @@ func (m *Manager) Start(ctx context.Context, sessionID, targetURL, streamerAddr 
 		cancel:    cancel,
 		done:      make(chan struct{}),
 		seen:      make(map[string]bool),
-		hashes:    make(map[string]bool),
+		paths:     make(map[string]string),
+		files:     make(map[string]string),
 		items:     make([]Item, 0),
 		counts:    make(map[string]int64),
 	}
@@ -192,6 +199,9 @@ func (m *Manager) Start(ctx context.Context, sessionID, targetURL, streamerAddr 
 		finish()
 		abortStreamer(client)
 		return StartResult{}, err
+	}
+	if err := writeIndex(dir, rec.items); err != nil {
+		m.log.Debug().Err(err).Str("session_id", sessionID).Msg("capture: write index")
 	}
 
 	m.mu.Lock()
@@ -509,7 +519,16 @@ func (m *Manager) Blob(archiveID, sha string) (path, mime, filename string, err 
 	if item == nil {
 		return "", "", "", ErrBlobNotFound
 	}
-	p := blobPath(dir, sha)
+	p := ""
+	if item.File != "" {
+		if clean, relErr := validFileRel(item.File); relErr == nil {
+			p = filepath.Join(dir, filepath.FromSlash(clean))
+		}
+	}
+	if p == "" || !fileExists(p) {
+		// Archives written by the previous CAS layout keep their bytes here.
+		p = blobPath(dir, sha)
+	}
 	if _, statErr := os.Stat(p); statErr != nil {
 		if errors.Is(statErr, fs.ErrNotExist) {
 			return "", "", "", ErrBlobNotFound
@@ -527,6 +546,52 @@ func (m *Manager) Blob(archiveID, sha string) (path, mime, filename string, err 
 	return p, mime, filename, nil
 }
 
+// File locates one readable archive file and returns its path plus metadata for
+// the response headers. Only paths under files/ that the archive itself
+// recorded are served.
+func (m *Manager) File(archiveID, rel string) (filePath, mime, filename string, err error) {
+	if !m.Enabled() {
+		return "", "", "", ErrDisabled
+	}
+	if !validArchiveID(archiveID) {
+		return "", "", "", ErrInvalidArchiveID
+	}
+	// Accept both "example.com/s.js" and the full "files/example.com/s.js".
+	rel = strings.TrimPrefix(rel, "files/")
+	rel = "files/" + rel
+	clean, err := validFileRel(rel)
+	if err != nil {
+		return "", "", "", err
+	}
+	dir := archiveDir(m.cfg.Dir, archiveID)
+	meta, err := readMeta(dir)
+	if err != nil {
+		return "", "", "", err
+	}
+	var item *Item
+	for i := range meta.Items {
+		if meta.Items[i].File == clean && meta.Items[i].State == "captured" {
+			item = &meta.Items[i]
+			break
+		}
+	}
+	if item == nil {
+		return "", "", "", ErrBlobNotFound
+	}
+	p := filepath.Join(dir, filepath.FromSlash(clean))
+	if _, statErr := os.Stat(p); statErr != nil {
+		if errors.Is(statErr, fs.ErrNotExist) {
+			return "", "", "", ErrBlobNotFound
+		}
+		return "", "", "", statErr
+	}
+	mime = item.Mime
+	if !safeContentType(mime) {
+		mime = "application/octet-stream"
+	}
+	return p, mime, path.Base(clean), nil
+}
+
 // CheckKey constant-time compares sha256(key) against the stored digest.
 func (m *Manager) CheckKey(archiveID, key string) bool {
 	if !m.Enabled() || !validArchiveID(archiveID) || key == "" {
@@ -540,7 +605,7 @@ func (m *Manager) CheckKey(archiveID, key string) bool {
 	return subtle.ConstantTimeCompare([]byte(hex.EncodeToString(sum[:])), []byte(meta.KeySHA256)) == 1
 }
 
-// Zip streams meta.json and every blob as an archive. Nothing is buffered.
+// Zip streams meta.json, index.txt and every readable file. Nothing is buffered.
 func (m *Manager) Zip(w io.Writer, archiveID string) error {
 	if !m.Enabled() {
 		return ErrDisabled
@@ -557,29 +622,42 @@ func (m *Manager) Zip(w io.Writer, archiveID string) error {
 	if err != nil {
 		return err
 	}
+	indexRaw, err := os.ReadFile(filepath.Join(dir, indexName))
+	if err != nil {
+		indexRaw = renderIndex(meta.Items)
+	}
 
 	zw := zip.NewWriter(w)
-	hdr := &zip.FileHeader{Name: metaName, Method: zip.Deflate}
-	hdr.SetMode(0o600)
-	hdr.SetModTime(time.Now())
-	mw, err := zw.CreateHeader(hdr)
-	if err != nil {
+	if err := zipBytes(zw, metaName, 0o600, raw); err != nil {
 		return err
 	}
-	if _, err := mw.Write(raw); err != nil {
+	if err := zipBytes(zw, indexName, 0o644, indexRaw); err != nil {
 		return err
 	}
 
-	for _, sha := range uniqueBlobHashes(meta.Items) {
-		p := blobPath(dir, sha)
-		f, err := os.Open(p)
+	seen := make(map[string]bool, len(meta.Items))
+	for _, it := range meta.Items {
+		name := ""
+		if clean, relErr := validFileRel(it.File); relErr == nil {
+			name = clean
+		} else if it.SHA256 != "" {
+			// Archives written by the previous CAS layout.
+			name = "blobs/" + it.SHA256[:2] + "/" + it.SHA256
+		} else {
+			continue
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		f, err := os.Open(filepath.Join(dir, filepath.FromSlash(name)))
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
 			}
 			return err
 		}
-		fh := &zip.FileHeader{Name: "blobs/" + sha[:2] + "/" + sha, Method: zip.Deflate}
+		fh := &zip.FileHeader{Name: name, Method: zip.Deflate}
 		fh.SetMode(0o644)
 		if info, statErr := f.Stat(); statErr == nil {
 			fh.SetModTime(info.ModTime())
@@ -596,6 +674,18 @@ func (m *Manager) Zip(w io.Writer, archiveID string) error {
 		f.Close()
 	}
 	return zw.Close()
+}
+
+func zipBytes(zw *zip.Writer, name string, mode os.FileMode, data []byte) error {
+	hdr := &zip.FileHeader{Name: name, Method: zip.Deflate}
+	hdr.SetMode(mode)
+	hdr.SetModTime(time.Now())
+	ww, err := zw.CreateHeader(hdr)
+	if err != nil {
+		return err
+	}
+	_, err = ww.Write(data)
+	return err
 }
 
 // Delete removes one archive directory.
@@ -708,6 +798,10 @@ func (m *Manager) ingest(ctx context.Context, rec *recording) error {
 			continue
 		}
 		item := itemFromStreamer(raw)
+		baseRel, relErr := deriveRel(raw.URL, raw.FinalURL, raw.Mime)
+		if relErr == nil {
+			item.File = baseRel
+		}
 
 		if raw.State != "captured" {
 			// Metadata-only outcomes still belong in the review table.
@@ -730,6 +824,17 @@ func (m *Manager) ingest(ctx context.Context, rec *recording) error {
 			changed = true
 			continue
 		}
+		if relErr != nil {
+			m.log.Warn().Str("session_id", rec.sessionID).Str("item_id", raw.ID).
+				Str("url", raw.URL).Msg("capture: item path rejected")
+			item.State = "failed"
+			item.File = ""
+			rec.items = append(rec.items, item)
+			rec.seen[raw.ID] = true
+			rec.counts["failed"]++
+			changed = true
+			continue
+		}
 
 		item.Filename = recomputeFilename(raw.URL, raw.FinalURL, raw.Mime, raw.SHA256)
 
@@ -746,8 +851,24 @@ func (m *Manager) ingest(ctx context.Context, rec *recording) error {
 			break
 		}
 
-		alreadyStored := rec.hashes[raw.SHA256] || fileExists(blobPath(rec.dir, raw.SHA256))
-		if !alreadyStored {
+		first, stored := rec.files[raw.SHA256]
+		if !stored {
+			// An archive written by the previous CAS layout still has its bytes.
+			if legacy := "blobs/" + raw.SHA256[:2] + "/" + raw.SHA256; fileExists(filepath.Join(rec.dir, filepath.FromSlash(legacy))) {
+				first, stored = legacy, true
+			}
+		}
+		rel := rec.resolveRel(baseRel, raw.SHA256)
+		item.File = rel
+		if stored {
+			// Same bytes at another URL: a readable hardlink, one copy on disk.
+			if err := linkFile(rec.dir, first, rel); err != nil {
+				m.log.Debug().Err(err).Str("session_id", rec.sessionID).
+					Str("file", rel).Msg("capture: link duplicate")
+				continue
+			}
+			rec.deduped++
+		} else {
 			data, err := client.blob(ctx, raw.SHA256, m.cfg.MaxFileBytes)
 			if err != nil {
 				if errors.Is(err, errBlobTooLarge) {
@@ -786,17 +907,17 @@ func (m *Manager) ingest(ctx context.Context, rec *recording) error {
 				changed = true
 				continue
 			}
-			if err := m.storeBlob(rec.dir, raw.SHA256, data); err != nil {
+			if err := storeBytes(rec.dir, rel, data); err != nil {
 				m.log.Debug().Err(err).Str("session_id", rec.sessionID).
-					Str("sha256", raw.SHA256).Msg("capture: store blob")
+					Str("file", rel).Msg("capture: store file")
 				continue
 			}
 			rec.bytes += int64(len(data))
-		} else {
-			rec.deduped++
+			first = rel
 		}
 
-		rec.hashes[raw.SHA256] = true
+		rec.paths[rel] = raw.SHA256
+		rec.files[raw.SHA256] = first
 		rec.captured++
 		rec.items = append(rec.items, item)
 		rec.seen[raw.ID] = true
@@ -810,6 +931,9 @@ func (m *Manager) ingest(ctx context.Context, rec *recording) error {
 			return err
 		}
 		rec.dirty = false
+		if err := writeIndex(rec.dir, rec.items); err != nil {
+			m.log.Debug().Err(err).Str("session_id", rec.sessionID).Msg("capture: write index")
+		}
 	}
 	return nil
 }
@@ -843,9 +967,9 @@ func itemFromStreamer(raw streamerItem) Item {
 	}
 }
 
-// storeBlob writes to blobs/tmp and renames into blobs/<aa>/<sha256> only after
-// the bytes were hashed and accepted by the caller.
-func (m *Manager) storeBlob(dir, sha string, data []byte) error {
+// storeBytes stages bytes in blobs/tmp and renames them to the archive-relative
+// readable path only after the caller verified the hash.
+func storeBytes(dir, rel string, data []byte) error {
 	tmp := tmpDir(dir)
 	if err := os.MkdirAll(tmp, 0o700); err != nil {
 		return err
@@ -867,10 +991,35 @@ func (m *Manager) storeBlob(dir, sha string, data []byte) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(blobDir(dir, sha), 0o700); err != nil {
+	target := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, blobPath(dir, sha))
+	return os.Rename(tmpName, target)
+}
+
+// linkFile gives a second readable name to bytes already stored under srcRel.
+// A hardlink keeps one copy on disk; filesystems that refuse it get a copy.
+func linkFile(dir, srcRel, dstRel string) error {
+	if dstRel == "" || srcRel == "" {
+		return ErrInvalidPath
+	}
+	src := filepath.Join(dir, filepath.FromSlash(srcRel))
+	dst := filepath.Join(dir, filepath.FromSlash(dstRel))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		return nil
+	}
+	if err := os.Link(src, dst); err == nil {
+		return nil
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return storeBytes(dir, dstRel, data)
 }
 
 func (m *Manager) writeMetaLocked(rec *recording) error {

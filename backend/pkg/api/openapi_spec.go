@@ -266,6 +266,7 @@ var openAPISpec = []byte(`{
           "sha256": { "type": "string", "description": "Content hash of the decoded body; the blob key" },
           "sha1": { "type": "string", "description": "Display-only hash from the network panel" },
           "filename": { "type": "string", "description": "Host-recomputed download name (<host>_<sha256[:12]><ext>)" },
+          "file": { "type": "string", "description": "Host-recomputed readable path inside the archive (files/<host>/<path>)" },
           "tab": { "type": "integer" },
           "origin_host": { "type": "string" },
           "ts_requested": { "type": "integer", "format": "int64" },
@@ -672,6 +673,25 @@ var openAPISpec = []byte(`{
           "200": { "description": "Resource body", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
           "403": { "description": "Missing or invalid archive key (archive_key_invalid)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "404": { "description": "Archive or blob not found (blob_not_found)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/captures/{archiveID}/files/{path}": {
+      "get": {
+        "tags": ["Capture"],
+        "summary": "Download one archived resource by its readable path",
+        "description": "Serves the decoded response body stored at files/<host>/<path>. Content-Type comes from the archive metadata, the response is an attachment, nosniff and never cached. Authorized by the archive key. Paths outside files/ are rejected.",
+        "operationId": "getCaptureFile",
+        "security": [{ "archiveKey": [] }],
+        "parameters": [
+          { "name": "archiveID", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Archive ID (the session ID)" },
+          { "name": "path", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Readable path as recorded in the item's file field (files/<host>/<path>)" }
+        ],
+        "responses": {
+          "200": { "description": "Resource body", "content": { "application/octet-stream": { "schema": { "type": "string", "format": "binary" } } } },
+          "400": { "description": "Path outside files/ or malformed (invalid_path)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "Missing or invalid archive key (archive_key_invalid)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Archive or file not found (blob_not_found)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
     },

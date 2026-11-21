@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,7 @@ const (
 func (h *Handler) RegisterCaptureRoutes(r chi.Router) {
 	r.Get("/api/captures", h.ListCaptures)
 	r.Get("/api/captures/{archiveID}/blobs/{sha256}", h.GetArchiveBlob)
+	r.Get("/api/captures/{archiveID}/files/*", h.GetArchiveFile)
 	r.Get("/api/captures/{archiveID}/download", h.DownloadArchive)
 	r.Get("/api/captures/{archiveID}", h.GetArchive)
 	r.Delete("/api/captures/{archiveID}", h.DeleteArchive)
@@ -215,7 +217,36 @@ func (h *Handler) GetArchiveBlob(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusForbidden, "archive_key_invalid")
 		return
 	}
+	h.serveArchiveFile(w, r, path, mime, filename)
+}
 
+// GetArchiveFile serves one archived body by its readable files/<rel> path.
+func (h *Handler) GetArchiveFile(w http.ResponseWriter, r *http.Request) {
+	if !h.captureEnabled(w) {
+		return
+	}
+	id := chi.URLParam(r, "archiveID")
+	// The wildcard is everything after "/files/" (no prefix), but callers and
+	// proxies may hand us the full archive-relative path, with a leading slash.
+	rel := chi.URLParam(r, "*")
+	if decoded, err := url.PathUnescape(rel); err == nil {
+		rel = decoded
+	}
+	rel = strings.TrimPrefix(strings.TrimPrefix(rel, "/"), "files/")
+	path, mime, filename, err := h.Capture.File(id, "files/"+rel)
+	if err != nil {
+		respondCaptureError(w, err)
+		return
+	}
+	if !h.Capture.CheckKey(id, archiveKeyFromRequest(r)) {
+		respondError(w, http.StatusForbidden, "archive_key_invalid")
+		return
+	}
+	h.serveArchiveFile(w, r, path, mime, filename)
+}
+
+// serveArchiveFile writes one archive file with the archive download headers.
+func (h *Handler) serveArchiveFile(w http.ResponseWriter, r *http.Request, path, mime, filename string) {
 	f, err := os.Open(path)
 	if err != nil {
 		respondCaptureError(w, err)
@@ -303,6 +334,8 @@ func respondCaptureError(w http.ResponseWriter, err error) {
 		respondError(w, http.StatusNotFound, "archive_not_found")
 	case errors.Is(err, capture.ErrBlobNotFound), errors.Is(err, capture.ErrInvalidHash):
 		respondError(w, http.StatusNotFound, "blob_not_found")
+	case errors.Is(err, capture.ErrInvalidPath):
+		respondError(w, http.StatusBadRequest, "invalid_path")
 	case errors.Is(err, capture.ErrAlreadyRecording):
 		respondError(w, http.StatusConflict, "capture_failed")
 	default:

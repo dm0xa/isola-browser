@@ -2,7 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import {
   Share2, X, Check, RotateCw, Bug, Maximize2, Minimize2, MoreVertical,
-  Activity, Gauge, SignalHigh, SignalLow, SignalMedium, ExternalLink, AlertTriangle, Circle,
+  Activity, Gauge, SignalHigh, SignalLow, SignalMedium, ExternalLink, AlertTriangle, Circle, Download,
 } from 'lucide-react';
 import { AudioToggleButton } from '../../components/AudioToggleButton';
 import { IsolaLogo } from '../../components/IsolaLogo';
@@ -52,9 +52,15 @@ export type ViewerToolbarProps = {
   captureSummary: CaptureStopResult | null;
   captureError: string;
   onToggleCapture: () => void;
+  /** Open/close the saved-resources overlay (the route stays for ↗ new tab). */
+  onToggleCapturePanel: () => void;
+  /** Open the saved-resources review page in a new browser tab. */
   onOpenCaptures: () => void;
+  /** True when this browser holds the archive key for the session. */
+  captureHasKey: boolean;
   netPanel: import('../../components/IsolaNetworkPanel').PanelLayout | 'off';
-  setNetPanel: React.Dispatch<React.SetStateAction<import('../../components/IsolaNetworkPanel').PanelLayout | 'off'>>;
+  setNetPanel: (next: import('../../components/IsolaNetworkPanel').PanelLayout | 'off') => void;
+  capturePanel: import('../../components/IsolaNetworkPanel').PanelLayout | 'off';
   openNetworkPopOut: () => void;
   shareCopied: boolean;
   handleShare: () => void;
@@ -73,8 +79,8 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
     tabBarSlotRef, rendererStallVisible, rendererStalledSec, captureStallVisible, clipboardSynced,
     menuOpen, setMenuOpen, audioMuted, toggleAudio, toggleFullscreen, debugEnabled,
     toggleDebug, networkCaptureEnabled, captureEnabled, captureState, captureStatus,
-    captureSummary, captureError, onToggleCapture, onOpenCaptures,
-    netPanel, setNetPanel, openNetworkPopOut,
+    captureSummary, captureError, onToggleCapture, onToggleCapturePanel, onOpenCaptures, captureHasKey,
+    netPanel, setNetPanel, capturePanel, openNetworkPopOut,
     shareCopied, handleShare, toolbarButtons, restarting, sessionTargetUrl, handleRestart, handleEndSession,
     onRecoverRenderer,
   } = props;
@@ -215,8 +221,8 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
           {captureState === 'recording' && (
             <button
               type="button"
-              onClick={onOpenCaptures}
-              title="Recording downloaded resources — click to review what has been saved"
+              onClick={onToggleCapturePanel}
+              title="Recording downloaded resources — click to open the saved files"
               className="flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-mono text-red-700 ring-1 ring-inset ring-red-500/40 bg-red-500/10 hover:bg-red-500/20 dark:text-red-300"
             >
               <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" aria-hidden />
@@ -226,8 +232,8 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
           {captureState !== 'recording' && !!captureSummary && captureSummary.items > 0 && (
             <button
               type="button"
-              onClick={onOpenCaptures}
-              title="Open the saved-resources review page"
+              onClick={onToggleCapturePanel}
+              title="Open the saved resources recorded in this session"
               className="flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-mono text-emerald-700 ring-1 ring-inset ring-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 dark:text-emerald-300"
             >
               Saved {captureSummary.items} {captureSummary.items === 1 ? 'file' : 'files'} · Review
@@ -364,7 +370,7 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
                           toggled={netPanel !== 'off'}
                           onClick={() => {
                             setMenuOpen(false);
-                            setNetPanel((cur) => (cur === 'off' ? 'bottom' : 'off'));
+                            setNetPanel(netPanel === 'off' ? 'bottom' : 'off');
                           }}
                         />
                       </div>
@@ -401,6 +407,34 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
                       }
                       onClick={() => { setMenuOpen(false); onToggleCapture(); }}
                     />
+                  )}
+                  {/* Saved resources overlay: the same archive the review page
+                      shows, docked beside the stream. Disabled until this
+                      browser holds an archive key (i.e. a recording was
+                      started here), so it never opens onto a dead panel. */}
+                  {!viewOnly && (
+                    <div className={`flex items-center ${capturePanel !== 'off' ? 'bg-cyan-500/10' : ''}`}>
+                      <div className="min-w-0 flex-1">
+                        <ViewerMenuItem
+                          icon={<Download size={15} />}
+                          label={capturePanel !== 'off' ? 'Hide saved files' : 'Saved files'}
+                          dimmed
+                          toggled={capturePanel !== 'off'}
+                          disabled={!captureEnabled || !captureHasKey}
+                          onClick={() => { setMenuOpen(false); onToggleCapturePanel(); }}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        title="Open saved resources in a new tab"
+                        aria-label="Open saved resources in a new tab"
+                        disabled={!captureHasKey}
+                        onClick={() => { setMenuOpen(false); onOpenCaptures(); }}
+                        className="mr-1.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-300/70 hover:text-cyan-500 disabled:opacity-40 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-cyan-400"
+                      >
+                        <ExternalLink size={15} />
+                      </button>
+                    </div>
                   )}
                   {/* Stream quality (isola): adaptive Auto is the only mode
                       exposed, so the row is informational — no selected state. */}

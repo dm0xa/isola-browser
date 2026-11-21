@@ -5,8 +5,9 @@
 // hash itself, and keeps a per-session archive on the host:
 //
 //	$ISOLA_DATA_DIR/captures/<session_id>/
-//	  meta.json            # archive metadata + items (0600)
-//	  blobs/<aa>/<sha256>  # verified decoded bodies (0644)
+//	  meta.json            # archive metadata + items, each carrying its `file` (0600)
+//	  index.txt            # url<TAB>file<TAB>status<TAB>mime<TAB>size<TAB>sha256[:12] (0644)
+//	  files/<host>/<path>  # verified decoded bodies at readable paths (0644)
 //	  blobs/tmp/<random>   # same filesystem, renamed into place after verify
 //	  tombstone            # present iff finalize could not complete the archive
 //
@@ -92,6 +93,7 @@ var (
 	ErrNotRecording     = errors.New("no resource capture is recording for this session")
 	ErrArchiveNotFound  = errors.New("resource archive not found")
 	ErrBlobNotFound     = errors.New("resource blob not found")
+	ErrInvalidPath      = errors.New("invalid archive file path")
 	ErrInvalidArchiveID = errors.New("invalid archive id")
 	ErrInvalidHash      = errors.New("invalid sha256")
 	ErrAlreadyRecording = errors.New("another resource capture is already recording")

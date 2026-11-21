@@ -1,7 +1,9 @@
 import React from 'react';
+import { CapturePanel } from '../../components/CapturePanel';
 import { IsolaNetworkPanel, type ConsoleEntry, type CookieEntry, type NetEntry, type PanelLayout, type PanelTab } from '../../components/IsolaNetworkPanel';
 import { ISOLA_LOGO_KEYFRAMES } from '../../components/IsolaLogo';
 import type { useIsolaStream } from '../../hooks/useIsolaStream';
+import type { CaptureStatus } from '../../lib/captureApi';
 import type { DocumentHeaders, IntelFetch } from '../../lib/intel';
 
 export type ViewerStreamShellProps = {
@@ -18,8 +20,14 @@ export type ViewerStreamShellProps = {
   intelDisabled: boolean;
   netTab: PanelTab;
   setNetTab: React.Dispatch<React.SetStateAction<PanelTab>>;
-  setNetPanel: React.Dispatch<React.SetStateAction<PanelLayout | 'off'>>;
+  setNetPanel: (next: PanelLayout | 'off') => void;
   openNetworkPopOut: () => void;
+  /** Saved-resources overlay (docks in the same corner as the network panel). */
+  capturePanel: PanelLayout | 'off';
+  setCapturePanel: (next: PanelLayout | 'off') => void;
+  captureArchiveId: string;
+  captureStatus: CaptureStatus | null;
+  openCaptures: () => void;
   /** SHA-1 digests already persisted to the capture archive (row markers). */
   savedHashes?: ReadonlySet<string>;
   browserTabs: ReturnType<typeof useIsolaStream>['browserTabs'];
@@ -33,6 +41,7 @@ export const ViewerStreamShell = React.memo(function ViewerStreamShell(props: Vi
   const {
     shellRef, canvasRef, containerStyle, networkCaptureEnabled, netPanel, netEntries,
     consoleEntries, cookieEntries, docHeaders, onIntel, intelDisabled, netTab, setNetTab, setNetPanel, openNetworkPopOut,
+    capturePanel, setCapturePanel, captureArchiveId, captureStatus, openCaptures,
     savedHashes, browserTabs, theme,
   } = props;
   return (
@@ -60,6 +69,16 @@ export const ViewerStreamShell = React.memo(function ViewerStreamShell(props: Vi
             onPopOut={openNetworkPopOut}
             savedHashes={savedHashes}
             tabs={browserTabs}
+          />
+        )}
+        {capturePanel !== 'off' && (
+          <CapturePanel
+            archiveId={captureArchiveId}
+            status={captureStatus}
+            layout={capturePanel}
+            onLayout={setCapturePanel}
+            onClose={() => setCapturePanel('off')}
+            onPopOut={openCaptures}
           />
         )}
         {/* Old inline "Network (N)" floating button removed — access via the

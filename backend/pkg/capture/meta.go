@@ -35,8 +35,8 @@ type metaFile struct {
 	Items         []Item           `json:"items"`
 }
 
-// Item mirrors one streamer manifest item. filename is always recomputed on the
-// host; the streamer-supplied value is never trusted.
+// Item mirrors one streamer manifest item. filename and file are always
+// recomputed on the host; the streamer-supplied values are never trusted.
 type Item struct {
 	ID                string `json:"id"`
 	URL               string `json:"url"`
@@ -50,6 +50,7 @@ type Item struct {
 	SHA256            string `json:"sha256"`
 	SHA1              string `json:"sha1"`
 	Filename          string `json:"filename"`
+	File              string `json:"file"`
 	Tab               int    `json:"tab"`
 	OriginHost        string `json:"origin_host"`
 	TSRequested       int64  `json:"ts_requested"`
@@ -256,20 +257,6 @@ func normalizeMime(mime string) string {
 		mime = mime[:idx]
 	}
 	return strings.ToLower(strings.TrimSpace(mime))
-}
-
-// uniqueBlobHashes returns each blob sha once, in item order.
-func uniqueBlobHashes(items []Item) []string {
-	seen := make(map[string]bool, len(items))
-	out := make([]string, 0, len(items))
-	for _, it := range items {
-		if it.SHA256 == "" || seen[it.SHA256] {
-			continue
-		}
-		seen[it.SHA256] = true
-		out = append(out, it.SHA256)
-	}
-	return out
 }
 
 // sortSummaries keeps the listing stable: newest archive first.

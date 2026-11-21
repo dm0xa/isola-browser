@@ -12,6 +12,7 @@ import { clearSessionToken, getSessionToken, storeSessionToken } from '../lib/se
 import { endLaunch, setLaunchStatus, useLaunchProgress } from '../lib/launchProgress';
 import { useSessionTimer } from './viewer/useSessionTimer';
 import { useCaptureRecording } from '../hooks/useCaptureRecording';
+import { getArchiveKey } from '../lib/captureApi';
 import { useIsolaMonitorEvents } from './viewer/useIsolaMonitorEvents';
 import { ViewerToolbar } from './viewer/ViewerToolbar';
 import { ViewerStreamShell } from './viewer/ViewerStreamShell';
@@ -79,6 +80,9 @@ export default function ViewerPage() {
   // panel still shows the full history. Capped for long sessions.
   const [netEntries, setNetEntries] = useState<NetEntry[]>([]);
   const [netPanel, setNetPanel] = useState<PanelLayout | 'off'>('off');
+  // Saved-resources overlay. Docks in the same corner as the network panel, so
+  // the two are mutually exclusive (opening one closes the other).
+  const [capturePanel, setCapturePanel] = useState<PanelLayout | 'off'>('off');
   // Resource capture (record downloaded files). Owned here beside the network
   // panel state: the toolbar renders it, the panel marks saved rows, and the
   // review page is a route away.
@@ -164,14 +168,36 @@ export default function ViewerPage() {
     window.open(url, '_blank', 'noopener,noreferrer');
   }, [id]);
 
+  // Pop the saved-resources review page into its own browser tab (the in-viewer
+  // panel is the default surface; this is the ↗ new tab action). Same handoff
+  // as the network pop-out: the control token rides in the URL fragment (never
+  // sent to the server, never in a query string), and the archive key stays in
+  // localStorage.
   const openCaptures = useCallback(() => {
     if (!id) return;
-    // Same handoff as the network pop-out: the control token rides in the URL
-    // fragment (never sent to the server, never in a query string), and the
-    // archive key stays in localStorage.
     const token = sessionTokenRef.current || getSessionToken(id) || '';
-    navigate(`/session/${id}/captures${token ? `#token=${encodeURIComponent(token)}` : ''}`);
-  }, [id, navigate]);
+    const url = `/session/${id}/captures${token ? `#token=${encodeURIComponent(token)}` : ''}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }, [id]);
+
+  // One dock per corner: whichever panel opens last hides the other.
+  const changeNetPanel = useCallback((next: PanelLayout | 'off') => {
+    setNetPanel(next);
+    if (next !== 'off') setCapturePanel('off');
+  }, []);
+
+  const changeCapturePanel = useCallback((next: PanelLayout | 'off') => {
+    setCapturePanel(next);
+    if (next !== 'off') setNetPanel('off');
+  }, []);
+
+  const toggleCapturePanel = useCallback(() => {
+    changeCapturePanel(capturePanel === 'off' ? 'bottom' : 'off');
+  }, [capturePanel, changeCapturePanel]);
+
+  // The panel needs the archive key; it only exists in this browser after a
+  // recording was started here. Recomputed per render, and a start re-renders.
+  const captureHasKey = !!(id && getArchiveKey(capture.archiveId || id));
 
   const toggleCapture = useCallback(() => {
     if (capture.state === 'recording') void capture.stop();
@@ -299,7 +325,7 @@ export default function ViewerPage() {
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const request = () => {
-      if (netPanel !== 'off') return;
+      if (netPanel !== 'off' || capturePanel !== 'off') return;
       const launch = sessionConfigRef.current.resolution;
       const box = document.querySelector<HTMLVideoElement | HTMLCanvasElement>(
         '#vnc-container video, #vnc-container canvas',
@@ -347,7 +373,7 @@ export default function ViewerPage() {
       if (timer) clearTimeout(timer);
       window.removeEventListener('resize', schedule);
     };
-  }, [id, viewOnly, shadow, isFullscreen, isConnected, netPanel]);
+  }, [id, viewOnly, shadow, isFullscreen, isConnected, netPanel, capturePanel]);
 
   const toggleAudio = useCallback(async () => {
     if (!id) return;
@@ -972,9 +998,12 @@ export default function ViewerPage() {
         captureSummary={capture.summary}
         captureError={capture.error}
         onToggleCapture={toggleCapture}
+        onToggleCapturePanel={toggleCapturePanel}
         onOpenCaptures={openCaptures}
+        captureHasKey={captureHasKey}
         netPanel={netPanel}
-        setNetPanel={setNetPanel}
+        setNetPanel={changeNetPanel}
+        capturePanel={capturePanel}
         openNetworkPopOut={openNetworkPopOut}
         shareCopied={shareCopied}
         handleShare={handleShare}
@@ -999,8 +1028,13 @@ export default function ViewerPage() {
         intelDisabled={!isIntelEnabled()}
         netTab={netTab}
         setNetTab={setNetTab}
-        setNetPanel={setNetPanel}
+        setNetPanel={changeNetPanel}
         openNetworkPopOut={openNetworkPopOut}
+        capturePanel={capturePanel}
+        setCapturePanel={changeCapturePanel}
+        captureArchiveId={capture.archiveId || id || ''}
+        captureStatus={capture.status}
+        openCaptures={openCaptures}
         savedHashes={capture.savedHashes}
         browserTabs={isola.browserTabs}
         theme={theme}

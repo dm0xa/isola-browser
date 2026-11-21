@@ -71,9 +71,12 @@ const baseProps: ViewerToolbarProps = {
   captureSummary: null,
   captureError: '',
   onToggleCapture: () => {},
+  onToggleCapturePanel: () => {},
   onOpenCaptures: () => {},
+  captureHasKey: true,
   netPanel: 'off',
   setNetPanel: () => {},
+  capturePanel: 'off',
   openNetworkPopOut: () => {},
   shareCopied: false,
   handleShare: () => {},
@@ -151,16 +154,45 @@ describe('ViewerToolbar capture row', () => {
     expect(screen.getByRole('button', { name: /REC 00:0[45] · 2\.0 KB/ })).toBeInTheDocument();
   });
 
-  it('shows the saved chip after a stop and opens the review page from it', () => {
-    const onOpenCaptures = vi.fn();
+  it('shows the saved chip after a stop and opens the panel from it', () => {
+    const onToggleCapturePanel = vi.fn();
     renderToolbar({
       captureSummary: { items: 3, bytes: 4096, deduped: 1, complete: true },
-      onOpenCaptures,
+      onToggleCapturePanel,
     });
 
     const chip = screen.getByRole('button', { name: /Saved 3 files · Review/ });
     fireEvent.click(chip);
-    expect(onOpenCaptures).toHaveBeenCalledTimes(1);
+    expect(onToggleCapturePanel).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Saved files and calls the panel toggle', () => {
+    const onToggleCapturePanel = vi.fn();
+    renderToolbar({ onToggleCapturePanel });
+
+    const row = screen.getByRole('menuitem', { name: /Saved files/ });
+    expect(row).toBeEnabled();
+
+    fireEvent.click(row);
+    expect(onToggleCapturePanel).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the Saved files row toggled while the panel is open', () => {
+    renderToolbar({ capturePanel: 'side' });
+    // The label flips to Hide while the panel is docked, matching the
+    // network row's wording.
+    const row = screen.getByRole('menuitem', { name: /Hide saved files/ });
+    expect(row).toBeEnabled();
+    expect(screen.queryByRole('menuitem', { name: /^Saved files$/ })).toBeNull();
+  });
+
+  it('disables the Saved files row without an archive key or capture support', () => {
+    renderToolbar({ captureHasKey: false });
+    expect(screen.getByRole('menuitem', { name: /Saved files/ })).toBeDisabled();
+    cleanup();
+
+    renderToolbar({ captureEnabled: false });
+    expect(screen.getByRole('menuitem', { name: /Saved files/ })).toBeDisabled();
   });
 
   it('surfaces a capture error inline', () => {
