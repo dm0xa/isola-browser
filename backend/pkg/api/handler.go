@@ -126,6 +126,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Patch("/sessions/{id}", h.ExtendSession)
 		r.Post("/sessions/{id}/resize", h.ResizeSession)
 		r.Post("/sessions/{id}/audio", h.ToggleAudio)
+		r.Post("/sessions/{id}/seed", h.ApplySessionSeed)
 		r.Get("/sessions/{id}/graph.png", h.GetResourceGraph)
 		r.Get("/sessions/{id}/intel", h.GetSessionIntel)
 		r.Post("/sessions/{id}/capture/start", h.StartCapture)
@@ -1839,17 +1840,34 @@ const maxJSONBodyBytes = 64 << 10
 // an oversized body apart from malformed JSON.
 var errBodyTooLarge = errors.New("request body too large")
 
-// decodeJSON decodes r.Body into dst with a size cap. A nil ResponseWriter is
-// passed to http.MaxBytesReader deliberately: the caller decides the response,
-// so an oversized body keeps a stable error code instead of Go's implicit 413.
+// decodeJSON decodes r.Body into dst with a size cap and permissive fields.
 func decodeJSON(r *http.Request, dst interface{}) error {
+	return decodeJSONBody(r, dst, false)
+}
+
+// decodeJSONBody is the single body cap and size-error mapping both decoders
+// share. strict rejects unknown fields so a typo like "httpOnly" cannot
+// silently drop an attribute the caller believed was set.
+func decodeJSONBody(r *http.Request, dst interface{}, strict bool) error {
+	// A nil ResponseWriter is passed to http.MaxBytesReader deliberately: the
+	// caller decides the response, so an oversized body keeps a stable error
+	// code instead of Go's implicit 413.
 	body := http.MaxBytesReader(nil, r.Body, maxJSONBodyBytes)
-	if err := json.NewDecoder(body).Decode(dst); err != nil {
+	dec := json.NewDecoder(body)
+	if strict {
+		dec.DisallowUnknownFields()
+	}
+	if err := dec.Decode(dst); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			return errBodyTooLarge
 		}
 		return err
+	}
+	// Strict callers get exactly one JSON value: a second object after the
+	// first is a client bug, and silently ignoring it hides half the payload.
+	if strict && dec.More() {
+		return errors.New("unexpected data after the JSON body")
 	}
 	return nil
 }
@@ -1951,6 +1969,16 @@ func errorMessageForCode(code string) string {
 		return "Failed to read the session's network log"
 	case "audio_toggle_failed":
 		return "Failed to toggle audio"
+	case "invalid_seed":
+		return "Invalid custom session data"
+	case "seed_origin_mismatch":
+		return "The page is not on the origin this data targets — navigate first"
+	case "seed_unavailable":
+		return "The session's page is not reachable right now"
+	case "seed_failed":
+		return "Failed to apply custom session data"
+	case "seed_timeout":
+		return "Applying custom data to the page timed out"
 	case "audio_unsupported":
 		return "Audio toggle is only supported for isola sessions"
 	case "share_invalid":

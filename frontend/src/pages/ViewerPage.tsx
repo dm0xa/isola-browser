@@ -15,6 +15,7 @@ import { useCaptureRecording } from '../hooks/useCaptureRecording';
 import { getArchiveKey } from '../lib/captureApi';
 import { useIsolaMonitorEvents } from './viewer/useIsolaMonitorEvents';
 import { ViewerToolbar } from './viewer/ViewerToolbar';
+import { SessionDataDialog } from '../components/SessionDataDialog';
 import { ViewerStreamShell } from './viewer/ViewerStreamShell';
 import { ViewerDebugOverlay } from './viewer/ViewerDebugOverlay';
 import { buildDebugInfo, copyTextToClipboard, formatDebugInfo } from './viewer/debugInfo';
@@ -80,6 +81,8 @@ export default function ViewerPage() {
   // panel still shows the full history. Capped for long sessions.
   const [netEntries, setNetEntries] = useState<NetEntry[]>([]);
   const [netPanel, setNetPanel] = useState<PanelLayout | 'off'>('off');
+  // Live custom-data dialog (cookies/headers/storage for the running page).
+  const [sessionDataOpen, setSessionDataOpen] = useState(false);
   // Saved-resources overlay. Docks in the same corner as the network panel, so
   // the two are mutually exclusive (opening one closes the other).
   const [capturePanel, setCapturePanel] = useState<PanelLayout | 'off'>('off');
@@ -684,6 +687,9 @@ export default function ViewerPage() {
   // restart icon spinning even after we land on the new session.
   useEffect(() => {
     setRestarting(false);
+    // A restart while the custom-data dialog is open must not leave it bound
+    // to the new session with the old textarea contents.
+    setSessionDataOpen(false);
   }, [id]);
 
   const handleEndSession = () => {
@@ -1005,6 +1011,7 @@ export default function ViewerPage() {
         setNetPanel={changeNetPanel}
         capturePanel={capturePanel}
         openNetworkPopOut={openNetworkPopOut}
+        onOpenSessionData={() => setSessionDataOpen(true)}
         shareCopied={shareCopied}
         handleShare={handleShare}
         toolbarButtons={toolbarButtons}
@@ -1039,6 +1046,13 @@ export default function ViewerPage() {
         browserTabs={isola.browserTabs}
         theme={theme}
       />
+      {sessionDataOpen && id && !viewOnly && (
+        <SessionDataDialog
+          sessionId={id}
+          token={sessionTokenRef.current}
+          onClose={() => setSessionDataOpen(false)}
+        />
+      )}
       <ViewerDebugOverlay
         enabled={debugEnabled}
         transport={transport}

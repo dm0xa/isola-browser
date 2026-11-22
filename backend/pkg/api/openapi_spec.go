@@ -184,6 +184,66 @@ var openAPISpec = []byte(`{
           "clamped": { "type": "boolean", "description": "Whether dimensions were clamped to session resolution" }
         }
       },
+      "SeedRequest": {
+        "type": "object",
+        "properties": {
+          "cookies": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "required": ["name", "value"],
+              "properties": {
+                "name": { "type": "string" },
+                "value": { "type": "string" },
+                "domain": { "type": "string", "description": "Defaults to the session target's host" },
+                "url": { "type": "string", "description": "Alternative to domain; normalized to domain + path" },
+                "path": { "type": "string", "default": "/" },
+                "same_site": { "type": "string", "enum": ["strict", "lax", "none"] },
+                "secure": { "type": "boolean" },
+                "http_only": { "type": "boolean" },
+                "expires": { "type": "integer", "format": "int64", "description": "Unix seconds; omit for a session cookie" }
+              }
+            }
+          },
+          "headers": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "object",
+              "required": ["name", "value"],
+              "properties": {
+                "name": { "type": "string" },
+                "value": { "type": "string" },
+                "domains": { "type": "array", "items": { "type": "string" }, "description": "Host suffix allowlist; omit for the page's current host" }
+              }
+            }
+          },
+          "storage": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "required": ["items"],
+              "properties": {
+                "kind": { "type": "string", "enum": ["local", "session"], "default": "local" },
+                "origin": { "type": "string", "description": "Must equal the page's origin; omit to use the origin the page is on now" },
+                "items": { "type": "object", "additionalProperties": { "type": "string" } }
+              }
+            }
+          },
+          "reload": { "type": "boolean", "description": "Reload the page after applying (discards in-page state)" }
+        }
+      },
+      "SeedResponse": {
+        "type": "object",
+        "properties": {
+          "cookies": { "type": "integer" },
+          "headers": { "type": "integer" },
+          "storage": { "type": "integer" },
+          "reloaded": { "type": "boolean" }
+        }
+      },
       "ExtendSessionResponse": {
         "type": "object",
         "properties": {
@@ -418,6 +478,32 @@ var openAPISpec = []byte(`{
           "200": { "description": "Resize applied", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ResizeResponse" } } } },
           "400": { "description": "Invalid request or unsupported transport", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "403": { "description": "Not authorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/sessions/{id}/seed": {
+      "post": {
+        "tags": ["Sessions"],
+        "summary": "Push custom data into the live page",
+        "description": "Applies cookies, extra request headers and web storage to a running session over CDP. Cookies default to the session target's host and are set as domain cookies (so __Host-/__Secure- names are rejected); header domains gate inclusion against the current main-frame host, while the header set itself is tab-wide; storage needs the page to already be on that origin. Unknown fields are rejected. Values are never logged and never stored; the response carries counts only. Requires owner authorization (X-Session-Token).",
+        "operationId": "applySessionSeed",
+        "security": [{ "sessionToken": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Session ID" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SeedRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Applied", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SeedResponse" } } } },
+          "400": { "description": "Invalid seed payload (invalid_seed)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "Not authorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Session not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "409": { "description": "Container not ready, or the page is not on the storage entry's origin (seed_origin_mismatch)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "413": { "description": "Body exceeds 64 KiB (payload_too_large)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "502": { "description": "The streamer could not apply it (seed_unavailable / seed_failed)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "504": { "description": "The streamer did not answer within the 10 s budget (seed_timeout)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
     },

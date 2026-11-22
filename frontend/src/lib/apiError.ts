@@ -4,12 +4,32 @@
 export function apiErrorMessage(data: unknown, status: number): string {
   const fallback = `Request failed (${status})`;
   if (!data || typeof data !== 'object') return fallback;
-  const err = (data as { error?: unknown }).error;
+  if (!('error' in data)) return fallback;
+  const err: unknown = data.error;
   if (typeof err === 'string' && err.trim()) return err.trim();
   if (err && typeof err === 'object') {
-    const rec = err as { message?: unknown; code?: unknown };
-    if (typeof rec.message === 'string' && rec.message.trim()) return rec.message.trim();
-    if (typeof rec.code === 'string' && rec.code.trim()) return rec.code.trim();
+    if ('message' in err && typeof err.message === 'string' && err.message.trim()) {
+      return err.message.trim();
+    }
+    if ('code' in err && typeof err.code === 'string' && err.code.trim()) {
+      return err.code.trim();
+    }
   }
+  return fallback;
+}
+
+// apiErrorText unwraps one failed axios request into the message a feature
+// shows inline, falling back to a caller-specific sentence. Every feature uses
+// it so {error:{code,message}} is surfaced the same way.
+export function apiErrorText(err: unknown, fallback: string): string {
+  if (err && typeof err === 'object' && 'response' in err) {
+    const resp = err.response;
+    if (resp && typeof resp === 'object') {
+      const status = 'status' in resp && typeof resp.status === 'number' ? resp.status : 0;
+      const data = 'data' in resp ? resp.data : undefined;
+      return apiErrorMessage(data, status);
+    }
+  }
+  if (err instanceof Error && err.message) return err.message;
   return fallback;
 }

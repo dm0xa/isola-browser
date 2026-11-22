@@ -641,18 +641,26 @@ func (s *Service) terminateSession(ctx context.Context, sessionID string) error 
 }
 
 func (s *Service) ensureSession(ctx context.Context, sessionID string) error {
+	_, err := s.runningSession(ctx, sessionID)
+	return err
+}
+
+// runningSession resolves a session id and requires it to be running; callers
+// that need its fields (the target URL, for cookie defaults) use this instead
+// of fetching twice.
+func (s *Service) runningSession(ctx context.Context, sessionID string) (*models.Session, error) {
 	id, err := parseUUID(sessionID)
 	if err != nil {
-		return fmt.Errorf("invalid session_id")
+		return nil, fmt.Errorf("invalid session_id")
 	}
 	sess, err := s.deps.Store.GetSession(ctx, id)
 	if err != nil || sess == nil {
-		return fmt.Errorf("session not found")
+		return nil, fmt.Errorf("session not found")
 	}
 	if sess.Status != models.SessionStatusRunning {
-		return fmt.Errorf("session is not running (status=%s)", sess.Status)
+		return nil, fmt.Errorf("session is not running (status=%s)", sess.Status)
 	}
-	return nil
+	return sess, nil
 }
 
 func registerTools(server *mcp.Server, svc *Service) {
@@ -664,6 +672,10 @@ func registerTools(server *mcp.Server, svc *Service) {
 		Name:        "navigate",
 		Description: "Navigate the active tab to a URL (retries until the runner ctrl socket is connected)",
 	}, svc.toolNavigate)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "set_session_data",
+		Description: "Push custom data into the live page: cookies (domain defaults to the session target), extra request headers for the active tab, and localStorage/sessionStorage on the page's current origin. Optional reload applies the change to the current page in one call.",
+	}, svc.toolSetSessionData)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "inspect_session",
 		Description: "Compact page summary: title from accessibility tree, node count, and recent document requests from the network log",

@@ -203,7 +203,7 @@ func captureItem(url, mime string, data []byte) map[string]any {
 	}
 }
 
-func decodeJSONBody(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
+func decodeResponseBody(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	var body map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
@@ -238,7 +238,7 @@ func TestCaptureStartRequiresOwner(t *testing.T) {
 	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
 		t.Fatalf("cache-control = %q", cc)
 	}
-	body := decodeJSONBody(t, w)
+	body := decodeResponseBody(t, w)
 	if body["archive_id"] != sid.String() {
 		t.Fatalf("archive_id = %v", body["archive_id"])
 	}
@@ -253,15 +253,15 @@ func TestCaptureStartRequiresOwner(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 	}
-	status := decodeJSONBody(t, w)
+	status := decodeResponseBody(t, w)
 	if status["recording"] != true || status["archive_id"] != sid.String() {
 		t.Fatalf("status = %v", status)
 	}
 
 	w = httptest.NewRecorder()
 	h.GetConfig(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
-	if decodeJSONBody(t, w)["capture_enabled"] != true {
-		t.Fatalf("capture_enabled = %v, want true", decodeJSONBody(t, w)["capture_enabled"])
+	if decodeResponseBody(t, w)["capture_enabled"] != true {
+		t.Fatalf("capture_enabled = %v, want true", decodeResponseBody(t, w)["capture_enabled"])
 	}
 }
 
@@ -277,7 +277,7 @@ func TestCaptureArchiveKeyRequired(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("start = %d: %s", w.Code, w.Body.String())
 	}
-	key := decodeJSONBody(t, w)["archive_key"].(string)
+	key := decodeResponseBody(t, w)["archive_key"].(string)
 	waitForArchiveItems(t, mgr, sid.String(), 1)
 
 	w = httptest.NewRecorder()
@@ -285,7 +285,7 @@ func TestCaptureArchiveKeyRequired(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("archive without key = %d: %s", w.Code, w.Body.String())
 	}
-	if code := decodeJSONBody(t, w)["error"].(map[string]any)["code"]; code != "archive_key_invalid" {
+	if code := decodeResponseBody(t, w)["error"].(map[string]any)["code"]; code != "archive_key_invalid" {
 		t.Fatalf("error code = %v", code)
 	}
 
@@ -300,7 +300,7 @@ func TestCaptureArchiveKeyRequired(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("archive = %d: %s", w.Code, w.Body.String())
 	}
-	archive := decodeJSONBody(t, w)
+	archive := decodeResponseBody(t, w)
 	if archive["archive_id"] != sid.String() {
 		t.Fatalf("archive meta = %v", archive["archive_id"])
 	}
@@ -318,13 +318,13 @@ func TestCaptureDisabled(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("start with capture disabled = %d: %s", w.Code, w.Body.String())
 	}
-	if code := decodeJSONBody(t, w)["error"].(map[string]any)["code"]; code != "capture_disabled" {
+	if code := decodeResponseBody(t, w)["error"].(map[string]any)["code"]; code != "capture_disabled" {
 		t.Fatalf("error code = %v", code)
 	}
 
 	w = httptest.NewRecorder()
 	h.GetConfig(w, httptest.NewRequest(http.MethodGet, "/api/config", nil))
-	body := decodeJSONBody(t, w)
+	body := decodeResponseBody(t, w)
 	if body["capture_enabled"] != false {
 		t.Fatalf("capture_enabled = %v", body["capture_enabled"])
 	}
@@ -339,7 +339,7 @@ func TestCaptureArchiveDeleteAndNotFound(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	h.StartCapture(w, sessionCaptureRequest(http.MethodPost, sid.String(), token))
-	key := decodeJSONBody(t, w)["archive_key"].(string)
+	key := decodeResponseBody(t, w)["archive_key"].(string)
 	waitForArchiveItems(t, mgr, sid.String(), 1)
 
 	w = httptest.NewRecorder()
@@ -353,7 +353,7 @@ func TestCaptureArchiveDeleteAndNotFound(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("delete = %d: %s", w.Code, w.Body.String())
 	}
-	if body := decodeJSONBody(t, w); body["status"] != "deleted" {
+	if body := decodeResponseBody(t, w); body["status"] != "deleted" {
 		t.Fatalf("delete body = %v", body)
 	}
 
@@ -362,7 +362,7 @@ func TestCaptureArchiveDeleteAndNotFound(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("archive after delete = %d: %s", w.Code, w.Body.String())
 	}
-	if code := decodeJSONBody(t, w)["error"].(map[string]any)["code"]; code != "archive_not_found" {
+	if code := decodeResponseBody(t, w)["error"].(map[string]any)["code"]; code != "archive_not_found" {
 		t.Fatalf("error code = %v", code)
 	}
 
@@ -384,7 +384,7 @@ func TestCaptureBlobHeaders(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	h.StartCapture(w, sessionCaptureRequest(http.MethodPost, sid.String(), token))
-	key := decodeJSONBody(t, w)["archive_key"].(string)
+	key := decodeResponseBody(t, w)["archive_key"].(string)
 	waitForArchiveItems(t, mgr, sid.String(), 1)
 
 	w = httptest.NewRecorder()
@@ -422,7 +422,7 @@ func TestCaptureBlobHeaders(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("traversal blob = %d: %s", w.Code, w.Body.String())
 	}
-	if code := decodeJSONBody(t, w)["error"].(map[string]any)["code"]; code != "blob_not_found" {
+	if code := decodeResponseBody(t, w)["error"].(map[string]any)["code"]; code != "blob_not_found" {
 		t.Fatalf("error code = %v", code)
 	}
 }
@@ -436,7 +436,7 @@ func TestCaptureDownloadZip(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	h.StartCapture(w, sessionCaptureRequest(http.MethodPost, sid.String(), token))
-	key := decodeJSONBody(t, w)["archive_key"].(string)
+	key := decodeResponseBody(t, w)["archive_key"].(string)
 	waitForArchiveItems(t, mgr, sid.String(), 1)
 
 	w = httptest.NewRecorder()
@@ -469,7 +469,7 @@ func TestCaptureFileRoute(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	h.StartCapture(w, sessionCaptureRequest(http.MethodPost, sid.String(), token))
-	key := decodeJSONBody(t, w)["archive_key"].(string)
+	key := decodeResponseBody(t, w)["archive_key"].(string)
 	waitForArchiveItems(t, mgr, sid.String(), 1)
 
 	w = httptest.NewRecorder()
@@ -505,7 +505,7 @@ func TestCaptureFileRoute(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("missing file = %d: %s", w.Code, w.Body.String())
 	}
-	if code := decodeJSONBody(t, w)["error"].(map[string]any)["code"]; code != "blob_not_found" {
+	if code := decodeResponseBody(t, w)["error"].(map[string]any)["code"]; code != "blob_not_found" {
 		t.Fatalf("missing file code = %v", code)
 	}
 
@@ -515,7 +515,7 @@ func TestCaptureFileRoute(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("file %q = %d: %s", rel, w.Code, w.Body.String())
 		}
-		if code := decodeJSONBody(t, w)["error"].(map[string]any)["code"]; code != "invalid_path" {
+		if code := decodeResponseBody(t, w)["error"].(map[string]any)["code"]; code != "invalid_path" {
 			t.Fatalf("file %q code = %v", rel, code)
 		}
 	}
@@ -560,7 +560,7 @@ func TestCaptureFileRoutePattern(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("nested files route = %d: %s", w.Code, w.Body.String())
 	}
-	if code := decodeJSONBody(t, w)["error"].(map[string]any)["code"]; code != "capture_disabled" {
+	if code := decodeResponseBody(t, w)["error"].(map[string]any)["code"]; code != "capture_disabled" {
 		t.Fatalf("error code = %v", code)
 	}
 }
@@ -583,7 +583,7 @@ func TestCaptureFileRouteServesReadablePath(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("start = %d: %s", w.Code, w.Body.String())
 	}
-	key := decodeJSONBody(t, w)["archive_key"].(string)
+	key := decodeResponseBody(t, w)["archive_key"].(string)
 	waitForArchiveItems(t, mgr, sid.String(), 2)
 
 	router := chi.NewRouter()
@@ -631,7 +631,7 @@ func TestCaptureFileRouteServesReadablePath(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown file = %d: %s", rec.Code, rec.Body.String())
 	}
-	if code := decodeJSONBody(t, rec)["error"].(map[string]any)["code"]; code != "blob_not_found" {
+	if code := decodeResponseBody(t, rec)["error"].(map[string]any)["code"]; code != "blob_not_found" {
 		t.Fatalf("unknown file code = %v", code)
 	}
 
@@ -640,7 +640,7 @@ func TestCaptureFileRouteServesReadablePath(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("traversal = %d: %s", rec.Code, rec.Body.String())
 	}
-	if code := decodeJSONBody(t, rec)["error"].(map[string]any)["code"]; code != "invalid_path" {
+	if code := decodeResponseBody(t, rec)["error"].(map[string]any)["code"]; code != "invalid_path" {
 		t.Fatalf("traversal code = %v", code)
 	}
 }
@@ -656,7 +656,7 @@ func TestCaptureListRequiresOperatorBearer(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	h.StartCapture(w, sessionCaptureRequest(http.MethodPost, sid.String(), token))
-	key := decodeJSONBody(t, w)["archive_key"].(string)
+	key := decodeResponseBody(t, w)["archive_key"].(string)
 	waitForArchiveItems(t, mgr, sid.String(), 1)
 
 	w = httptest.NewRecorder()
@@ -672,7 +672,7 @@ func TestCaptureListRequiresOperatorBearer(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("list = %d: %s", w.Code, w.Body.String())
 	}
-	body := decodeJSONBody(t, w)
+	body := decodeResponseBody(t, w)
 	captures, _ := body["captures"].([]any)
 	if len(captures) != 1 {
 		t.Fatalf("captures = %v", body["captures"])

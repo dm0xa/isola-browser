@@ -10,7 +10,7 @@
 // up in history, logs and Referer headers.
 import { api } from './api';
 import { sessionCreateAuthHeaders } from './createAuth';
-import { apiErrorMessage } from './apiError';
+import { apiErrorText } from './apiError';
 
 export interface CaptureItem {
   id: string;
@@ -117,16 +117,7 @@ export function clearArchiveKey(archiveId: string): void {
 
 /** Human-readable message for a failed capture call (inline errors, no toasts). */
 export function captureErrorText(err: unknown): string {
-  if (err && typeof err === 'object' && 'response' in err) {
-    const resp = err.response;
-    if (resp && typeof resp === 'object') {
-      const status = 'status' in resp && typeof resp.status === 'number' ? resp.status : 0;
-      const data = 'data' in resp ? resp.data : undefined;
-      return apiErrorMessage(data, status);
-    }
-  }
-  if (err instanceof Error && err.message) return err.message;
-  return 'Capture request failed';
+  return apiErrorText(err, 'Capture request failed');
 }
 
 function ownerConfig(token: string) {

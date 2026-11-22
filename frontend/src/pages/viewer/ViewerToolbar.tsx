@@ -2,7 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import {
   Share2, X, Check, RotateCw, Bug, Maximize2, Minimize2, MoreVertical,
-  Activity, Gauge, SignalHigh, SignalLow, SignalMedium, ExternalLink, AlertTriangle, Circle, Download,
+  Activity, Gauge, SignalHigh, SignalLow, SignalMedium, ExternalLink, AlertTriangle, Circle, Download, Cookie,
 } from 'lucide-react';
 import { AudioToggleButton } from '../../components/AudioToggleButton';
 import { IsolaLogo } from '../../components/IsolaLogo';
@@ -62,6 +62,8 @@ export type ViewerToolbarProps = {
   setNetPanel: (next: import('../../components/IsolaNetworkPanel').PanelLayout | 'off') => void;
   capturePanel: import('../../components/IsolaNetworkPanel').PanelLayout | 'off';
   openNetworkPopOut: () => void;
+  /** Open the live custom-data dialog (cookies/headers/storage). */
+  onOpenSessionData: () => void;
   shareCopied: boolean;
   handleShare: () => void;
   toolbarButtons: ToolbarButton[];
@@ -80,7 +82,7 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
     menuOpen, setMenuOpen, audioMuted, toggleAudio, toggleFullscreen, debugEnabled,
     toggleDebug, networkCaptureEnabled, captureEnabled, captureState, captureStatus,
     captureSummary, captureError, onToggleCapture, onToggleCapturePanel, onOpenCaptures, captureHasKey,
-    netPanel, setNetPanel, capturePanel, openNetworkPopOut,
+    netPanel, setNetPanel, capturePanel, openNetworkPopOut, onOpenSessionData,
     shareCopied, handleShare, toolbarButtons, restarting, sessionTargetUrl, handleRestart, handleEndSession,
     onRecoverRenderer,
   } = props;
@@ -435,6 +437,18 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
                         <ExternalLink size={15} />
                       </button>
                     </div>
+                  )}
+                  {/* Live custom data: cookies, request headers and web
+                      storage pushed into the running page. Owner-only —
+                      a view-only share link has no session token. */}
+                  {!viewOnly && (
+                    <ViewerMenuItem
+                      icon={<Cookie size={15} />}
+                      label="Custom data…"
+                      dimmed
+                      disabled={!isConnected}
+                      onClick={() => { setMenuOpen(false); onOpenSessionData(); }}
+                    />
                   )}
                   {/* Stream quality (isola): adaptive Auto is the only mode
                       exposed, so the row is informational — no selected state. */}

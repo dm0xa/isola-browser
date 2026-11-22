@@ -59,6 +59,23 @@ func newFakeStreamer() (*httptest.Server, *streamerHits) {
 		}
 		record("/navigate", w, nil)
 	})
+	mux.HandleFunc("/seed", func(w http.ResponseWriter, r *http.Request) {
+		var seed models.SessionSeed
+		if err := json.NewDecoder(r.Body).Decode(&seed); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		// A cookie with no url is rejected unless the tool bound it to the
+		// session target — the streamer has no launch URL of its own.
+		if len(seed.Cookies) > 0 && seed.Cookies[0].URL == "" {
+			http.Error(w, "cookies[0]: domain or url is required", http.StatusBadRequest)
+			return
+		}
+		record("/seed", w, map[string]any{
+			"cookies": len(seed.Cookies), "headers": len(seed.Headers),
+			"storage": len(seed.Storage), "reloaded": seed.Reload,
+		})
+	})
 	mux.HandleFunc("/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		record("/snapshot", w, map[string]any{
 			"nodes": []map[string]any{
@@ -236,7 +253,7 @@ func TestMCPAllToolsAgainstFakeStreamer(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantTools := []string{
-		"create_session", "navigate", "inspect_session", "snapshot", "screenshot", "click", "type",
+		"create_session", "navigate", "set_session_data", "inspect_session", "snapshot", "screenshot", "click", "type",
 		"get_network", "get_headers", "get_posture", "get_redirects", "get_trackers", "host_intel", "probe_host",
 		"resource_graph", "get_links", "close_session",
 	}
@@ -256,6 +273,18 @@ func TestMCPAllToolsAgainstFakeStreamer(t *testing.T) {
 	callToolText(t, mcpSess, "navigate", map[string]any{"session_id": sessionID, "url": "https://example.com/page"})
 	if hits.count("/navigate") != 1 {
 		t.Fatalf("navigate hits = %d", hits.count("/navigate"))
+	}
+
+	seedOut := callToolText(t, mcpSess, "set_session_data", map[string]any{
+		"session_id":    sessionID,
+		"cookies":       []map[string]any{{"name": "sid", "value": "abc"}},
+		"local_storage": map[string]string{"token": "t"},
+	})
+	if hits.count("/seed") != 1 {
+		t.Fatalf("seed hits = %d", hits.count("/seed"))
+	}
+	if !strings.Contains(seedOut, `"cookies":1`) {
+		t.Fatalf("set_session_data result = %s, want the streamer counts", seedOut)
 	}
 
 	inspect := callToolText(t, mcpSess, "inspect_session", map[string]any{"session_id": sessionID})
