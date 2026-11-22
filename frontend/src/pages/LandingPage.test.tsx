@@ -140,30 +140,97 @@ describe('?q= deep link', () => {
 });
 
 describe('launch identity', () => {
-  const launchWith = async (zone: string, locale: string) => {
-    renderAt('/');
+  const openAdvanced = () => {
     fireEvent.click(screen.getByTitle('Settings'));
-    fireEvent.change(screen.getByLabelText(/Zone/), { target: { value: zone } });
-    fireEvent.change(screen.getByLabelText(/Locale/), { target: { value: locale } });
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+  };
+
+  const launch = async () => {
     fireEvent.change(addressBox(), { target: { value: 'example.com' } });
     fireEvent.click(screen.getByText('Open →'));
     await screen.findByTestId('run');
   };
 
-  it('carries a declared timezone and locale', async () => {
-    await launchWith('Europe/Stockholm', 'sv-SE');
+  it('collapses identity behind Advanced until it is opened', () => {
+    renderAt('/');
+    fireEvent.click(screen.getByTitle('Settings'));
 
-    const config = storedLaunchConfig();
-    expect(config?.timezone).toBe('Europe/Stockholm');
-    expect(config?.locale).toBe('sv-SE');
+    expect(screen.queryByLabelText(/Locale/)).toBeNull();
+    expect(screen.getByRole('button', { name: /Advanced/ })).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(screen.getByRole('button', { name: /Advanced/ }));
+    expect(screen.getByLabelText(/Locale/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Zone/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Advanced/ })).toHaveAttribute('aria-expanded', 'true');
   });
 
-  it('omits empty identity fields instead of sending blanks', async () => {
-    await launchWith('', '');
+  it('rolls one coherent pair per launch by default', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    renderAt('/');
+    await launch();
 
     const config = storedLaunchConfig();
-    expect(config).not.toBeNull();
-    expect(config).not.toHaveProperty('timezone');
-    expect(config).not.toHaveProperty('locale');
+    expect(config?.locale).toBe('sv-SE');
+    expect(config?.timezone).toBe('Europe/Stockholm');
+  });
+
+  it('carries a pinned timezone and locale', async () => {
+    renderAt('/');
+    openAdvanced();
+    fireEvent.change(screen.getByLabelText(/Zone/), { target: { value: 'Asia/Tokyo' } });
+    fireEvent.change(screen.getByLabelText(/Locale/), { target: { value: 'ja-JP' } });
+    await launch();
+
+    const config = storedLaunchConfig();
+    expect(config?.timezone).toBe('Asia/Tokyo');
+    expect(config?.locale).toBe('ja-JP');
+  });
+
+  it('pairs a pinned locale with its canonical zone', async () => {
+    renderAt('/');
+    openAdvanced();
+    fireEvent.change(screen.getByLabelText(/Locale/), { target: { value: 'fr-FR' } });
+    await launch();
+
+    const config = storedLaunchConfig();
+    expect(config?.locale).toBe('fr-FR');
+    expect(config?.timezone).toBe('Europe/Paris');
+  });
+
+  it('keeps a value stored by an older build selectable', async () => {
+    localStorage.setItem('isola_locale', 'xx-YY');
+    renderAt('/');
+    openAdvanced();
+
+    expect(screen.getByRole('option', { name: 'xx-YY (custom)' })).toBeInTheDocument();
+    await launch();
+    expect(storedLaunchConfig()?.locale).toBe('xx-YY');
+  });
+
+  it('shows the choice in the collapsed row', () => {
+    renderAt('/');
+    fireEvent.click(screen.getByTitle('Settings'));
+    expect(screen.getByRole('button', { name: /Advanced/ })).toHaveTextContent('Random on launch');
+  });
+});
+
+describe("what's new", () => {
+  it('lists the release notes and stays dismissed for that version', () => {
+    const first = renderAt('/');
+
+    expect(screen.getByText('Custom data')).toBeInTheDocument();
+    expect(screen.getByText('Locale & zone')).toBeInTheDocument();
+    // capture.enabled is false in the test config: the page must not advertise
+    // a viewer control the backend turned off.
+    expect(screen.queryByText('Record')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: "Dismiss what's new" }));
+
+    expect(screen.queryByText('Custom data')).toBeNull();
+    expect(localStorage.getItem('isola_whats_new_version')).toBe('dev');
+
+    first.unmount();
+    renderAt('/');
+    expect(screen.queryByText('Custom data')).toBeNull();
   });
 });

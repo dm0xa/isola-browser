@@ -159,6 +159,16 @@ to `index.html` makes the app silently uninstallable. Chromium caches launcher
 icons per install: after an upgrade that changes the icon, remove the app and
 add it again.
 
+### What's new on the landing page
+
+The launcher lists the capabilities added in the running release under the
+address box — **Record**, **Custom data** and **Locale & zone** — each linking to
+the documentation that ships with it. The **×** hides the list until the next
+version: the version that was read is kept in
+`localStorage.isola_whats_new_version`, so remove that key to read the notes
+again. On a deployment with `capture.enabled: false` the **Record** row is not
+rendered, because the viewer has no Record control to point at.
+
 ## Optional: Customize
 
 Copy the example environment file and edit it. Every variable is documented inline; anything you leave unset keeps its default.

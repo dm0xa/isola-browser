@@ -573,13 +573,6 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// warmIdentityMatches: a warm container's timezone/locale are baked at creation
-// and cannot change, so only a request that resolves to the pool's pair may
-// claim it. Pure, so the gate is tested without a live pool.
-func warmIdentityMatches(cfgTimezone, cfgLocale, timezone, locale string) bool {
-	return timezone == cfgTimezone && locale == cfgLocale
-}
-
 // claimWarmContainer serves a session from the warm pool when the request is
 // eligible (exact resolution/fps/theme/tz/locale match, no Tor/bandwidth
 // override — env is baked). Warm claims lose the --add-host DNS pin; the
@@ -598,13 +591,9 @@ func (h *Handler) claimWarmContainer(
 		return nil, false
 	}
 	// Guards for settings baked at container creation that this request
-	// cannot override. Timezone/locale travel as container env and the
-	// streamer reads them once at startup, so only a request that resolves to
-	// the pool's baked defaults can be served warm.
+	// cannot override. Timezone/locale are not in this set: they are re-applied
+	// over CDP below, so a random per-launch identity still gets a warm claim.
 	if torEnabled || bandwidthKbps > 0 {
-		return nil, false
-	}
-	if !warmIdentityMatches(h.cfg.SessionTimezone, h.cfg.SessionLocale, timezone, locale) {
 		return nil, false
 	}
 
@@ -619,6 +608,22 @@ func (h *Handler) claimWarmContainer(
 		h.warmPinWarnOnce.Do(func() {
 			log.Printf("create session: warm claim with pinned host=%s (firewall is ssrf control)", target.PinnedHost)
 		})
+	}
+
+	// Give the container this session's page-visible identity. The pool baked
+	// its own zone/locale into the container env, which the streamer read at
+	// boot; applying the request's values now is what keeps a random launch
+	// from needing a cold start. Before navigate, so the first document already
+	// carries the right Accept-Language.
+	identCtx, identCancel := context.WithTimeout(ctx, 5*time.Second)
+	identErr := h.orch.ApplyIdentity(identCtx, info.Host, info.Port, timezone, locale)
+	identCancel()
+	if identErr != nil {
+		log.Printf("create session: warm identity apply failed, cold fallback: %v", identErr)
+		if err := h.orch.TerminateSession(context.Background(), info.ContainerID); err != nil {
+			log.Printf("create session: warm container teardown failed: %v", err)
+		}
+		return nil, false
 	}
 
 	// Point the browser at the session's URL. On failure the container is

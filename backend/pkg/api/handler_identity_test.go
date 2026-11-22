@@ -147,29 +147,3 @@ func TestCreateSessionIdentity(t *testing.T) {
 		})
 	}
 }
-
-// TestWarmIdentityMatches pins the admission gate: a warm container bakes its
-// timezone/locale at creation, so a request that resolves to a different pair
-// must cold-start rather than receive a container whose pages report the wrong
-// zone and language.
-func TestWarmIdentityMatches(t *testing.T) {
-	tests := []struct {
-		name                      string
-		cfgTZ, cfgLocale, tz, loc string
-		want                      bool
-	}{
-		{name: "both unset claims", want: true},
-		{name: "same deployment default claims", cfgTZ: "Asia/Tokyo", cfgLocale: "ja-JP", tz: "Asia/Tokyo", loc: "ja-JP", want: true},
-		{name: "different timezone cold starts", cfgTZ: "Asia/Tokyo", cfgLocale: "ja-JP", tz: "Europe/Berlin", loc: "ja-JP", want: false},
-		{name: "different locale cold starts", cfgTZ: "Asia/Tokyo", cfgLocale: "ja-JP", tz: "Asia/Tokyo", loc: "de-DE", want: false},
-		{name: "defaults versus unset cold starts", cfgTZ: "Asia/Tokyo", cfgLocale: "ja-JP", want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := warmIdentityMatches(tt.cfgTZ, tt.cfgLocale, tt.tz, tt.loc); got != tt.want {
-				t.Fatalf("warmIdentityMatches(%q, %q, %q, %q) = %v, want %v",
-					tt.cfgTZ, tt.cfgLocale, tt.tz, tt.loc, got, tt.want)
-			}
-		})
-	}
-}
