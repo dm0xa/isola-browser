@@ -8,48 +8,40 @@ publishes the section matching the tag.
 
 ### Added
 
-- **Record**: an opt-in viewer control (`ISOLA_CAPTURE_ENABLED=true`) that saves
-  every response body the sandbox downloads — scripts, styles, documents,
-  images, fonts, XHR/fetch — with URL, status, MIME type, sizes, SHA-256 and
-  timestamps, deduplicated by content hash. Archives are written to
-  `<ISOLA_DATA_DIR>/captures/<session_id>/` as a readable URL tree
-  (`files/<host>/<path>…` plus `index.txt`), survive the session, and can be
-  reviewed in a host-grouped, dockable Resources panel (or its own tab),
-  downloaded individually or as a zip. Bodies are pulled to the host while the
-  session runs, with a final pull before the container stops. See
-  [Configuration → capture](docs/configuration.md#capture) and
-  [API → Resource capture](docs/api.md#resource-capture).
-- **Timezone and locale per session**: `POST /api/sessions` accepts `timezone`
-  (IANA zone, e.g. `Europe/Stockholm`) and `locale` (BCP-47, e.g. `sv-SE`).
-  The streamer applies both over CDP at target creation, so `Date`, `Intl`,
-  `navigator.languages` and `Accept-Language` describe the declared region
-  before the page's first script runs. Deployment defaults are
-  `session.timezone` / `session.locale`; a per-session value wins, and with
-  neither set the sandbox stays on UTC / `en-US`. Invalid values are `400`
-  `invalid_timezone` / `invalid_locale`. The launcher exposes both fields in
-  its settings menu.
+- **Record** — an opt-in viewer control that saves every body the page downloads
+  (scripts, styles, documents, images, fonts, XHR/fetch) with URL, status, MIME,
+  sizes and SHA-256, deduplicated by content. Archives survive the session and
+  open in a host-grouped Resources panel you can browse, preview and download.
+- **Custom data** — `POST /api/sessions/{id}/seed` and the MCP `set_session_data`
+  tool push cookies, extra request headers and web storage into a running page,
+  with an optional reload. Owner-only; values are never logged or stored, and the
+  viewer exposes it as **Custom data…**.
+- **Traffic log over REST** — `GET /api/sessions/{id}/network` returns the same
+  document as MCP `get_network`, with the same `type`, `host_contains`,
+  `url_contains` and `limit` filters. Both share one filter package, so an
+  argument cannot mean two things.
+- **Timezone and locale per session** — `timezone` and `locale` on create are
+  applied before the first script, so `Date`, `Intl`, `navigator.languages` and
+  `Accept-Language` agree from the start. The launcher keeps both under
+  **Advanced** and defaults to one coherent pair per launch.
+- **Session parameters on hover** — the session-id chip shows resolution, frame
+  rate, browser, identity and Tor; the debug overlay and copied debug report
+  carry the same values.
+
+### Changed
+
+- A warm-pool container takes the session's identity over CDP when claimed, so a
+  pinned or random locale/zone no longer forces a cold start.
+- The landing page lists what is new in the running release; the **×** hides it
+  until the next version.
 
 ### Fixed
 
-- A session no longer reports one pixel less than its resolution. Chromium
-  clamps an X11 toplevel that exactly covers the display, so a 1280x720 session
-  came back 1279x719 in the page's `screen`, `innerWidth/Height` and
-  `outerWidth/Height`. Xvfb now runs one pixel larger per axis; the extra pixel
-  lies outside the window, so the page sees the requested size while the
-  capture surface stays unchanged.
-- The sandbox no longer contradicts itself in the client hints a page reads.
-  The user agent has always named Chrome; `navigator.platform`, the language
-  list and `navigator.userAgentData.brands` said otherwise (Chromium-only
-  brands, a bare `en-US`), which bot gates read as automation. The streamer now
-  applies the identity over CDP at target creation — before the first page
-  script — so `Sec-CH-UA`, `Accept-Language`, `navigator.platform` and the UA
-  all describe one Chrome client. The empty `isolaBridge` preload global, which
-  every page could detect, is gone.
-- The warm pool now serves ordinary launches. The launcher sent a resolution
-  fitted to the browser window, which could never equal the pooled container's
-  baked resolution, so every UI launch cold-started while an idle warm container
-  sat unused. It sends the picked resolution instead; the viewer reshapes the
-  capture to the window once the stream connects, as it already did on a resize.
+- A session reports its exact requested resolution. Xvfb now runs one pixel
+  larger per axis, so Chromium no longer clamps a 1280x720 page to 1279x719.
+- The sandbox presents one consistent Chrome client: client hints,
+  `navigator.platform`, languages and the UA agree, and the detectable
+  `isolaBridge` preload global is gone.
 
 ## [1.6.5] - 2026-11-20
 
