@@ -23,6 +23,7 @@ const {
 } = require('./render_policy');
 const { applyTorProxy, isTorEnabled } = require('./tor');
 const { isAllowedPageNavigation, resolveAddressBar } = require('./navigation_url');
+const { shouldRetryLoad } = require('./load_retry');
 const { themeColours, fillPageCanvas } = require('./theme');
 const { applyUserAgent } = require('./user_agent');
 
@@ -937,8 +938,20 @@ function attachTabWindow(tab, url) {
     tab.title = title || '';
     broadcastTabs();
   });
-  win.webContents.on('did-fail-load', (event, code, desc, url) => {
+  // Retry a main-frame load once when the first address was unreachable: the
+  // sandbox has no IPv6 route, and an AAAA-first host fails its first
+  // navigation while the same URL loads over IPv4 on the retry. Every other
+  // failure is reported unchanged. See load_retry.js.
+  let lastLoadRetry = null;
+  win.webContents.on('did-fail-load', (event, code, desc, url, isMainFrame) => {
     console.log(`[electron] load fail ${url}: ${code}`);
+    if (!shouldRetryLoad({ code, isMainFrame, url, lastRetry: lastLoadRetry })) return;
+    if (!isAllowedPageNavigation(url)) return;
+    lastLoadRetry = { url, at: Date.now() };
+    console.log(`[electron] retrying ${url} once after address unreachable`);
+    setTimeout(() => {
+      if (!win.isDestroyed()) void win.webContents.loadURL(url).catch(() => {});
+    }, 150);
   });
 
   const blockDisallowed = (event, navUrl) => {

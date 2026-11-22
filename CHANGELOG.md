@@ -6,6 +6,13 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- A page on an IPv6-preferring host (e.g. `ya.ru`) no longer stops at
+  `ERR_ADDRESS_UNREACHABLE`: the sandbox has no IPv6 route, so the runner
+  retries that main-frame load once, which succeeds over IPv4. Other load
+  failures are reported unchanged.
+
 ## [1.7.2] - 2026-11-22
 
 ### Fixed
