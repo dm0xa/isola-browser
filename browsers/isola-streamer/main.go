@@ -45,7 +45,10 @@ func main() {
 	initCapture()
 	// Page-visible identity (UA-CH brands, platform, languages) for every
 	// target, independent of whether the viewer opted into traffic capture.
-	go newIdentityClient().Start()
+	// Published so POST /identity can re-apply it to a live session (a warm
+	// pool container is baked with the pool's identity).
+	activeIdentity = newIdentityClient()
+	go activeIdentity.Start()
 	initActivityTracker()
 	startTabCtrl()
 	startInputTargetWatchdog()

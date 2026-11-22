@@ -56,6 +56,10 @@ type identityClient struct {
 	nextID  int
 	version string
 	warned  bool
+	// sessions are the targets currently attached to this browser-level
+	// connection. A live identity change has to reach them too, not only the
+	// targets that attach later.
+	sessions map[string]bool
 }
 
 func newIdentityClient() *identityClient {
@@ -68,16 +72,20 @@ func newIdentityClient() *identityClient {
 		nextID:   1,
 		timezone: strings.TrimSpace(os.Getenv("ISOLA_SESSION_TZ")),
 		locale:   strings.TrimSpace(os.Getenv("ISOLA_SESSION_LOCALE")),
+		sessions: map[string]bool{},
 	}
 }
 
 // acceptLanguage is what the UA override advertises in navigator.languages and
 // Accept-Language. A declared locale wins; otherwise Chrome's Linux default.
 func (c *identityClient) acceptLanguage() string {
-	if c.locale == "" {
+	c.mu.Lock()
+	locale := c.locale
+	c.mu.Unlock()
+	if locale == "" {
 		return uaAcceptLanguage
 	}
-	return acceptLanguageFor(c.locale)
+	return acceptLanguageFor(locale)
 }
 
 // Start keeps a browser-level auto-attach alive for the process lifetime.
@@ -98,12 +106,15 @@ func (c *identityClient) Start() {
 
 // describe summarizes the overrides for the one attach log line.
 func (c *identityClient) describe() string {
+	c.mu.Lock()
+	timezone, locale := c.timezone, c.locale
+	c.mu.Unlock()
 	out := "ua override " + c.versionOf()
-	if c.timezone != "" {
-		out += ", timezone " + c.timezone
+	if timezone != "" {
+		out += ", timezone " + timezone
 	}
-	if c.locale != "" {
-		out += ", locale " + c.locale
+	if locale != "" {
+		out += ", locale " + locale
 	}
 	return out
 }
@@ -167,7 +178,22 @@ func (c *identityClient) readPump() {
 			Method string          `json:"method"`
 			Params json.RawMessage `json:"params"`
 		}
-		if json.Unmarshal(raw, &env) != nil || env.Method != "Target.attachedToTarget" {
+		if json.Unmarshal(raw, &env) != nil {
+			continue
+		}
+		switch env.Method {
+		case "Target.detachedFromTarget":
+			var p struct {
+				SessionID string `json:"sessionId"`
+			}
+			if json.Unmarshal(env.Params, &p) == nil && p.SessionID != "" {
+				c.mu.Lock()
+				delete(c.sessions, p.SessionID)
+				c.mu.Unlock()
+			}
+			continue
+		case "Target.attachedToTarget":
+		default:
 			continue
 		}
 		var p struct {
@@ -179,22 +205,76 @@ func (c *identityClient) readPump() {
 		if json.Unmarshal(env.Params, &p) != nil || p.SessionID == "" || !uaTargetType(p.TargetInfo.Type) {
 			continue
 		}
-		// Order matters only in that the UA carries the locale's language
-		// list; the timezone/locale overrides are independent Emulation state.
-		if err := c.sendSession("Emulation.setUserAgentOverride", userAgentParams(c.versionOf(), c.acceptLanguage()), p.SessionID); err != nil {
+		c.mu.Lock()
+		c.sessions[p.SessionID] = true
+		c.mu.Unlock()
+		if err := c.applyTo(p.SessionID, false, false); err != nil {
 			c.warnOnce(err)
 		}
-		if c.timezone != "" {
-			if err := c.sendSession("Emulation.setTimezoneOverride", timezoneOverrideParams(c.timezone), p.SessionID); err != nil {
-				c.warnOnce(err)
-			}
-		}
-		if c.locale != "" {
-			if err := c.sendSession("Emulation.setLocaleOverride", localeOverrideParams(c.locale), p.SessionID); err != nil {
-				c.warnOnce(err)
-			}
+	}
+}
+
+// applyTo writes the current identity onto one target session. clearTimezone /
+// clearLocale send the empty override CDP needs to *remove* a value that was
+// set earlier; attach never clears (a new target has nothing to clear).
+// Order matters only in that the UA carries the locale's language list; the
+// timezone/locale overrides are independent Emulation state.
+func (c *identityClient) applyTo(sessionID string, clearTimezone, clearLocale bool) error {
+	c.mu.Lock()
+	version, timezone, locale := c.version, c.timezone, c.locale
+	c.mu.Unlock()
+	if version == "" {
+		return fmt.Errorf("identity not connected")
+	}
+	acceptLanguage := uaAcceptLanguage
+	if locale != "" {
+		acceptLanguage = acceptLanguageFor(locale)
+	}
+	if err := c.sendSession("Emulation.setUserAgentOverride", userAgentParams(version, acceptLanguage), sessionID); err != nil {
+		return err
+	}
+	if timezone != "" || clearTimezone {
+		if err := c.sendSession("Emulation.setTimezoneOverride", timezoneOverrideParams(timezone), sessionID); err != nil {
+			return err
 		}
 	}
+	if locale != "" || clearLocale {
+		if err := c.sendSession("Emulation.setLocaleOverride", localeOverrideParams(locale), sessionID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SetIdentity changes the page-visible identity of a live session and applies
+// it to every target already attached, then to every target that attaches
+// later. A warm container is created with the pool's identity, so this is what
+// lets a claim serve any zone/locale without a cold start. An empty value
+// resets that dimension to Chromium's own default.
+func (c *identityClient) SetIdentity(timezone, locale string) (int, error) {
+	timezone = strings.TrimSpace(timezone)
+	locale = strings.TrimSpace(locale)
+
+	c.mu.Lock()
+	if c.conn == nil || c.version == "" {
+		c.mu.Unlock()
+		return 0, fmt.Errorf("identity not connected")
+	}
+	clearTimezone := c.timezone != "" && timezone == ""
+	clearLocale := c.locale != "" && locale == ""
+	c.timezone, c.locale = timezone, locale
+	sessions := make([]string, 0, len(c.sessions))
+	for id := range c.sessions {
+		sessions = append(sessions, id)
+	}
+	c.mu.Unlock()
+
+	for _, id := range sessions {
+		if err := c.applyTo(id, clearTimezone, clearLocale); err != nil {
+			return 0, err
+		}
+	}
+	return len(sessions), nil
 }
 
 // warnOnce logs the first rejected override per connection: an unsupported

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -730,6 +731,120 @@ func (o *Orchestrator) AudioToggle(ctx context.Context, containerHost string, co
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("audio toggle returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// seedUpstreamTimeout bounds one /seed round trip: a handful of CDP commands
+// plus an optional page reload.
+const seedUpstreamTimeout = 10 * time.Second
+
+// SeedError carries the streamer's status and message so the API handler can
+// keep a stable error code instead of guessing from a wrapped string.
+type SeedError struct {
+	Status  int
+	Message string
+}
+
+func (e *SeedError) Error() string { return e.Message }
+
+// streamerURL builds the loopback URL of one streamer route.
+func streamerURL(host string, port int, path string) string {
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + path
+}
+
+// seedRequestURL is kept a function so tests pin the wire format the browser
+// image implements.
+func seedRequestURL(host string, port int) string {
+	return streamerURL(host, port, "/seed")
+}
+
+// ApplySeed pushes custom data (cookies, headers, web storage) into a running
+// session's page. The streamer validates and applies it in-process, so this is
+// a thin authenticated forward: values travel over the loopback-published
+// streamer port and are never logged here.
+func (o *Orchestrator) ApplySeed(ctx context.Context, containerHost string, containerPort int, seed *models.SessionSeed) (models.SeedResult, error) {
+	var res models.SeedResult
+	if containerHost == "" || containerPort == 0 {
+		return res, &SeedError{Status: http.StatusConflict, Message: "streamer address unknown"}
+	}
+	body, err := json.Marshal(seed)
+	if err != nil {
+		return res, &SeedError{Status: http.StatusBadRequest, Message: "invalid seed payload"}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, seedRequestURL(containerHost, containerPort), bytes.NewReader(body))
+	if err != nil {
+		return res, &SeedError{Status: http.StatusInternalServerError, Message: "invalid seed request"}
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: seedUpstreamTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		// A timeout is not "unreachable": the client's own deadline fires well
+		// before the caller's context, so classify it before the generic case.
+		var netErr net.Error
+		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+			return res, &SeedError{Status: http.StatusGatewayTimeout, Message: "seed timed out"}
+		}
+		return res, &SeedError{Status: http.StatusBadGateway, Message: "session endpoint unreachable"}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		message := strings.TrimSpace(string(msg))
+		if message == "" {
+			message = fmt.Sprintf("seed returned status %d", resp.StatusCode)
+		}
+		return res, &SeedError{Status: resp.StatusCode, Message: message}
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&res); err != nil {
+		return res, &SeedError{Status: http.StatusBadGateway, Message: "invalid seed response"}
+	}
+	return res, nil
+}
+
+// identityUpstreamTimeout bounds the /identity round trip: three CDP commands
+// per attached target, all local to the container.
+const identityUpstreamTimeout = 5 * time.Second
+
+// identityRequestURL is kept a function so tests pin the wire format the
+// browser image implements.
+func identityRequestURL(host string, port int) string {
+	return streamerURL(host, port, "/identity")
+}
+
+// ApplyIdentity changes the page-visible identity of a running session.
+//
+// A warm-pool container is created with the pool's timezone/locale (container
+// env is read once at boot), so a claim uses this to give the session the
+// values the request asked for instead of cold-starting for them. The streamer
+// re-applies the overrides to every attached target and to every target that
+// attaches later, so the chrome and any later tab share one identity.
+func (o *Orchestrator) ApplyIdentity(ctx context.Context, containerHost string, containerPort int, timezone, locale string) error {
+	if containerHost == "" || containerPort == 0 {
+		return fmt.Errorf("streamer address unknown")
+	}
+	body, err := json.Marshal(map[string]string{"timezone": timezone, "locale": locale})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, identityRequestURL(containerHost, containerPort), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: identityUpstreamTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("identity request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return fmt.Errorf("identity returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	return nil
 }

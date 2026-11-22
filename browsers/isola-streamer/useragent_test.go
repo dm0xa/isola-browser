@@ -276,3 +276,181 @@ func TestIdentityClientAppliesOverrideOnAttach(t *testing.T) {
 		t.Fatalf("platform = %v", override.params["platform"])
 	}
 }
+
+// identityCommand is one CDP command the fake browser received.
+type identityCommand struct {
+	method    string
+	sessionID string
+	params    map[string]interface{}
+}
+
+// fakeIdentityBrowser serves /json/version and one browser websocket that
+// records commands and announces a page target on setAutoAttach. The channel is
+// buffered generously because a runtime identity change sends three commands
+// per attached target.
+func fakeIdentityBrowser(t *testing.T, commands chan<- identityCommand) *httptest.Server {
+	t.Helper()
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"webSocketDebuggerUrl": "ws://" + strings.TrimPrefix(srv.URL, "http://") + "/ws",
+			"User-Agent":           "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.49 Safari/537.36",
+			"Browser":              "Chrome/156.0.8078.49",
+		})
+	})
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			var msg struct {
+				ID        int                    `json:"id"`
+				Method    string                 `json:"method"`
+				Params    map[string]interface{} `json:"params"`
+				SessionID string                 `json:"sessionId"`
+			}
+			if err := conn.ReadJSON(&msg); err != nil {
+				return
+			}
+			commands <- identityCommand{msg.Method, msg.SessionID, msg.Params}
+			_ = conn.WriteJSON(map[string]interface{}{"id": msg.ID, "result": map[string]interface{}{}})
+			if msg.Method == "Target.setAutoAttach" {
+				_ = conn.WriteJSON(map[string]interface{}{
+					"method": "Target.attachedToTarget",
+					"params": map[string]interface{}{
+						"sessionId":  "S1",
+						"targetInfo": map[string]interface{}{"targetId": "T1", "type": "page", "url": "https://example.com/"},
+					},
+				})
+			}
+		}
+	})
+	srv = httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// nextIdentityCommand waits for one command with the given method (and session,
+// when set), skipping the unrelated traffic.
+func nextIdentityCommand(t *testing.T, commands <-chan identityCommand, method, sessionID string) identityCommand {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case cmd := <-commands:
+			if cmd.method != method {
+				continue
+			}
+			if sessionID != "" && cmd.sessionID != sessionID {
+				continue
+			}
+			return cmd
+		case <-deadline:
+			t.Fatalf("no %s command for session %q", method, sessionID)
+		}
+	}
+}
+
+// A live identity change must reach targets that are already attached: a warm
+// pool container is created with the pool's identity, and a claim applies the
+// session's own values over this route.
+func TestSetIdentityReappliesToAttachedTargets(t *testing.T) {
+	t.Setenv("ISOLA_SESSION_TZ", "")
+	t.Setenv("ISOLA_SESSION_LOCALE", "")
+
+	commands := make(chan identityCommand, 64)
+	srv := fakeIdentityBrowser(t, commands)
+
+	c := newIdentityClient()
+	c.baseURL = srv.URL
+	if err := c.connect(); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer c.dropConn()
+	go c.readPump()
+
+	// Attach: no declared identity, so only the UA override goes out.
+	first := nextIdentityCommand(t, commands, "Emulation.setUserAgentOverride", "S1")
+	if first.params["acceptLanguage"] != "en-US,en" {
+		t.Fatalf("initial acceptLanguage = %v, want en-US,en", first.params["acceptLanguage"])
+	}
+
+	targets, err := c.SetIdentity("Europe/Berlin", "de-DE")
+	if err != nil {
+		t.Fatalf("SetIdentity: %v", err)
+	}
+	if targets != 1 {
+		t.Fatalf("targets = %d, want the one attached page", targets)
+	}
+	ua := nextIdentityCommand(t, commands, "Emulation.setUserAgentOverride", "S1")
+	if ua.params["acceptLanguage"] != "de-DE,de" {
+		t.Fatalf("acceptLanguage after change = %v, want de-DE,de", ua.params["acceptLanguage"])
+	}
+	tz := nextIdentityCommand(t, commands, "Emulation.setTimezoneOverride", "S1")
+	if tz.params["timezoneId"] != "Europe/Berlin" {
+		t.Fatalf("timezoneId = %v, want Europe/Berlin", tz.params["timezoneId"])
+	}
+	loc := nextIdentityCommand(t, commands, "Emulation.setLocaleOverride", "S1")
+	if loc.params["locale"] != "de-DE" {
+		t.Fatalf("locale = %v, want de-DE", loc.params["locale"])
+	}
+
+	// An empty value must remove the override, not leave the old one in place.
+	if _, err := c.SetIdentity("", ""); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	ua = nextIdentityCommand(t, commands, "Emulation.setUserAgentOverride", "S1")
+	if ua.params["acceptLanguage"] != "en-US,en" {
+		t.Fatalf("acceptLanguage after reset = %v, want en-US,en", ua.params["acceptLanguage"])
+	}
+	tz = nextIdentityCommand(t, commands, "Emulation.setTimezoneOverride", "S1")
+	if tz.params["timezoneId"] != "" {
+		t.Fatalf("timezoneId after reset = %v, want an empty override", tz.params["timezoneId"])
+	}
+	loc = nextIdentityCommand(t, commands, "Emulation.setLocaleOverride", "S1")
+	if loc.params["locale"] != "" {
+		t.Fatalf("locale after reset = %v, want an empty override", loc.params["locale"])
+	}
+}
+
+func TestHandleIdentityContract(t *testing.T) {
+	rec := httptest.NewRecorder()
+	handleIdentity(rec, httptest.NewRequest(http.MethodGet, "/identity", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /identity = %d, want 405", rec.Code)
+	}
+
+	prev := activeIdentity
+	t.Cleanup(func() { activeIdentity = prev })
+	activeIdentity = nil
+	rec = httptest.NewRecorder()
+	handleIdentity(rec, httptest.NewRequest(http.MethodPost, "/identity", strings.NewReader(`{"timezone":"Europe/Stockholm","locale":"sv-SE"}`)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("no identity client: status = %d, want 503", rec.Code)
+	}
+
+	activeIdentity = newIdentityClient()
+	for _, body := range []string{
+		`{"timezone":"Europe/Stockholm","locale":"sv_SE"}`,
+		`{"timezone":"../etc/passwd"}`,
+		`{"timezone":"Europe/Stockholm","bogus":1}`,
+	} {
+		rec = httptest.NewRecorder()
+		handleIdentity(rec, httptest.NewRequest(http.MethodPost, "/identity", strings.NewReader(body)))
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("body %s: status = %d, want 400 (%s)", body, rec.Code, rec.Body.String())
+		}
+	}
+
+	// A well-formed request reaches the (unconnected) client, which reports it
+	// cannot apply rather than pretending success.
+	rec = httptest.NewRecorder()
+	handleIdentity(rec, httptest.NewRequest(http.MethodPost, "/identity", strings.NewReader(`{"timezone":"Europe/Stockholm","locale":"sv-SE"}`)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("disconnected identity: status = %d, want 502 (%s)", rec.Code, rec.Body.String())
+	}
+}

@@ -58,6 +58,8 @@ func setupMux(port string, wsHandler http.HandlerFunc) (net.Listener, error) {
 	mux.HandleFunc("/input", handleInputWS)
 	mux.HandleFunc("/audio", audioToggleHandler)
 	mux.HandleFunc("/navigate", navigateHandler)
+	mux.HandleFunc("/seed", handleSeed)
+	mux.HandleFunc("/identity", handleIdentity)
 	mux.HandleFunc("/network", networkDumpHandler)
 	mux.HandleFunc("/posture", postureHandler)
 	mux.HandleFunc("/trackers", trackersHandler)
