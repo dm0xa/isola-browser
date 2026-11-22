@@ -12,8 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/dm0xa/isola-browser/backend/pkg/models"
 )
 
 // Recon proxy. The lookups and probes run in the streamer (inside the sandbox,
@@ -45,24 +43,8 @@ var intelAllowedChecks = map[string]bool{
 // Query: host, ips, mode=dns|probe|all, checks=a,b,c. Everything is validated
 // here; the streamer only ever sees a canonical query.
 func (h *Handler) GetSessionIntel(w http.ResponseWriter, r *http.Request) {
-	session, ok := h.resolveSession(w, r)
+	session, ok := h.ownedActiveSession(w, r)
 	if !ok {
-		return
-	}
-
-	switch session.Status {
-	case models.SessionStatusRunning:
-		if !h.authorizeOwner(w, r, session) {
-			return
-		}
-	case models.SessionStatusProvisioning:
-		if !h.authorizeOwner(w, r, session) {
-			return
-		}
-		respondError(w, http.StatusConflict, "container_not_ready")
-		return
-	default:
-		respondError(w, http.StatusNotFound, "session_not_found")
 		return
 	}
 
@@ -72,9 +54,8 @@ func (h *Handler) GetSessionIntel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	addr, err := h.cache.Get(r.Context(), "session:"+session.ID.String())
-	if err != nil || addr == "" {
-		respondError(w, http.StatusConflict, "container_not_ready")
+	addr, ok := h.sessionContainerAddr(w, r, session)
+	if !ok {
 		return
 	}
 

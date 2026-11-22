@@ -478,6 +478,31 @@ var openAPISpec = []byte(`{
         }
       }
     },
+    "/api/sessions/{id}/network": {
+      "get": {
+        "tags": ["Sessions"],
+        "summary": "Read the session's captured network log",
+        "description": "Returns the network entries captured for the session — one object per request with method, status, type, headers, the CDP TLS verdict (tls.security_state), redirect chain, tracker/beacon labels, origin_host and third_party. This is the REST twin of the MCP get_network tool: same document, same filters. Filters are optional and are applied server-side; an unfiltered dump is the streamer's document passed through unchanged. The reply is buffered and capped at 8 MiB: a larger log is answered 502 rather than a truncated 200. Requires owner authorization (X-Session-Token).",
+        "operationId": "getSessionNetwork",
+        "security": [{ "sessionToken": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Session ID" },
+          { "name": "type", "in": "query", "schema": { "type": "string" }, "description": "Only entries of this resource type, e.g. Document or Script (case-insensitive)" },
+          { "name": "host_contains", "in": "query", "schema": { "type": "string" }, "description": "Only entries whose hostname contains this substring; a path or query does not match here (use url_contains)" },
+          { "name": "url_contains", "in": "query", "schema": { "type": "string" }, "description": "Only entries whose full URL contains this substring" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 1000 }, "description": "Maximum entries to return after filtering" }
+        ],
+        "responses": {
+          "200": { "description": "Filtered network entries plus a count", "content": { "application/json": { "schema": { "type": "object", "properties": { "entries": { "type": "array", "items": { "type": "object" } }, "count": { "type": "integer" } } } } } },
+          "400": { "description": "Invalid query (invalid_network_query)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "Not authorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Session not found or no longer active", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "409": { "description": "Session container is not ready", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "502": { "description": "The streamer could not be reached, the dump exceeded 8 MiB, or filtering failed (network_failed)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "504": { "description": "The streamer did not answer within 15 s (network_failed)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
     "/api/sessions/{id}/shares": {
       "get": {
         "tags": ["Shares"],

@@ -1,4 +1,4 @@
-package mcp
+package netfilter
 
 import (
 	"encoding/json"
@@ -38,8 +38,8 @@ func TestFilterEntriesHostContainsMatchesHostnameOnly(t *testing.T) {
 		{"url":"https://cdn.other.example/x.js","type":"Script","status":200}
 	]}`)
 
-	out, err := filterEntries(body, 0, func(meta entryMeta, _ map[string]json.RawMessage) bool {
-		return matchesHost(meta, needle("example.com"))
+	out, err := FilterEntries(body, 0, func(meta EntryMeta, _ map[string]json.RawMessage) bool {
+		return MatchesHost(meta, Needle("example.com"))
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -62,8 +62,8 @@ func TestFilterEntriesURLContainsMatchesPath(t *testing.T) {
 		{"url":"https://evil.test/?ref=example.com","type":"Script","status":200}
 	]}`)
 
-	out, err := filterEntries(body, 0, func(meta entryMeta, _ map[string]json.RawMessage) bool {
-		return matchesURL(meta, "example.com")
+	out, err := FilterEntries(body, 0, func(meta EntryMeta, _ map[string]json.RawMessage) bool {
+		return MatchesURL(meta, "example.com")
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestFilterEntriesTypeAndLimit(t *testing.T) {
 		{"url":"https://example.com/b.js","type":"Script","status":200}
 	]}`)
 
-	out, err := filterEntries(body, 1, func(meta entryMeta, _ map[string]json.RawMessage) bool {
+	out, err := FilterEntries(body, 1, func(meta EntryMeta, _ map[string]json.RawMessage) bool {
 		return strings.EqualFold(meta.Type, "Script")
 	})
 	if err != nil {
@@ -97,7 +97,7 @@ func TestFilterEntriesCallbackCanDropFields(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"entries":[{"url":"https://example.com/","type":"Document","tls":{"protocol":"TLS 1.3"}}]}`)
 
-	out, err := filterEntries(body, 0, func(_ entryMeta, fields map[string]json.RawMessage) bool {
+	out, err := FilterEntries(body, 0, func(_ EntryMeta, fields map[string]json.RawMessage) bool {
 		delete(fields, "tls")
 		return true
 	})
@@ -118,8 +118,8 @@ func TestHostOf(t *testing.T) {
 		{"not a url", ""},
 		{"", ""},
 	} {
-		if got := hostOf(tc.url); got != tc.want {
-			t.Fatalf("hostOf(%q) = %q, want %q", tc.url, got, tc.want)
+		if got := HostOf(tc.url); got != tc.want {
+			t.Fatalf("HostOf(%q) = %q, want %q", tc.url, got, tc.want)
 		}
 	}
 }

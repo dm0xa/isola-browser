@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/dm0xa/isola-browser/backend/pkg/netfilter"
 )
 
 // Intelligence tools. The analysis itself lives in the streamer (one
@@ -78,11 +80,11 @@ func (s *Service) toolGetHeaders(ctx context.Context, _ *mcp.CallToolRequest, p 
 	}
 	documentsOnly := p.DocumentsOnly == nil || *p.DocumentsOnly
 	includeTLS := p.IncludeTLS == nil || *p.IncludeTLS
-	hostNeedle := needle(p.HostContains)
-	urlNeedle := needle(p.URLContains)
+	hostNeedle := netfilter.Needle(p.HostContains)
+	urlNeedle := netfilter.Needle(p.URLContains)
 	typ := strings.TrimSpace(p.Type)
 
-	out, err := filterEntries(body, limit, func(meta entryMeta, fields map[string]json.RawMessage) bool {
+	out, err := netfilter.FilterEntries(body, limit, func(meta netfilter.EntryMeta, fields map[string]json.RawMessage) bool {
 		if !hasNonEmptyObject(fields, "headers") {
 			return false
 		}
@@ -92,7 +94,7 @@ func (s *Service) toolGetHeaders(ctx context.Context, _ *mcp.CallToolRequest, p 
 		if typ != "" && !strings.EqualFold(meta.Type, typ) {
 			return false
 		}
-		if !matchesHost(meta, hostNeedle) || !matchesURL(meta, urlNeedle) {
+		if !netfilter.MatchesHost(meta, hostNeedle) || !netfilter.MatchesURL(meta, urlNeedle) {
 			return false
 		}
 		if !includeTLS {
@@ -142,17 +144,17 @@ func (s *Service) toolGetRedirects(ctx context.Context, _ *mcp.CallToolRequest, 
 		limit = 20
 	}
 	documentsOnly := p.DocumentsOnly == nil || *p.DocumentsOnly
-	hostNeedle := needle(p.HostContains)
-	urlNeedle := needle(p.URLContains)
+	hostNeedle := netfilter.Needle(p.HostContains)
+	urlNeedle := netfilter.Needle(p.URLContains)
 
-	out, err := filterEntries(body, limit, func(meta entryMeta, fields map[string]json.RawMessage) bool {
+	out, err := netfilter.FilterEntries(body, limit, func(meta netfilter.EntryMeta, fields map[string]json.RawMessage) bool {
 		if !hasNonEmptyArray(fields, "redirects") {
 			return false
 		}
 		if documentsOnly && !strings.EqualFold(meta.Type, "Document") {
 			return false
 		}
-		return matchesHost(meta, hostNeedle) && matchesURL(meta, urlNeedle)
+		return netfilter.MatchesHost(meta, hostNeedle) && netfilter.MatchesURL(meta, urlNeedle)
 	})
 	if err != nil {
 		return nil, nil, err

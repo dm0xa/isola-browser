@@ -132,6 +132,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Post("/sessions/{id}/capture/stop", h.StopCapture)
 		r.Get("/sessions/{id}/capture", h.GetCaptureStatus)
 		r.Delete("/sessions/{id}", h.DeleteSession)
+		r.Get("/sessions/{id}/network", h.GetSessionNetwork)
 
 		// Share management for a session
 		r.Post("/sessions/{id}/share", h.CreateShare) // deprecated, use /shares
@@ -1008,31 +1009,13 @@ func (h *Handler) releaseGraphSlot(id uuid.UUID) {
 // GetResourceGraph proxies the streamer's render; options are validated here
 // and the body buffered before the status line so a mid-transfer failure is not a full PNG.
 func (h *Handler) GetResourceGraph(w http.ResponseWriter, r *http.Request) {
-	session, ok := h.resolveSession(w, r)
+	// A starting session answers 409 (not 404); a finished one 404 before ownership.
+	session, ok := h.ownedActiveSession(w, r)
 	if !ok {
 		return
 	}
-
-	// A starting session answers 409 (not 404); a finished one 404 before ownership.
-	switch session.Status {
-	case models.SessionStatusRunning:
-		if !h.authorizeOwner(w, r, session) {
-			return
-		}
-	case models.SessionStatusProvisioning:
-		if !h.authorizeOwner(w, r, session) {
-			return
-		}
-		respondError(w, http.StatusConflict, "container_not_ready")
-		return
-	default:
-		respondError(w, http.StatusNotFound, "session_not_found")
-		return
-	}
-
-	addr, err := h.cache.Get(r.Context(), fmt.Sprintf("session:%s", session.ID.String()))
-	if err != nil || addr == "" {
-		respondError(w, http.StatusConflict, "container_not_ready")
+	addr, ok := h.sessionContainerAddr(w, r, session)
+	if !ok {
 		return
 	}
 
@@ -1753,6 +1736,44 @@ func (h *Handler) ownedRunningSession(w http.ResponseWriter, r *http.Request) (*
 	return session, true
 }
 
+// ownedActiveSession resolves {id} to a running session the caller owns, or
+// answers for a session whose container may still be coming up: provisioning is
+// 409 (retry), anything finished is 404. Ownership is proved before the 409 so a
+// caller cannot probe for sessions it does not hold.
+func (h *Handler) ownedActiveSession(w http.ResponseWriter, r *http.Request) (*models.Session, bool) {
+	session, ok := h.resolveSession(w, r)
+	if !ok {
+		return nil, false
+	}
+	switch session.Status {
+	case models.SessionStatusRunning:
+		if !h.authorizeOwner(w, r, session) {
+			return nil, false
+		}
+	case models.SessionStatusProvisioning:
+		if !h.authorizeOwner(w, r, session) {
+			return nil, false
+		}
+		respondError(w, http.StatusConflict, "container_not_ready")
+		return nil, false
+	default:
+		respondError(w, http.StatusNotFound, "session_not_found")
+		return nil, false
+	}
+	return session, true
+}
+
+// sessionContainerAddr returns the streamer's published address for a session
+// that has one; 409 when the container is not registered yet.
+func (h *Handler) sessionContainerAddr(w http.ResponseWriter, r *http.Request, session *models.Session) (string, bool) {
+	addr, err := h.cache.Get(r.Context(), "session:"+session.ID.String())
+	if err != nil || addr == "" {
+		respondError(w, http.StatusConflict, "container_not_ready")
+		return "", false
+	}
+	return addr, true
+}
+
 // resolveSession parses {id} and loads the row, writing the error itself.
 func (h *Handler) resolveSession(w http.ResponseWriter, r *http.Request) (*models.Session, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -1924,6 +1945,10 @@ func errorMessageForCode(code string) string {
 		return "Resource graph render timed out"
 	case "invalid_graph_options":
 		return "Invalid resource graph options"
+	case "invalid_network_query":
+		return "Invalid network log query"
+	case "network_failed":
+		return "Failed to read the session's network log"
 	case "audio_toggle_failed":
 		return "Failed to toggle audio"
 	case "audio_unsupported":

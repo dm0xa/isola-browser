@@ -23,6 +23,7 @@ import (
 	"github.com/dm0xa/isola-browser/backend/pkg/api"
 	"github.com/dm0xa/isola-browser/backend/pkg/graphopts"
 	"github.com/dm0xa/isola-browser/backend/pkg/models"
+	"github.com/dm0xa/isola-browser/backend/pkg/netfilter"
 )
 
 type Service struct {
@@ -555,13 +556,13 @@ func (s *Service) toolGetNetwork(ctx context.Context, _ *mcp.CallToolRequest, p 
 	}
 
 	typ := strings.TrimSpace(p.Type)
-	hostNeedle := needle(p.HostContains)
-	urlNeedle := needle(p.URLContains)
-	out, err := filterEntries(body, p.Limit, func(meta entryMeta, _ map[string]json.RawMessage) bool {
+	hostNeedle := netfilter.Needle(p.HostContains)
+	urlNeedle := netfilter.Needle(p.URLContains)
+	out, err := netfilter.FilterEntries(body, p.Limit, func(meta netfilter.EntryMeta, _ map[string]json.RawMessage) bool {
 		if typ != "" && !strings.EqualFold(meta.Type, typ) {
 			return false
 		}
-		return matchesHost(meta, hostNeedle) && matchesURL(meta, urlNeedle)
+		return netfilter.MatchesHost(meta, hostNeedle) && netfilter.MatchesURL(meta, urlNeedle)
 	})
 	if err != nil {
 		return nil, nil, err
