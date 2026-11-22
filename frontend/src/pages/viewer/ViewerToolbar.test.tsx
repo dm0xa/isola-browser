@@ -78,11 +78,21 @@ const baseProps: ViewerToolbarProps = {
   setNetPanel: () => {},
   capturePanel: 'off',
   openNetworkPopOut: () => {},
+  onOpenSessionData: () => {},
   shareCopied: false,
   handleShare: () => {},
   toolbarButtons: [],
   restarting: false,
   sessionTargetUrl: 'https://example.com',
+  sessionParams: {
+    resolution: '1280x720',
+    frameRate: 30,
+    browserType: 'chromium',
+    timezone: 'Europe/Stockholm',
+    locale: 'sv-SE',
+    torEnabled: false,
+    torCountry: '',
+  },
   handleRestart: () => {},
   handleEndSession: () => {},
   onRecoverRenderer: () => {},
@@ -193,6 +203,37 @@ describe('ViewerToolbar capture row', () => {
 
     renderToolbar({ captureEnabled: false });
     expect(screen.getByRole('menuitem', { name: /Saved files/ })).toBeDisabled();
+  });
+
+  it('offers Custom data to the owner and calls the handler', () => {
+    const onOpenSessionData = vi.fn();
+    renderToolbar({ onOpenSessionData });
+
+    const row = screen.getByRole('menuitem', { name: /Custom data/ });
+    expect(row).toBeEnabled();
+
+    fireEvent.click(row);
+    expect(onOpenSessionData).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides Custom data from a view-only share and disables it while disconnected', () => {
+    renderToolbar({ viewOnly: true });
+    expect(screen.queryByRole('menuitem', { name: /Custom data/ })).toBeNull();
+    cleanup();
+
+    renderToolbar({ isConnected: false });
+    expect(screen.getByRole('menuitem', { name: /Custom data/ })).toBeDisabled();
+  });
+
+  it('shows the stored launch parameters on hover over the session id', () => {
+    renderToolbar();
+
+    const chip = screen.getByText('sess-123');
+    expect(chip).toHaveAttribute('title');
+    const title = chip.getAttribute('title') || '';
+    expect(title).toContain('1280x720 · 30 fps · chromium');
+    expect(title).toContain('timezone Europe/Stockholm · locale sv-SE');
+    expect(title).toContain('tor off');
   });
 
   it('surfaces a capture error inline', () => {

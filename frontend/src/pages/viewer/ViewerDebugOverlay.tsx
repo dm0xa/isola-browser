@@ -2,6 +2,7 @@ import { X, Check, Copy, AlertCircle } from 'lucide-react';
 import type { IsolaQuality } from '../../hooks/useIsolaStream';
 import type { IsolaStreamMetrics } from '../../hooks/useIsolaStream';
 import { shortInputTarget } from './viewerUtils';
+import { type SessionParams } from '../../lib/sessionParams';
 
 export type ViewerDebugOverlayProps = {
   enabled: boolean;
@@ -21,13 +22,15 @@ export type ViewerDebugOverlayProps = {
   quality: IsolaQuality;
   rendererStallVisible: boolean;
   rendererStalledSec: number;
+  /** Stored launch parameters; the same object the id tooltip and report use. */
+  sessionParams: SessionParams;
 };
 
 export function ViewerDebugOverlay(props: ViewerDebugOverlayProps) {
   const {
     enabled, transport, id, debugCopied, debugCopyFailed, copyDebugOverlay, toggleDebug,
     latencyColor, latencyText, fpsColor, fpsText, isolaMetrics, loadMs, loadSec,
-    quality, rendererStallVisible, rendererStalledSec,
+    quality, rendererStallVisible, rendererStalledSec, sessionParams,
   } = props;
   if (!enabled) return null;
   // Layout facts for "the viewer does not fill the screen" reports: the
@@ -81,6 +84,16 @@ export function ViewerDebugOverlay(props: ViewerDebugOverlayProps) {
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
+          </div>
+          <div className="mb-1 text-[10px] text-cyan-400">
+            <span className="font-bold">session</span> {sessionParams.resolution || '?'}
+            {' · '}{sessionParams.frameRate > 0 ? `${sessionParams.frameRate} fps` : 'fps default'}
+            {' · '}{sessionParams.browserType || '?'}
+          </div>
+          <div className="mb-1 text-[10px] text-cyan-400">
+            <span className="font-bold">identity</span> tz {sessionParams.timezone || 'UTC (default)'}
+            {' · '}locale {sessionParams.locale || 'en-US (default)'}
+            {sessionParams.torEnabled ? ` · tor ${sessionParams.torCountry || 'on'}` : ''}
           </div>
           <div className="mb-1 text-[10px] text-cyan-400">
             <span className="font-bold">view</span> {view}

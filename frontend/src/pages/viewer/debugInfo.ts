@@ -17,6 +17,13 @@ export type DebugSessionInfo = {
   idShort: string;
   targetUrl: string;
   resolution: string;
+  frameRate: number;
+  browserType: string;
+  /** Page-visible identity; empty = the image default (UTC / en-US). */
+  timezone: string;
+  locale: string;
+  torEnabled: boolean;
+  torCountry: string;
   status: string;
   viewOnly: boolean;
   shadow: boolean;
@@ -99,6 +106,12 @@ export type ViewerDebugInput = {
   sessionId?: string;
   targetUrl?: string;
   resolution?: string;
+  frameRate?: number;
+  browserType?: string;
+  timezone?: string;
+  locale?: string;
+  torEnabled?: boolean;
+  torCountry?: string;
   status: string;
   viewOnly: boolean;
   shadow: boolean;
@@ -255,6 +268,12 @@ export function buildDebugInfo(input: ViewerDebugInput): ViewerDebugInfo {
     idShort: input.sessionId ? input.sessionId.slice(0, 8) : '',
     targetUrl: input.targetUrl ?? '',
     resolution: input.resolution ?? '',
+    frameRate: input.frameRate ?? 0,
+    browserType: input.browserType ?? '',
+    timezone: input.timezone ?? '',
+    locale: input.locale ?? '',
+    torEnabled: input.torEnabled ?? false,
+    torCountry: input.torCountry ?? '',
     status: input.status,
     viewOnly: input.viewOnly,
     shadow: input.shadow,
@@ -335,7 +354,9 @@ export function formatDebugInfo(info: ViewerDebugInfo): string {
     'session',
     `  ${info.transport} · ${s.idShort || '?'}`,
     `  target        ${s.targetUrl || '?'}`,
-    `  resolution    ${s.resolution || '?'}`,
+    `  launch        ${s.resolution || '?'} · ${s.frameRate > 0 ? `${s.frameRate} fps` : 'fps default'} · ${s.browserType || '?'}`,
+    `  identity      tz ${s.timezone || 'UTC (default)'} · locale ${s.locale || 'en-US (default)'}`,
+    `  tor           ${s.torEnabled ? `on${s.torCountry ? ` (${s.torCountry})` : ''}` : 'off'}`,
     `  status        ${s.status} · viewonly ${yesNo(s.viewOnly)} · shadow ${yesNo(s.shadow)} · viewers ${s.viewerCount}`,
     `  timer         ${remainingText(s.remainingSec, s.isUnlimited)} · unlimited ${yesNo(s.isUnlimited)}`,
     `  quality       ${s.quality} · net capture ${yesNo(s.networkCaptureEnabled)} · tabs ${s.browserTabCount}`,

@@ -19,6 +19,7 @@ import { SessionDataDialog } from '../components/SessionDataDialog';
 import { ViewerStreamShell } from './viewer/ViewerStreamShell';
 import { ViewerDebugOverlay } from './viewer/ViewerDebugOverlay';
 import { buildDebugInfo, copyTextToClipboard, formatDebugInfo } from './viewer/debugInfo';
+import { EMPTY_SESSION_PARAMS, mergeSessionParams, type SessionParams } from '../lib/sessionParams';
 import { captureResolutionFor, parseResolution } from '../lib/resolution';
 import { sessionErrorDetail } from './viewer/viewerUtils';
 
@@ -71,6 +72,9 @@ export default function ViewerPage() {
   // but a ref cannot re-render the badge).
   const [torEnabled, setTorEnabled] = useState(false);
   const [torCountry, setTorCountry] = useState('');
+  // Launch parameters as the server stored them: the id chip's hover text and
+  // the debug report read this one object, so they cannot disagree.
+  const [sessionParams, setSessionParams] = useState<SessionParams>(EMPTY_SESSION_PARAMS);
   // The launch overlay lives above the router (see lib/launchProgress), so a
   // session started from RunPage keeps the same overlay and only advances its
   // phases from here. For direct deep links the flow is inactive and the
@@ -118,7 +122,18 @@ export default function ViewerPage() {
     resolution: string;
     browserType: string;
     torEnabled: boolean;
-  }>({ targetUrl: '', transport: 'isola', resolution: '', browserType: '', torEnabled: false });
+    /** Page-visible identity the session launched with; a restart keeps it. */
+    timezone: string;
+    locale: string;
+  }>({
+    targetUrl: '',
+    transport: 'isola',
+    resolution: '',
+    browserType: '',
+    torEnabled: false,
+    timezone: '',
+    locale: '',
+  });
   // The landing-page URL shown in the isola tab strip before the runner has
   // emitted any tabs (or while the active tab is still on about:blank).
   const [seedTargetUrl, setSeedTargetUrl] = useState('');
@@ -464,6 +479,18 @@ export default function ViewerPage() {
         if (typeof data.tor_country === 'string') {
           setTorCountry(data.tor_country);
         }
+        // Latest stored launch parameters (toolbar hover + debug report). The
+        // helper returns the previous object when nothing changed, so the 1 Hz
+        // poll does not re-render the toolbar on every tick.
+        setSessionParams((prev) => mergeSessionParams(prev, data));
+        // The identity is baked into the browser's Intl/Date/languages; a
+        // restart that omitted it would silently change the profile.
+        if (typeof data.timezone === 'string') {
+          sessionConfigRef.current.timezone = data.timezone;
+        }
+        if (typeof data.locale === 'string') {
+          sessionConfigRef.current.locale = data.locale;
+        }
 
         if (data.status === 'running') {
           const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -736,6 +763,8 @@ export default function ViewerPage() {
         browser_theme: theme,
         tor_enabled: sessionConfigRef.current.torEnabled,
         transport: 'isola',
+        ...(sessionConfigRef.current.timezone ? { timezone: sessionConfigRef.current.timezone } : {}),
+        ...(sessionConfigRef.current.locale ? { locale: sessionConfigRef.current.locale } : {}),
       });
 
       const newId: string | undefined = res.data?.id;
@@ -905,7 +934,13 @@ export default function ViewerPage() {
     transport,
     sessionId: id,
     targetUrl: sessionConfigRef.current.targetUrl || seedTargetUrl,
-    resolution: sessionConfigRef.current.resolution,
+    resolution: sessionConfigRef.current.resolution || sessionParams.resolution,
+    frameRate: sessionParams.frameRate,
+    browserType: sessionParams.browserType || sessionConfigRef.current.browserType,
+    timezone: sessionParams.timezone,
+    locale: sessionParams.locale,
+    torEnabled: sessionParams.torEnabled || sessionConfigRef.current.torEnabled,
+    torCountry: sessionParams.torCountry,
     status,
     viewOnly,
     shadow,
@@ -943,6 +978,7 @@ export default function ViewerPage() {
     errorText, sessionError, audioActive, audioMuted, restarting,
     connectionGeneration, appVersion, appCommit,
     latencyText, fpsText, isolaMetrics,
+    sessionParams,
   ]);
 
   useEffect(() => {
@@ -981,6 +1017,7 @@ export default function ViewerPage() {
         status={status}
         torEnabled={torEnabled}
         torCountry={torCountry}
+        sessionParams={sessionParams}
         extendAvailable={extendAvailable}
         viewOnly={viewOnly}
         onExtend={extend}
@@ -1071,6 +1108,7 @@ export default function ViewerPage() {
         quality={quality}
         rendererStallVisible={rendererStallVisible}
         rendererStalledSec={rendererStalledSec}
+        sessionParams={sessionParams}
       />
 
       {/* Status overlay — restart wins over the regular overlay so any

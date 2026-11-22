@@ -83,6 +83,12 @@ function input(overrides: Partial<ViewerDebugInput> = {}): ViewerDebugInput {
     sessionId: 'abcdef1234567890',
     targetUrl: 'https://example.com/',
     resolution: '1280x720',
+    frameRate: 30,
+    browserType: 'chromium',
+    timezone: 'Europe/Stockholm',
+    locale: 'sv-SE',
+    torEnabled: true,
+    torCountry: 'se',
     status: 'running',
     viewOnly: false,
     shadow: false,
@@ -131,6 +137,27 @@ describe('buildDebugInfo', () => {
     expect(info.session.remainingSec).toBe(512);
     expect(info.session.browserTabCount).toBe(3);
     expect(info.session.networkCaptureEnabled).toBe(true);
+  });
+
+  it('carries the stored launch parameters and identity', () => {
+    const info = buildDebugInfo(input());
+
+    expect(info.session.resolution).toBe('1280x720');
+    expect(info.session.frameRate).toBe(30);
+    expect(info.session.browserType).toBe('chromium');
+    expect(info.session.timezone).toBe('Europe/Stockholm');
+    expect(info.session.locale).toBe('sv-SE');
+    expect(info.session.torEnabled).toBe(true);
+    expect(info.session.torCountry).toBe('se');
+  });
+
+  it('names the image defaults when the session declared no identity', () => {
+    const info = buildDebugInfo(input({ timezone: '', locale: '', frameRate: 0, torEnabled: false, torCountry: '' }));
+    const text = formatDebugInfo(info);
+
+    expect(text).toContain('identity      tz UTC (default) · locale en-US (default)');
+    expect(text).toContain('launch        1280x720 · fps default · chromium');
+    expect(text).toContain('tor           off');
   });
 
   it('collects runtime facts from the browser', () => {

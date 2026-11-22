@@ -13,6 +13,7 @@ import type { CaptureStatus, CaptureStopResult } from '../../lib/captureApi';
 import { elapsedSeconds, formatBytes, formatDuration } from '../../lib/captureFormat';
 import type { CaptureState } from '../../hooks/useCaptureRecording';
 import { ViewerMenuItem } from './ViewerMenuItem';
+import { sessionParamsTooltip, type SessionParams } from '../../lib/sessionParams';
 
 export type ViewerToolbarProps = {
   hideToolbar: boolean;
@@ -28,6 +29,8 @@ export type ViewerToolbarProps = {
   status: string;
   torEnabled?: boolean;
   torCountry?: string;
+  /** Stored launch parameters, shown on hover over the session id. */
+  sessionParams: SessionParams;
   extendAvailable: boolean;
   viewOnly: boolean;
   onExtend: () => Promise<boolean>;
@@ -77,7 +80,7 @@ export type ViewerToolbarProps = {
 export function ViewerToolbar(props: ViewerToolbarProps) {
   const {
     hideToolbar, id, showOverlay, statusText, isReconnecting, isConnected, isola, viewerCount,
-    remainingSec, isUnlimited, status, torEnabled, torCountry, extendAvailable, viewOnly, onExtend, isFullscreen,
+    remainingSec, isUnlimited, status, torEnabled, torCountry, sessionParams, extendAvailable, viewOnly, onExtend, isFullscreen,
     tabBarSlotRef, rendererStallVisible, rendererStalledSec, captureStallVisible, clipboardSynced,
     menuOpen, setMenuOpen, audioMuted, toggleAudio, toggleFullscreen, debugEnabled,
     toggleDebug, networkCaptureEnabled, captureEnabled, captureState, captureStatus,
@@ -160,7 +163,10 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
           <IsolaLogo className="w-9 h-9 mt-1" mini />
         </Link>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-zinc-600 dark:text-gray-500 font-mono">
+          <span
+            className="cursor-help font-mono text-xs text-zinc-600 dark:text-gray-500"
+            title={sessionParamsTooltip(id, sessionParams)}
+          >
             {id?.slice(0, 8)}
           </span>
           {/* Mounted on the first Tor session so it can fade in instead of
