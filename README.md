@@ -2,119 +2,214 @@
 
 <img src="./docs/images/logo.svg" alt="Isola" width="140" />
 
-# 🏝️ isola
+# isola
 
-**isolated browser sandbox**
+**throwaway browser sandboxes for hostile pages**
 
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?style=flat-square&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/dm0xa)
 
 [![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go)](https://go.dev/)
-[![React Version](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react)](https://reactjs.org/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-Supported-2496ED?style=flat-square&logo=docker)](https://www.docker.com/)
-
-
-Isola boots a throwaway Docker container with offscreen Chromium, streams it to your browser over Isola transport (H.264 on WebSocket), and tears the container down the moment you close it. No cookies, history, or state carry over, and any session can be routed over Tor. It's built for looking at untrusted pages without ever putting them on your machine.
-
-![Landing Page](./docs/images/landing-page.png)
-
-[**Try the interface demo →**](https://dm0xa.github.io/isola-browser/)
-
-<sub>Landing, launch overlay and viewer chrome pinned to `example.com`. The demo simulates the session and draws the page locally; nothing is provisioned.</sub>
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
 </div>
 
+Isola opens an untrusted page inside a disposable Docker container, streams the
+browser to your tab over H.264 on a WebSocket, and destroys the container when
+you close it. The page never gets your workstation's cookies, saved logins or
+LAN reach. Around that isolated browser it exposes what a responder actually
+needs: every request with its response headers and TLS verdict where available,
+the redirect chain, tracker and beacon labels, plus on-demand host recon,
+response-body capture and view-only evidence links.
+
+The design follows one rule: **the browser you are looking at must never be yours.**
+
 ---
 
-## Why Isola
+## Jobs it fits
 
-Most "run a browser somewhere else" setups get the demo working and then run into the same handful of walls.
-
-| The problem | What Isola does |
+| Job | What you use |
 | :--- | :--- |
-| **Automation runs with your credentials.** Whatever the browser can reach, the page can reach — your cookies, your logged-in dashboards, your LAN, your cloud metadata endpoint. One hostile page is one incident. | Every session is a throwaway container: read-only rootfs, capabilities dropped to the minimum the sandbox needs, `no-new-privileges`, a non-root user, and a **fail-closed egress firewall** (HTTP, HTTPS, DNS, NTP only; RFC1918/ULA blocked). It refuses to start without an enforcing AppArmor/SELinux profile. |
-| **VNC and WebRTC are the wrong shape for a web app.** VNC ships pixels but needs a client, a websockify bridge and another port, and input feels remote. WebRTC needs ICE, TURN, signalling and a relay fleet — and finds its way around proxies in ways you did not plan for. | Video is **H.264 over the same WebSocket as everything else** (`channel=isola`) and decoded in the tab with WebCodecs (MSE fallback); input is JSON dispatched to CDP (`channel=input`). No VNC, no TURN — **one port, one TLS certificate, one firewall rule**. |
-| **Clicks stop at iframes.** Synthetic OS-level clicks land on the parent `<iframe>`; the cross-origin child — a video player, a captcha, a payment widget — never sees them. The picture updates, the click does nothing. | Input is dispatched on the **iframe's own CDP target**, so cross-origin embeds receive real events. |
-| **You cannot see what actually happened.** A screenshot at the end says nothing about the redirect chain, the third-party calls, the cookies that were set, or where a host really resolved. | CDP traffic is streamed beside the video: every request (method, status, type, size, source IP), a request graph, per-host IPs, console output and cookies — attributed per browser tab and flagged when something looks off. Scripts get the same log over MCP. |
-| **State bleeds between tasks.** A long-lived shared browser accumulates logins and tabs, so yesterday's session becomes today's leak — into the next task, or into an agent's context. | **A new container per session, destroyed on close.** No cookies, history or tabs carry over, and a session can be routed over Tor for IP-level separation. |
-| **Handing someone your live session hands them your session.** Demos, reviews and support need a second pair of eyes, not a shared cookie jar. | **View-only share links** with their own token, resolvable and revocable per session. |
-| **Agents need a browser without becoming a liability.** A model that can click anything in a logged-in browser can click *anything*. | MCP exposes a **bounded surface** — `snapshot` (accessibility tree with refs), `screenshot`, `inspect_session`, `navigate`, `click`, `type`, `get_network` — never raw CDP or WebDriver. The sandbox confines whatever the model gets wrong. |
-| **A browser per user is heavy; a shared browser is unsafe.** VMs are slow to provision and costly to leave idle; a shared pool gives back exactly the isolation you wanted. | One container per session with **hard caps** (RAM, CPU, PIDs), an optional **warm pool** for instant starts, and **multisession with an admission cap** that answers `429` + `Retry-After` instead of thrashing the host. The CPU cap fits itself to a host with fewer cores than the default. |
-| **The operational surface keeps growing.** A VNC broker, a TURN server, media relays, an orchestrator, a browser fleet. | **One Go binary** with the UI embedded, plus one build-time sandbox image and a single Compose file. No external services, no extra ports. |
-
-The whole design follows from one constraint: the browser you are looking at should **never be your browser**. The transport, the traffic panel, the timers and the caps all exist to keep that true while still being usable from a tab.
+| **Phishing / suspicious link triage.** Decide whether a link is hostile without asking your workstation to resolve it. | Throwaway session, redirect chain, per-request status + source IP, TLS `security_state`, security-header posture, cookie jar, Tor if the page should not see your IP. |
+| **Drive-by and tracker analysis.** See who the page contacts, not just what it rendered. | Request graph, per-host resolved IPs, first/third-party and known tracker/beacon families, console output, flag filters for IP-literal hosts, plain `http`, risky TLDs, random-looking names and odd ports. |
+| **Infrastructure recon from the sandbox.** Pivot from a host you found in traffic to its infrastructure. | Passive DNS/PTR/CNAME/ASN, bounded active checks (`robots.txt`, `sitemap`, `security.txt`, `/.well-known`, favicon hash), all fetched from inside the sandbox. |
+| **Authenticated review without giving up your session.** Reproduce an issue behind a login without exporting your own browser state. | `POST /api/sessions/{id}/seed` (or **Custom data…**) injects cookies, extra request headers and `localStorage`/`sessionStorage` into the live page; nothing is logged or stored on the host. |
+| **Evidence and hand-off.** Put reproducible artefacts in a ticket. | **Record** archive of every response body (URL, status, MIME, sizes, SHA-256, URL-shaped file tree), `graph.png`, screenshots, and a revocable **view-only** share link. |
+| **Scripted or agent-driven triage.** Run the same checks without a human clicking. | REST `GET /api/sessions/{id}/network` (traffic log with `type`/`host_contains`/`url_contains`/`limit`), or MCP at `POST /mcp` with a bounded tool surface (`get_network`, `get_headers`, `get_posture`, `host_intel`, `probe_host`, `resource_graph`, `get_links`, `snapshot`, `screenshot`, …). No raw CDP/WebDriver. |
+| **Region-conditional behaviour.** A page behaves differently by locale or timezone. | Per-session `timezone` + `locale`, sandbox never looks like one fixed geography. |
 
 ---
 
-## Features
+## Isolation
 
-- **Disposable containers** — Wiped on close. Seccomp, dropped capabilities, read-only rootfs.
-- **Electron sandbox** — Offscreen Chromium in Docker (`isola-browser:electron`).
-- **Isola transport** — H.264 Annex-B over WebSocket; JSON input to CDP. No VNC, no WebRTC. See [docs/transport.md](./docs/transport.md).
-- **Traffic panel** — Per-tab requests, request graph, domains, response headers + security posture, tracker inventory and on-demand recon, captured over CDP and streamed beside the video. See [Traffic panel](#traffic-panel).
-- **One TCP port** — UI, API, and WebSocket relay share a single port (default `8080`), so it drops cleanly behind a reverse proxy with one hostname, one TLS certificate, and one firewall rule — no extra media or VNC ports to open.
-- **Optional Tor** — SOCKS for the session, toggled next to the launch box; the state is shown by a footer chip and a halo on the logo, and a Tor session carries a `Tor · <exit>` badge in its toolbar.
-- **Installable UI** — Chromium installs the landing page as a desktop app (manifest, launcher icons, a dismissible **Install app** pill on the landing page), so isola runs in its own window. See [docs/getting-started.md](./docs/getting-started.md#optional-install-it-as-an-app).
-- **Share links** — View-only tokens.
-- **Timers and idle reaper** — Configurable session length and inactivity kill.
-- **REST API** — Create, extend, delete, metrics.
-- **MCP** — Streamable HTTP at `POST /mcp`.
+Everything below is enforced per session (see [`docs/security.md`](./docs/security.md) and
+[`security_args.go`](./backend/pkg/orchestrator/security_args.go)):
 
----
+- **Throwaway container.** One container per session, created on launch, destroyed on close. No cookies, history, downloads or tabs survive.
+- **No mount and no sysctl.** `--cap-drop ALL` with only the eight capabilities the entrypoint needs, and **not** `SYS_ADMIN` — so a compromised in-container root cannot unmount the read-only `/proc` masks, write `kernel.core_pattern`, or mount `/proc/kcore`.
+- **Read-only rootfs**, `tmpfs` for `/tmp`, `/run`, `/var/run`, `/home/isolauser` and a `/dev/shm` sized from the session resolution. `no-new-privileges`. Workload runs as `isolauser` after the firewall is applied.
+- **Fail-closed egress.** `iptables` **and** `ip6tables` permit HTTP, HTTPS, DNS and NTP only, and block RFC1918/ULA, so a page cannot probe your LAN or cloud metadata. Startup fails if the rules cannot be applied.
+- **Fail-closed LSM.** The entrypoint refuses to serve a sandbox unless AppArmor's `docker-default` or SELinux's container policy is enforcing (`ISOLA_REQUIRE_MAC=0` overrides — don't).
+- **Ports.** `8080` is the only externally reachable port. Streamer `5900` and the CDP relay `9223` are published to loopback only. Inside the container, 5900/9223 accept the backend peer only, and Chromium's debugger is `127.0.0.1`.
+- **Hard caps.** `--memory 2g --memory-swap 2g`, `--cpus 3`, `--pids-limit 512` by default — DoS guards, configurable per deployment.
+- **No anon session access.** A session token grants view + control; a share token is view-only and gets `403` on input or control. A session id alone is never enough. (Creation is open unless `ISOLA_API_TOKEN` gates `POST /api/sessions`.)
+- **Credential handling.** Seeded cookies/headers/storage go once to the sandbox over loopback, are never logged, and are never persisted; responses carry counts only. Cookies are jar-wide for the seeded domain; extra headers are per tab and are dropped when the input channel re-attaches (a tab switch) — re-run the seed to restore them. Capture archives are the one exception that writes bytes to the host, and they are opt-in.
 
-## Requirements
+The sandbox browser **ignores certificate errors** on purpose: a phishing page
+with a broken chain still renders, and the traffic panel reports CDP's own
+`tls.security_state` (`insecure` / `insecure-broken` / `neutral`) instead of
+pretending the transport was safe. Header posture grades are capped when the
+transport is not trustworthy.
 
-Isola is two pieces with different footprints — the **control plane** (the `isola` process: UI, API, WebSocket relay) and the per-session **browser sandbox** (a container).
-
-**Control plane**
-
-| | Minimum | Recommended |
-| :--- | :--- | :--- |
-| CPU | 1 vCPU | 2 vCPU |
-| RAM | 128 MB | 256 MB |
-| Disk | ~50 MB | ~100 MB |
-| OS | Linux (x86-64/arm64) or macOS | — |
-| Network | one TCP port (default `8080`) | — |
-
-The process itself is tiny — a single Go binary, **~16 MB RSS idle**. The figures above are host headroom, not the process footprint. It runs with **no Docker and no browser** — the UI and API come up, but sessions cannot launch until the sandbox is available.
-
-**Per concurrent browser session** — each session is a Docker container hard-capped at **2 GB RAM** (`--memory 2g`), **3 CPU** (`--cpus 3`) and **512 PIDs** (all three configurable: `ISOLA_SESSION_MEMORY_MB`, `ISOLA_SESSION_CPUS`, `ISOLA_SESSION_PIDS`). Idle (an empty page) measures **~320 MB**; budget **~1–2 GB RAM** per active session depending on the page. The shared `isola-browser:electron` image is ~1.2 GB of host disk, and each pre-started ("warm") container costs one session's RAM more. The CPU cap can never exceed the host's core count — the Docker daemon refuses `--cpus` above it — so a host with fewer than 3 cores defaults to its core count, and an explicit `ISOLA_SESSION_CPUS` must not be higher.
-
-**Full stack (to actually launch sessions):** Docker 24+ with BuildKit + Compose v2, the `docker` **CLI on `PATH`** (isola drives Docker through the CLI, not the socket API directly) and access to `/var/run/docker.sock`. Session containers join a Docker network named `browser-net`, which the Compose stack creates and a binary-only install must create itself (`docker network create browser-net`). Add the container images — `isola` ~82 MB and `isola-browser:electron` ~1.2 GB — so budget **≥5 GB** with build cache. Recommended host for a small deployment (2–3 concurrent sessions): **4+ vCPU, 8+ GB RAM, 20+ GB disk**.
-
-**All-in-one server** (control plane + Docker + sandboxes on one host) — size by concurrency at **~2 GB RAM and ~1–2 vCPU per session**, plus **~2 GB** baseline for the OS, Docker and the control plane:
-
-| Concurrent sessions | vCPU | RAM |
-| :--- | :--- | :--- |
-| 2–3 | 4 | 8 GB |
-| ~5 | 8 | 16 GB |
-| ~10 | 16 | 32 GB |
-
-So a **16 GB / 8 vCPU** all-in-one host comfortably runs about **5 concurrent sessions** (more if the pages are light — idle sessions measure ~320 MB, so the 2 GB cap is a worst case).
-
-isola is **multisession by default** — each launch adds a session and nothing tears down the caller's other ones. Set `ISOLA_MAX_SESSIONS` to the number the host can hold; launches past it get HTTP `429` (`max_sessions_reached`). See [Configuration → Cap concurrent sessions](./docs/configuration.md#cap-concurrent-sessions).
-
-Details: [Getting Started → Requirements](./docs/getting-started.md#requirements).
+**Optional Tor.** A session can egress through SOCKS/Tor, with an optional exit
+country applied via `StrictNodes` — a country with no reachable exit fails the
+session rather than leaking elsewhere. This is **routing separation, not an
+anonymity guarantee**; exit pinning narrows the exit pool.
 
 ---
 
-## Quick Start
+## A triage, end to end
 
-### Installer
+```bash
+# 1. Launch — the container is created here.
+curl -s -X POST http://localhost:8080/api/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://suspicious.example","network_monitor":true,
+       "timezone":"Europe/Stockholm","locale":"sv-SE"}' | tee /tmp/s.json
 
-Downloads `isola`, verifies the SHA-256 in `checksums.txt`, and can install a systemd unit or LaunchAgent. It prompts to install Docker if missing, then fetches the per-session sandbox image at the tag matching this release (`ghcr.io/dm0xa/isola-browser:v<version>`), falling back to the floating `:electron` tag and then to a local build from a checkout. `ISOLA_BROWSER_IMAGE_REMOTE` pins one exact reference (empty skips the registry); the image the binary actually launches is set with `ISOLA_BROWSER_IMAGE`.
+ID=$(jq -r .id /tmp/s.json); TOKEN=$(jq -r .session_token /tmp/s.json)
+
+# 2. Collect traffic with headers, TLS verdicts, redirects and tracker labels.
+curl -s "http://localhost:8080/api/sessions/$ID/network?limit=200" \
+  -H "X-Session-Token: $TOKEN"
+#    Same document over MCP: get_network (same type/host_contains/url_contains/limit
+#    filters). The viewer's Analysis panel shows the same log.
+
+# 3. Recon a host seen in that traffic (passive first, active on request).
+curl -s "http://localhost:8080/api/sessions/$ID/intel?host=suspicious.example&mode=dns" \
+  -H "X-Session-Token: $TOKEN"
+
+# 4. Render the request graph for the ticket.
+curl -s -o graph.png "http://localhost:8080/api/sessions/$ID/graph.png?theme=light" \
+  -H "X-Session-Token: $TOKEN"
+
+# 5. Optional: record every downloaded body, stop, then export the archive.
+REC=$(curl -s -X POST "http://localhost:8080/api/sessions/$ID/capture/start" \
+  -H "X-Session-Token: $TOKEN")
+ARCHIVE=$(jq -r .archive_id <<<"$REC"); KEY=$(jq -r .archive_key <<<"$REC")
+# ... visit the page ...
+curl -s -X POST "http://localhost:8080/api/sessions/$ID/capture/stop" -H "X-Session-Token: $TOKEN"
+curl -s -o "$ARCHIVE.zip" "http://localhost:8080/api/captures/$ARCHIVE/download" \
+  -H "Authorization: Bearer $KEY"
+```
+
+The same workflow exists in the UI (`Analysis` panel under the canvas, or
+`/session/<id>/network`), over MCP, and as the REST calls above. The panel is
+view-only; raw CDP is never exposed to the client.
+
+---
+
+## What the traffic view answers
+
+| Tab | Question |
+| :--- | :--- |
+| **Network** | Every request: method, status, type, size, source IP; filter by tab, text, status family, type, or `flagged`. |
+| **Graph** | The initiator → host → resource chain, colour-coded by resource class. |
+| **Domains** | One row per host: request count, bytes, resolved IPs, and that host's latest requests. |
+| **Headers** | Document response headers, TLS certificate summary, and a security-header posture grade (HSTS, CSP, frame protection, nosniff, Referrer-Policy, Permissions-Policy, COOP/COEP). |
+| **Trackers** | Third-party hosts, known tracker families, beacons, cookie-family fingerprints. |
+| **Recon** | On-demand passive DNS/PTR/ASN/CNAME plus bounded active probes. |
+| **Console** | Console output for the selected tab, errors and warnings highlighted. |
+| **Cookies** | Name, value, domain, path, expiry, SameSite, flags — what the page tried to plant. |
+
+Requests carry redirect chains with each hop's status and TTFB, cache and
+service-worker badges, first/third-party and tracker labels, and `origin_host`
+(the navigation the request belongs to — an iframe inherits its parent). They
+are flagged on IP-literal hosts, plain `http`, risky TLDs, random-looking
+hostnames and odd ports; a domain row inherits its worst request's flags.
+
+Recon is scoped so it can be used on a live host without surprises: passive mode
+uses DNS only (Team Cymru TXT for ASN; WHOIS/43 is outside the allowlist), active
+mode makes one bounded GET per check (8 s, 2 MiB, ≤3 redirects on the same
+registrable domain), refuses targets resolving to a private address, and contacts
+no third-party provider. The proxied reply is capped at 4 MiB and answers `502`
+rather than a truncated `200`. Nothing leaves the sandbox until you name a host.
+
+Screenshots below use a synthetic capture (`*.example` hosts, TEST-NET addresses,
+documentation ASN) — no live host was visited, and every value is demo data.
+
+| Requests — flags on the row | Row detail — 301→302 chain, TTFB, saved hash |
+| :---: | :---: |
+| ![Analysis panel — request list](./docs/images/demo-analysis-network.png) | ![Analysis panel — redirect chain and failure detail](./docs/images/demo-analysis-redirects.png) |
+| **Request graph — pages, hosts, exfil node in red** | **Headers, posture and TLS verdict** |
+| ![Analysis panel — request graph](./docs/images/demo-analysis-graph.png) | ![Analysis panel — document headers and posture](./docs/images/demo-analysis-headers.png) |
+| **Trackers, beacons and cookie families** | **Passive DNS and bounded probes** |
+| ![Analysis panel — tracker inventory](./docs/images/demo-analysis-trackers.png) | ![Analysis panel — recon results](./docs/images/demo-analysis-recon.png) |
+| **Cookie jar the page planted** | **Console errors and mixed content** |
+| ![Analysis panel — cookies](./docs/images/demo-analysis-cookies.png) | ![Analysis panel — console output](./docs/images/demo-analysis-console.png) |
+
+---
+
+## Evidence and hand-off
+
+- **Record** (opt-in, `ISOLA_CAPTURE_ENABLED=true`) saves every response body the sandbox downloads, deduplicated by SHA-256, as a readable URL tree under `$ISOLA_DATA_DIR/captures/<session_id>/files/<host>/<path>…` with `index.txt` and `meta.json`. Archives survive the session and are downloadable individually or as a zip. Opt-in because they write real bytes to host disk; retention, per-file, per-session and total quotas are enforced.
+- **Captured bytes are hostile.** They are served as `Content-Disposition: attachment` with `nosniff`, outside the app origin; the viewer previews text/images only and shows HTML as source.
+- **Blind spots, by construction:** memory-cache hits, `blob:`/`data:` payloads, media responses, WebSocket/SSE frames, POST bodies, worker/OOPIF traffic, and everything after a container crash mid-record.
+- **Share links** are view-only, per session, listable and revocable. Send one to a second responder instead of your token.
+- **`graph.png`** renders the captured network headlessly (`theme=dark|light`) for a ticket or report; MCP `resource_graph` returns the same image.
+
+---
+
+## Interfaces
+
+| Method | Path | Auth | Purpose |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/sessions` | optional bearer | Create (`url`, `network_monitor`, `tor_enabled`, `timezone`, `locale`, `bandwidth_kbps`, …) |
+| `GET` / `DELETE` / `PATCH` | `/api/sessions/{id}` | session token | Inspect, destroy, extend |
+| `GET` | `/api/sessions/{id}/intel` | session token | Recon (`host`/`ips`, `mode=dns\|probe\|all`, `checks=…`) |
+| `GET` | `/api/sessions/{id}/network` | session token | Traffic log: every request with headers, TLS verdict, redirects, tracker labels (`type`, `host_contains`, `url_contains`, `limit`) |
+| `GET` | `/api/sessions/{id}/graph.png` | session token | Request-graph PNG |
+| `POST` | `/api/sessions/{id}/seed` | session token | Inject cookies, headers, web storage into the live page |
+| `POST` | `/api/sessions/{id}/capture/start\|stop` | session token | Record response bodies |
+| `GET` | `/api/captures/{id}` … | archive key | Archive metadata, blobs, readable files, zip |
+| `POST` / `GET` | `/api/sessions/{id}/shares` | session token | Create / list view-only links |
+| `DELETE` | `/api/sessions/{id}/shares/{token}` | session token | Revoke one |
+| `WS` | `/ws/{id}` | session token (query) | `channel=isola` video, `channel=input` mouse/keys/tabs |
+| `POST` | `/mcp` | bearer | MCP, opt-in |
+
+OpenAPI: `GET /api/openapi.json`. Narrative: [`docs/api.md`](./docs/api.md).
+Input is JSON dispatched to CDP (`Input.*`); raw CDP/WebDriver is not exposed.
+The traffic log — every entry whole, with its headers, TLS verdict, redirect
+chain, `origin_host` and tracker/beacon labels — is available as
+`GET /api/sessions/{id}/network` over REST and as MCP `get_network`, with the
+same `type`/`host_contains`/`url_contains`/`limit` filters. MCP adds the shaped
+projections (`get_headers`, `get_posture`, `get_redirects`, `get_trackers`,
+`get_links`), and the panel renders all of it.
+
+**MCP** is off unless `ISOLA_MCP_ENABLED=true` and a token of ≥32 characters is
+set; startup fails otherwise. Tools: `create_session`, `navigate`,
+`set_session_data`, `inspect_session`, `snapshot`, `screenshot`, `click`, `type`,
+`get_network`, `get_headers`, `get_posture`, `get_redirects`, `get_trackers`,
+`host_intel`, `probe_host`, `resource_graph`, `get_links`, `close_session`.
+
+---
+
+## Run it
+
+**Installer** — downloads `isola`, verifies SHA-256 against `checksums.txt`,
+optionally installs a systemd unit or LaunchAgent, pulls the sandbox image
+(`ghcr.io/dm0xa/isola-browser:v<version>`), and reports whether the host enforces
+an LSM profile.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dm0xa/isola-browser/main/scripts/install.sh | bash
 ```
 
-Read it first: `curl -fsSL https://raw.githubusercontent.com/dm0xa/isola-browser/main/scripts/install.sh | less`. In-repo source: [`scripts/install.sh`](./scripts/install.sh). `ISOLA_INSTALL_DIR` / `ISOLA_VERSION` override the install location and version; the default is `/opt/isola`, falling back to `~/.isola` when the invoking user cannot write it. Service environment lives in `<install dir>/isola.env`. The installer reports whether the host enforces an AppArmor/SELinux profile — sessions fail closed without one, until you set `ISOLA_REQUIRE_MAC=0` (not recommended). Then open <http://localhost:8080>.
+Read it first if you prefer: `curl -fsSL …/install.sh | less`, or use
+[manual install](./docs/deployment.md#manual-install). Then open
+<http://localhost:8080>.
 
-Prefer not to pipe a script to a shell? [Manual install](./docs/deployment.md#manual-install) does the same thing by hand — download the release tarball, verify its SHA-256, pull the sandbox image and create the network.
-
-### From source
-
-Needs **BuildKit** and **Compose v2**. This is also how you build `isola-browser:electron`.
+**From source** — needs BuildKit and Compose v2:
 
 ```bash
 git clone https://github.com/dm0xa/isola-browser.git
@@ -122,197 +217,46 @@ cd isola-browser
 docker compose up --build
 ```
 
-Open <http://localhost:8080>. One process serves the embedded UI, the API, and the WebSocket relay.
+**Hard requirements:** Docker 24+ with the `docker` CLI on `PATH` and access to
+`/var/run/docker.sock`, the `browser-net` bridge network, and an enforcing
+AppArmor/SELinux profile on the host.
 
-The first `up --build` compiles the frontend and Go binary into **`isola`**, and builds **`isola-browser:electron`** (the per-session sandbox). Later starts reuse cached layers. No `.env` is required.
+**Sizing.** Control plane: one Go binary, ~16 MB RSS idle, one TCP port.
+Each session is hard-capped at 2 GB RAM / 3 CPU / 512 PIDs and measures ~320 MB
+idle; budget ~1–2 GB per active page. All-in-one host: ~2 GB baseline plus
+~2 GB RAM and 1–2 vCPU per concurrent session (4 vCPU / 8 GB ≈ 2–3 sessions;
+8 vCPU / 16 GB ≈ 5). Set `ISOLA_MAX_SESSIONS`; launches past it get `429` with
+`Retry-After` instead of thrashing the host. The image is ~1.2 GB of host disk.
 
-### Customization (optional)
-
-```bash
-cp .env.example .env
-# edit .env, then:
-docker compose up --build
-```
-
-Every variable is documented in [`.env.example`](./.env.example). Full reference: [docs/configuration.md](./docs/configuration.md).
-
-### CLI shortcuts (optional)
-
-```bash
-brew install just          # macOS
-just up                    # docker compose up --build -d
-just logs                  # docker compose logs -f
-just down                  # docker compose down
-```
+**Before exposing it beyond localhost:** set `ISOLA_API_TOKEN` (each token ≥ 32
+chars) and `RATE_LIMITING_ENABLED=true`, keep
+`DISABLE_URL_VALIDATION=false`, enable MCP only with a strong token, set
+`TRUSTED_PROXY_CIDRS` behind a proxy, and terminate TLS in front. The
+community binary has no user accounts — API, session and share tokens are the
+whole access model. Details:
+[`docs/security.md`](./docs/security.md),
+[`docs/deployment.md`](./docs/deployment.md),
+[`docs/configuration.md`](./docs/configuration.md).
 
 ---
 
-## Development
+## Limits worth stating up front
 
-Go 1.26+, Node 22+, and [Just](https://github.com/casey/just):
-
-```bash
-cp .env.example .env
-just setup                  # npm install + go mod tidy + build frontend
-just build-backend          # API-only host (`backend/isola`); UI embed is cmd/single-user
-just test-backend           # go test ./...
-```
-
-Binaries, gitignore names, and helpers: [docs/binaries.md](./docs/binaries.md).
-
-This repository is self-contained: it builds and tests on its own. The `just` recipes skip any tree that is not present in this checkout.
-
-The Compose file is [`docker-compose.yml`](./docker-compose.yml). The local full stack (`just up-dev`: nginx + Vite + backend) is [`deploy/docker-compose.yml`](./deploy/docker-compose.yml).
-
----
-
-## Architecture
-
-```mermaid
-graph LR
-    User([User]) --> UI[Embedded React UI]
-    UI --> GoBackend[Go API and WS proxy]
-    GoBackend --> Orchestrator[Docker orchestrator]
-    Orchestrator --> ElectronNode[Electron sandbox]
-    ElectronNode --> Streamer[isola-streamer]
-    Streamer --> GoBackend
-```
-
-| Component | Technology | Role |
-| :--- | :--- | :--- |
-| **Frontend** | React 18 + Vite + TypeScript + Tailwind | SPA, embedded in the Go binary. |
-| **API** | Go (`chi`) | Session lifecycle and shares. |
-| **WS relay** | Go (`gorilla/websocket`) | Duplex to `isola-streamer`. See [`proxy.go`](./backend/pkg/wsproxy/proxy.go). |
-| **Orchestrator** | Go Docker client | Creates and kills session containers. See [`orchestrator.go`](./backend/pkg/orchestrator/orchestrator.go). |
-| **Store** | In-memory | Session routing with TTL. |
-| **Browser node** | Electron + `isola-streamer` | Offscreen capture, H.264, WebSocket on container port 5900. |
-
-More: [docs/architecture.md](./docs/architecture.md).
-
----
-
-## Security
-
-Defense in depth so a hostile page stays in the box:
-
-- **Network** — Session containers join `browser-net`. Isola itself publishes **8080**. Streamer **5900** and the CDP relay **9223** are bound to loopback on the host, not `0.0.0.0`.
-- **Outbound firewall** — Per-container `iptables` / `ip6tables` (fail-closed): HTTP, HTTPS, DNS, NTP; RFC1918 / ULA blocked.
-- **Inbound ACL** — 5900/9223 accept the backend peer only (`ISOLA_PROXY_IP` or the container gateway).
-- **Capabilities** — `--cap-drop ALL`, then the minimum needed for the sandbox.
-- **Read-only rootfs** — `tmpfs` for `/tmp`, `/run`, `/home/isolauser`.
-- **Non-root** — Entrypoint sets the firewall as root, then `gosu isolauser`. `no-new-privileges`.
-- **CDP** — Chromium debug port is `127.0.0.1` inside the container.
-- **Seccomp + limits** — Memory, CPU, PIDs.
-- **Third parties** — nothing leaves the sandbox except to your resolver and, for ASN, one DNS TXT. Recon has no provider lookups; the details (and the Tor behaviour) are in [docs/third-parties.md](./docs/third-parties.md).
-
-Full list: [docs/security.md](./docs/security.md).
-
----
-
-## Streaming
-
-Video and audio on `channel=isola`; mouse/keys/tabs on `channel=input` so input is not stuck behind frames. Packet layout, `stream_init` / `stream_reset`, and ABR: [docs/transport.md](./docs/transport.md).
-
-| | Isola |
-| :--- | :--- |
-| **Encode** | H.264 (offscreen → ffmpeg). Annex-B for WebCodecs; fMP4 for MSE. |
-| **Decode** | `VideoDecoder` → canvas (MSE fallback). |
-| **Audio** | Opus → `AudioDecoder` → `AudioContext` (opt-in per session). |
-| **Input** | JSON → CDP `Input.*` |
-| **Bitrate** | Scales with capture area (6 Mbps @ 720p, 2 Mbps floor). Viewer ABR via `set_bitrate`. |
-
-A frozen picture is usually a blocked renderer or empty paint captures; Isola detects those and recovers. If frames keep flowing but the page never changes, that is the page, not the transport. Details and env knobs: [docs/troubleshooting.md](./docs/troubleshooting.md#the-stream-is-blank-or-frozen). Chromium shm must stay in `/dev/shm` — do not add `--disable-dev-shm-usage` (see [`chrome_flags.js`](./browsers/electron-runner/src/chrome_flags.js)).
-
-Warm pool and DNS (plain / DoT / DoH) are configured in [`backend/config.yaml`](./backend/config.yaml). See [docs/configuration.md](./docs/configuration.md).
-
----
-
-## Traffic panel
-
-Isola streams CDP traffic to the viewer alongside the video, so a page can be inspected from the sandbox rather than from your machine. The **Analysis** panel docks under or beside the canvas, pops out into its own browser tab, and is also a full page at `/session/<id>/network`. Five tabs:
-
-| Tab | What it shows |
-| :--- | :--- |
-| **Network** | Every request — method, status, resource type, size, source IP — filterable by browser tab, text, method, status family and resource type. |
-| **Graph** | The request chain (initiator → host → resource) as a diagram, colour-coded by resource class with per-class facets. |
-| **Domains** | One row per host: request count, bytes and the IPs it resolved to, expandable to that host's most recent requests. |
-| **Headers** | Document response headers, the TLS certificate summary, and a security-header posture grade (HSTS, CSP, frame protection, nosniff, Referrer-Policy, Permissions-Policy, COOP/COEP). |
-| **Trackers** | Third-party hosts, known tracker families, beacons and cookie-family fingerprints — who the page talks to, not just what it loaded. |
-| **Recon** | On-demand intelligence for a host: passive DNS/PTR/ASN/CNAME and bounded active probes (robots.txt, security.txt, sitemap, favicon hash). Every probe fetches that host; no provider is contacted. |
-| **Console** | Console output for the selected browser tab, with errors and warnings highlighted. |
-| **Cookies** | Name, value, domain, path, expiry, SameSite and flags. |
-
-Requests are flagged when they are worth a second look — an IP-literal host, plain `http`, a risky TLD, a random-looking hostname, an odd port — and the `flagged` filter narrows the list to just those; a domain row inherits the flags of its worst request. Entries also carry redirect chains with each hop's status code, time-to-first-byte, cache/service-worker badges, and first-party/third-party + tracker labels. Recon only runs when you press its buttons: nothing leaves the sandbox on navigation.
-
-| Requests | Request graph |
-| :--- | :--- |
-| ![Analysis panel — request list](./docs/images/network-tab-requests.png) | ![Analysis panel — request graph](./docs/images/network-tab-graph.jpeg) |
-
-The panel is view-only: raw CDP is not exposed to the client. The same log is available to scripts through MCP `get_network` ([docs/automation.md](./docs/automation.md)), and the panel is only available for sessions created with `network_monitor` ([docs/api.md](./docs/api.md)). The graph can also be rendered headlessly — `GET /api/sessions/{id}/graph.png` or the MCP `resource_graph` tool, both with a `theme` of `dark` or `light`.
-
----
-
-## API
-
-OpenAPI: `GET /api/openapi.json`. Narrative: [docs/api.md](./docs/api.md).
-
-| Method | Path | Auth | Description |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/api/sessions` | Optional API token | Create (`bandwidth_kbps`, `framerate`, …) |
-| `GET` | `/api/sessions/:id` | Session token | Details. `cdp_url` is the **input WebSocket**, not Chrome DevTools. |
-| `DELETE` | `/api/sessions/:id` | Session token | Destroy the container |
-| `PATCH` | `/api/sessions/:id` | Session token | Extend TTL |
-| `WS` | `/ws/:sessionId` | Session token | `channel=isola` (video) or `channel=input` |
-| `POST` | `/mcp` | Bearer | MCP (opt-in) |
-
-- **API create token** (optional): `Authorization: Bearer <token>` on `POST /api/sessions` when `ISOLA_API_TOKEN` / `api.token` is set (one or more, each ≥ 32 chars).
-- **Session token**: `X-Session-Token` header. Returned at create. (The `?session_token=` query form is accepted only on the WebSocket handshake, never on the HTTP API.)
-
-```bash
-curl -X POST http://localhost:8080/api/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"url": "about:blank"}'
-```
-
-```
-ws://localhost:8080/ws/<SESSION_ID>?channel=isola&session_token=<SESSION_TOKEN>
-ws://localhost:8080/ws/<SESSION_ID>?channel=input&host=1&session_token=<SESSION_TOKEN>
-```
-
-```json
-{"type": "mousemove", "x": 640, "y": 360, "buttons": 0}
-{"type": "mousedown", "x": 640, "y": 360, "button": "left"}
-{"type": "type", "text": "hello"}
-{"type": "tab_new"}
-```
-
-Raw CDP / WebDriver BiDi is not exposed. Input messages: [docs/automation.md](./docs/automation.md#session-websocket-custom-clients).
-
----
-
-## MCP
-
-Off unless `ISOLA_MCP_ENABLED=true` and at least one `ISOLA_MCP_TOKEN` is ≥ 32 characters (startup fails if MCP is on without a usable token). Several tokens may be listed. Streamable HTTP at `POST /mcp`. Tools: `create_session`, `navigate`, `inspect_session`, `snapshot`, `screenshot`, `click`, `type`, `get_network`, `get_headers`, `get_posture`, `get_redirects`, `get_trackers`, `host_intel`, `probe_host`, `resource_graph`, `get_links`, `close_session`. Every analysis surface the panel shows is also a tool, so a script sees the same numbers as the viewer.
-
-Any MCP client works: point it at `POST /mcp` with `Authorization: Bearer <token>`.
-
-Full setup: [docs/automation.md](./docs/automation.md). Tool-by-tool usage, recipes and the REST fallback: [docs/skills/isola-mcp-usage/SKILL.md](./docs/skills/isola-mcp-usage/SKILL.md).
+- **Containers share the host kernel.** This is strong process isolation, not a VM; a kernel-level escape is out of scope. Dedicate the host and keep Docker and the kernel patched.
+- **The control plane is not a trust boundary against local root.** It drives Docker through the socket, which is equivalent to host root; an RCE there is an incident. It is itself read-only, capability-free and resource-capped, but patch it like the internet-facing service it is.
+- **Tor changes routing, not isolation strength.** Exit pinning reduces the anonymity Tor provides.
+- **Capture is intentionally incomplete** (list above); for the full byte-level truth you still need a proxy you control.
+- **The caps are DoS guards**, not tuning knobs; a page that needs more is constrained.
+- **A share link is a bearer credential** — view-only, but still a credential. Revoke it when the review ends.
 
 ---
 
 ## Documentation
 
-- [Getting started](./docs/getting-started.md)
-- [Configuration](./docs/configuration.md) · [`backend/config.yaml`](./backend/config.yaml) · [`.env.example`](./.env.example)
-- [Architecture](./docs/architecture.md) · [Transport](./docs/transport.md) · [Binaries](./docs/binaries.md)
-- [API](./docs/api.md) · [Automation](./docs/automation.md) · [MCP usage](./docs/skills/isola-mcp-usage/SKILL.md)
-- [Security](./docs/security.md) · [Deployment](./docs/deployment.md)
-- [Troubleshooting](./docs/troubleshooting.md) · [docs index](./docs/README.md)
+- [Getting started](./docs/getting-started.md) · [Deployment](./docs/deployment.md) · [Configuration](./docs/configuration.md)
+- [Security model](./docs/security.md) · [Third parties](./docs/third-parties.md)
+- [API](./docs/api.md) · [Automation / MCP](./docs/automation.md) · [MCP usage](./docs/skills/isola-mcp-usage/SKILL.md)
+- [Architecture](./docs/architecture.md) · [Transport](./docs/transport.md) · [Troubleshooting](./docs/troubleshooting.md) · [docs index](./docs/README.md)
 
----
-
-## License
-
-Isola is MIT. See [LICENSE](LICENSE).
-
-Security reports: [SECURITY.md](SECURITY.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
+Isola is MIT — see [LICENSE](LICENSE). Report vulnerabilities privately per
+[SECURITY.md](SECURITY.md); contributions follow [CONTRIBUTING.md](CONTRIBUTING.md).

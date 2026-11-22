@@ -1,7 +1,8 @@
 # Automation
 
-Isola exposes two supported automation surfaces:
+Isola exposes three supported automation surfaces:
 
+- **REST API** — for scripts and CI. Session lifecycle, the captured traffic log (`GET /api/sessions/{id}/network`), recon, the resource-graph PNG, custom data injection and archives. See the [API reference](api.md).
 - **MCP (Model Context Protocol)** — for AI agents that speak MCP. A small, fixed tool set drives isolated sessions. This is the simplest way to let an assistant browse.
 - **The session WebSocket** — for custom viewers and controllers that want to send input and receive the stream themselves.
 
@@ -34,6 +35,7 @@ Every request must send `Authorization: Bearer <token>`. Session ownership is ke
 | `create_session`  | Start a sandbox (`url`); optional `tor` routes all session traffic through Tor (optionally pinned to exit countries with `tor_country`); waits for CDP and a main-document network entry by default; returns `session_id`, `inspect`, `document_seen`. |
 | `navigate`        | Go to a URL (ctrl-socket retries); returns JSON with `inspect` and `document_seen` when `wait_document` is true (default).             |
 | `inspect_session` | Compact summary: page title, snapshot node count, document HTTP statuses.                                                              |
+| `set_session_data`| Push custom data into the live page: cookies (domain defaults to the session target), extra request headers, and localStorage/sessionStorage on the current origin; optional `reload`. |
 | `snapshot`        | Accessibility tree with `ref` values for click/type.                                                                                   |
 | `screenshot`      | Visual capture via CDP, returned as an image block plus a metadata text block (`format`, `mime`, `width`, `height`, `bytes`); `format` png/jpeg, optional `quality` for jpeg. |
 | `click`           | Click by `ref` from the latest snapshot.                                                                                               |
@@ -55,6 +57,7 @@ Every request must send `Authorization: Bearer <token>`. Session ownership is ke
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `create_session` | `url`; `tor` (default false) routes the session through Tor — the browser has no unproxied egress, so startup waits for a live circuit; `tor_country` (e.g. `se` or `se,no`) pins Tor exits to those ISO 3166-1 alpha-2 countries and requires `tor`; `wait_ready` (default true); `wait_document` (default true). Returns `session_id`, `tor_enabled`, `tor_country` (the effective pin), `automation_ready`, `document_seen`, and `inspect` when checks succeed. If the session never becomes usable the tool terminates it and returns the error, so a failed launch cannot leave an orphan behind. |
 | `navigate`       | `session_id`, `url`; `wait_document` (default true). Retries while the control socket is not ready (HTTP 503).                                                    |
+| `set_session_data` | `session_id`; any of `cookies` (`name`, `value`, `domain`?, `path`?, `secure`?, `http_only`?, `same_site`?, `expires`?), `headers` (`name`, `value`, `domains`?), `local_storage` (string map, current origin), `session_storage` (string map, current origin), `reload` (default false). Returns the applied counts. Same rules as [`POST /api/sessions/{id}/seed`](api.md#send-custom-data-to-the-page); storage is always the page's current origin (no `origin` argument). |
 | `get_network`    | `type` (e.g. `Document`), `host_contains` (hostname), `url_contains` (full URL), `limit`.                                                                          |
 | `get_redirects`  | `host_contains` (hostname), `url_contains` (full URL), `documents_only`, `limit`.                                                                                  |
 | `resource_graph` | `theme` `dark` (default) or `light`; `direction` `horizontal`/`vertical`; `expand` `origin` (default) / `all` / `collapsed`; `types` comma list (`document`, `script`, `stylesheet`, `image`, `font`, `xhr`, `media`, `other`); `failed_only`; `scale` 1–4 (default 2). Returns an image block with the PNG and a text block carrying `format`, `bytes`, `theme`, `width`, `height`. Invalid values are rejected before the renderer is called; the call times out after 45 s and refuses a PNG over 8 MiB (retry with `scale=1` or `expand=collapsed`). |
@@ -64,7 +67,7 @@ Every request must send `Authorization: Bearer <token>`. Session ownership is ke
 
 A `tor` session always cold-starts — the SOCKS proxy is wired at container creation, so it is never served from the [warm pool](configuration.md#warm_pool). Pinning an exit country (`tor_country`) is a strict guarantee: if no reachable exit exists in the country, the session fails to start rather than egressing elsewhere.
 
-Network data comes from the same capture as the in-viewer Network panel, but `get_network` returns the streamer's full in-memory window with fields the UI omits or clips. The window holds the most recent `session.network_log_max_entries` requests (default 1000; see [Configuration → `session`](configuration.md#session)). An unfiltered read of a heavy page can be large: the tool refuses anything over 8 MiB and tells you to pass `limit` or a filter rather than truncating silently.
+Network data comes from the same capture as the in-viewer Network panel, but `get_network` returns the streamer's full in-memory window with fields the UI omits or clips. The window holds the most recent `session.network_log_max_entries` requests (default 1000; see [Configuration → `session`](configuration.md#session)). An unfiltered read of a heavy page can be large: the tool refuses anything over 8 MiB and tells you to pass `limit` or a filter rather than truncating silently. The same document and filters are available without MCP at `GET /api/sessions/{id}/network` ([API → Network log](api.md#network-log)).
 
 ### Matching entries
 

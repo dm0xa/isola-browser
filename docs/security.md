@@ -44,6 +44,12 @@ This narrows the gap between the sandbox and its supervisor: an RCE in the Go pr
 - **Share token** — grants **view-only** access; input and control attempts are refused with `403`.
 - **Session id** — knowing one is never sufficient; a valid token is always required.
 
+Custom data injection (`POST /api/sessions/{id}/seed`) sits on the control side:
+it needs the session token, is hidden from view-only viewers, and its values
+(cookies, request headers, web storage) are forwarded once to the sandbox's
+streamer over the loopback port. They are never logged and never stored on the
+host — the response carries counts only.
+
 **Application controls.** Inbound URLs are validated on session creation (`DISABLE_URL_VALIDATION=true` turns this off — don't use it in a shared or public deployment). When you put Isola behind a reverse proxy, set `TRUSTED_PROXY_CIDRS` so per-IP rate limiting sees the real client address rather than the proxy's. The bundled nginx config also sets strict security headers (CSP, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`).
 
 ## API and MCP Authentication

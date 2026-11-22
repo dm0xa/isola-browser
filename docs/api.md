@@ -23,8 +23,10 @@ Base URL for a local deployment: `http://localhost:8080`.
 | `PATCH` | `/api/sessions/{id}` | session | Extend the session TTL. |
 | `POST` | `/api/sessions/{id}/resize` | session | Change the capture resolution. |
 | `POST` | `/api/sessions/{id}/audio` | session | Toggle audio capture. |
+| `POST` | `/api/sessions/{id}/seed` | session | Push custom data (cookies, request headers, web storage) into the live page. |
 | `GET` | `/api/sessions/{id}/graph.png` | session | Render the captured network as a resource-graph PNG (`theme`, `direction`, `expand`, `type`, `failed`, `scale`, `width`, `height`, `origin`, `caption`). |
 | `GET` | `/api/sessions/{id}/intel` | session | Recon for a host: passive DNS/ASN enrichment and/or bounded active probes (`host`, `ips`, `mode`, `checks`). |
+| `GET` | `/api/sessions/{id}/network` | session | The captured network log: every request with headers, TLS verdict, redirects and tracker labels (`type`, `host_contains`, `url_contains`, `limit`). REST twin of MCP `get_network`. |
 | `DELETE` | `/api/sessions/{id}` | session | Terminate the session. |
 | `POST` | `/api/sessions/{id}/capture/start` | session | Start recording downloaded resources. Returns `archive_id` and a one-time `archive_key`. |
 | `POST` | `/api/sessions/{id}/capture/stop` | session | Stop recording, final pull, totals. |
@@ -61,7 +63,7 @@ Base URL for a local deployment: `http://localhost:8080`.
 | `frame_rate` | int | Capture framerate (default `30`). |
 | `tor_enabled` | bool | Route the session through Tor. |
 | `tor_country` | string | Pin Tor exit nodes to one or more ISO 3166-1 alpha-2 countries (comma-separated, e.g. `"se"` or `"se,no"`). Requires `tor_enabled`; overrides the server default (`tor.exit_country`). |
-| `timezone` | string | Page-visible IANA timezone (e.g. `"Europe/Stockholm"`), validated with the host's zoneinfo; unknown names are `400 invalid_timezone`. Overrides the server default (`session.timezone`); empty keeps the deployment default, and with neither set the sandbox stays on UTC. |
+| `timezone` | string | Page-visible IANA timezone (e.g. `"Europe/Stockholm"`), validated with the host's zoneinfo; unknown names are `400 invalid_timezone`. Overrides the server default (`session.timezone`); empty keeps the deployment default, and with neither set the sandbox stays on UTC. A warm-pool claim applies the requested identity over CDP, so naming one does not force a cold start. |
 | `locale` | string | Page-visible BCP-47 tag (e.g. `"sv-SE"`), validated as `^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$`; malformed tags are `400 invalid_locale`. Drives `navigator.languages`, `Intl` formatting and `Accept-Language`. Overrides the server default (`session.locale`); empty keeps the deployment default, and with neither set the sandbox stays on `en-US`. |
 | `network_monitor` | bool | Stream CDP network events to the viewer's Network tab. |
 | `fingerprint` | string | Client fingerprint, used for rate limiting. |
@@ -129,6 +131,43 @@ at least 64 and cannot exceed the session's launch resolution, so a request
 reshapes that pixel budget rather than growing it. The viewer issues this
 automatically when fullscreen or a window resize changes its capture box.
 
+## Send custom data to the page
+
+`POST /api/sessions/{id}/seed` injects cookies, extra request headers and web
+storage into a **running** session. The streamer applies it over CDP before
+responding; there is no delivery lag and nothing is queued for a later page.
+
+```bash
+curl -s -X POST http://localhost:8080/api/sessions/$ID/seed \
+  -H "X-Session-Token: $TOKEN" -H "Content-Type: application/json" \
+  -d '{"cookies":[{"name":"sid","value":"abc123","same_site":"lax","http_only":true}],"reload":true}'
+# -> {"cookies":1,"headers":0,"storage":0,"reloaded":true}
+```
+
+| Field | Type | Notes |
+| :--- | :--- | :--- |
+| `cookies` | array | `name`, `value`, `domain` (or `url`), `path`, `same_site` (`strict`/`lax`/`none`), `secure`, `http_only`, `expires` (unix seconds). With neither `domain` nor `url`, the session target's host is used. `__Host-`/`__Secure-` names are rejected (`400`): Chromium refuses them with a `Domain` attribute, and these are always domain cookies. |
+| `headers` | array | `name`, `value`, optional `domains` (suffix match against the page's current main-frame host). The header set is tab-wide: Chromium sends it on every request that tab makes, including third-party subresources. |
+| `storage` | array | `kind` (`local` default, or `session`), `origin` (omit for the origin the page is on now), `items` (string map). |
+| `reload` | bool | Reload after applying, so cookie/header changes and SPA boot take effect in the same call. Never implied, and the only field a body may contain on its own (reload the page after an earlier call seeded it). |
+
+Limits: 50 cookies, 20 headers, 10 storage origins per call, 64 KiB body,
+4096 bytes per value (cookie/header names 256 bytes). Unknown fields are
+rejected with `400 invalid_seed`, so a typo like `httpOnly` cannot silently
+drop an attribute.
+
+Behaviour worth knowing:
+
+- Owner-only: the call needs `X-Session-Token`. A view-only share link cannot seed, and the viewer hides the control for one. Running sessions only — a session still provisioning answers `409 container_not_ready`.
+- Cookies are **domain** cookies: they apply to the domain and its subdomains, from any tab, and survive navigation.
+- `same_site: "none"` requires `secure: true`.
+- `headers` are per tab (`Network.setExtraHTTPHeaders`, with the `Network` domain enabled on that page on demand): a tab opened later starts clean, and a second call replaces the previous header set. `domains` only gates inclusion against the current main-frame host — it does not scope the header per URL, so a credential header is still sent to third-party hosts the tab loads. The set is dropped when the viewer's input connection re-attaches (e.g. a tab switch); re-run the call to restore it.
+- `storage` needs the page to already be on that origin. A mismatch, or a page with no origin (`about:blank`), returns `409 seed_origin_mismatch` — navigate first.
+- `local` storage persists across reloads and new tabs. `session` storage lives in the tab, so the streamer also registers an init script that re-applies it on every new document (a reload wipes it first). Each origin keeps one such script, built from every key seeded so far: a later call adds keys (and overwrites the ones it names) instead of dropping the earlier call's. The script belongs to the page target, so a tab switch loses it until the next seed.
+- Values are never logged and never stored: the request body is used once and the response carries counts only. Every response — including errors — is `Cache-Control: no-store`.
+- Application is sequential — cookies, then headers, then storage, then reload. A failure aborts the remaining steps and returns the error, so an earlier step may already be applied; fix the payload and re-run (the call is idempotent for the same values).
+- A forward that exceeds the 10 s streamer budget answers `504 seed_timeout`; an unreachable streamer is `502 seed_failed`, and a detached CDP session is `502 seed_unavailable`.
+
 ## Recon intelligence
 
 `GET /api/sessions/{id}/intel` proxies the streamer's recon engine. It is
@@ -158,11 +197,11 @@ curl -s "http://localhost:8080/api/sessions/$ID/intel?host=example.com&mode=prob
   -H "X-Session-Token: $TOKEN"
 ```
 
-The same analysis is already attached to the network dump: every entry in
-`GET /network` may carry `headers`, `tls`, `redirects`, `posture`, `ttfb_ms`,
-`from_disk_cache`, `from_service_worker`, `origin_host`, `third_party`,
-`tracker` and `beacon`. Those fields survive `type`, `host_contains` and `limit`
-filtering.
+The same analysis is already attached to the network log: every entry from
+`GET /api/sessions/{id}/network` may carry `headers`, `tls`, `redirects`,
+`posture`, `ttfb_ms`, `from_disk_cache`, `from_service_worker`, `origin_host`,
+`third_party`, `tracker` and `beacon`. Those fields survive `type`,
+`host_contains` and `limit` filtering.
 
 `origin_host` is the page the request belongs to — the tab's main-frame document
 host at capture time. An iframe document (consent wall, payment widget) inherits
@@ -176,6 +215,51 @@ certificate was presented but its chain was never trusted. `/posture` carries
 the same value as `tls_state`, and an `insecure`/`insecure-broken` or `neutral`
 transport caps the letter grade at `C` with an explanatory `note` — header
 posture is only as trustworthy as the connection that delivered the headers.
+
+## Network log
+
+`GET /api/sessions/{id}/network` returns everything the sandbox captured for the
+session, as `{"entries": [...], "count": N}`. Each entry is one request: `id`,
+`url`, `method`, `status`, `type`, `mime`, `bytes`, `ip`, `protocol`, `failed`,
+`tab`, `ts`, plus the `headers`, `tls` verdict, `redirects`, `posture`,
+`origin_host`, `third_party`, `tracker` and `beacon` fields described above.
+This is the REST twin of MCP `get_network` — same streamer document, same filter
+code — so a script does not need an MCP connection to collect a session's
+traffic.
+
+| Query | Meaning |
+| :--- | :--- |
+| `type` | Only entries of this resource type (`Document`, `Script`, `XHR`, …), case-insensitive. |
+| `host_contains` | Only entries whose **hostname** contains this substring. A path or query does not match here. |
+| `url_contains` | Only entries whose full URL contains this substring — use it for a path, query or scheme. |
+| `limit` | Maximum entries to return after filtering (1–1000). |
+
+Filters are optional. With none of them the reply is the streamer's document
+passed through unchanged. With any of them the response is re-serialized as
+`entries` + `count`, with every other field of an accepted entry preserved
+verbatim. Values that cannot be used (`limit=0`, `limit=ten`, a `type` over 64
+bytes, a `host_contains` over 253) are rejected with `400 invalid_network_query`
+rather than silently ignored.
+
+The body is buffered and capped at 8 MiB: a larger log answers
+`502 network_failed` with an actionable message instead of a truncated `200`, so
+a successful reply is always complete. A streamer that cannot be reached is
+`502`, one that does not answer within 15 s is `504`. Every response is
+`Cache-Control: no-store`.
+
+```bash
+# Every document response that came back insecure
+curl -s "http://localhost:8080/api/sessions/$ID/network?type=Document" \
+  -H "X-Session-Token: $TOKEN" | jq '.entries[] | select((.tls.security_state // "") | startswith("insecure"))'
+
+# Third-party scripts, capped at 50
+curl -s "http://localhost:8080/api/sessions/$ID/network?type=Script&url_contains=.js&limit=50" \
+  -H "X-Session-Token: $TOKEN"
+```
+
+The viewer shows the same data in the **Analysis** panel; the MCP equivalent
+tools (`get_headers`, `get_posture`, `get_redirects`, `get_trackers`,
+`get_links`) are shaped projections of this log.
 
 ## Resource graph image
 

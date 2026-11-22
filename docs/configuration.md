@@ -51,9 +51,16 @@ Pinning is strict (`StrictNodes`): if no reachable exit exists in the chosen cou
 | `session.timer` | `true` | `SESSION_TIMER` | When `false`, no countdown and no extend — the sandbox closes when the owner leaves. |
 | `session.resolution` | `"1920x1080"` | `RESOLUTION` | Default capture resolution. |
 | `session.max_resolution` | `"1920x1080"` | `MAX_RESOLUTION` | Hard cap applied to any requested resolution (aspect ratio preserved); larger requests are scaled down before the container starts. |
-| `session.network_log_max_entries` | `1000` | `NETWORK_LOG_MAX_ENTRIES`, `ISOLA_NETWORK_LOG_MAX_ENTRIES` | Number of network requests one session's capture window keeps. Older requests roll off, and the viewer, the in-viewer panel and MCP `get_network` all see the same window. Metadata only. Values ≤ `0` fall back to the default; values above `10000` are capped. |
+| `session.network_log_max_entries` | `1000` | `NETWORK_LOG_MAX_ENTRIES`, `ISOLA_NETWORK_LOG_MAX_ENTRIES` | Number of network requests one session's capture window keeps. Older requests roll off, and the viewer, the in-viewer panel, REST `GET /api/sessions/{id}/network` and MCP `get_network` all see the same window. Metadata only. Values ≤ `0` fall back to the default; values above `10000` are capped. |
 | `session.timezone` | *(empty)* | `SESSION_TIMEZONE`, `ISOLA_SESSION_TIMEZONE` | Page-visible IANA timezone (e.g. `Europe/Stockholm`) for sessions that do not name their own. Validated at startup. Empty leaves the sandbox on UTC. |
 | `session.locale` | *(empty)* | `SESSION_LOCALE`, `ISOLA_SESSION_LOCALE` | Page-visible BCP-47 locale (e.g. `sv-SE`) for sessions that do not name their own. Drives `navigator.languages`, `Intl` formatting and `Accept-Language`; validated at startup. Empty leaves the sandbox on `en-US`. |
+
+The bundled launcher defaults to **random**: each launch rolls one coherent
+locale/zone pair (from `frontend/src/lib/identityProfiles.ts`) and sends both
+values, so it overrides these deployment defaults. Pinning either selector in
+*Advanced* overrides half of the pair; pinning both sends exactly that pair.
+Warm-pool claims re-apply the rolled identity over CDP, so randomising costs no
+cold start.
 
 > The Compose `.env` sets `RESOLUTION=1280x720`, overriding the file default of `1920x1080`.
 

@@ -84,6 +84,6 @@ warm container's environment is baked before its session exists.
 - **Audio** — Opus → `WebCodecs AudioDecoder` → `AudioContext`.
 - **Input** — JSON over the `channel=input` socket → streamer → CDP `Input.`*.
 - **Clipboard** — bidirectional, via the streamer and CDP.
-- **Network monitor** — with `network_monitor` on create, CDP network events are streamed to the viewer's Network tab. The streamer also keeps the window itself: `GET /network` returns it as JSON, and `GET /graph.png` renders it as a PNG, both proxied by the control plane for the API and MCP surfaces.
+- **Network monitor** — with `network_monitor` on create, CDP network events are streamed to the viewer's Network tab. The streamer also keeps the window itself: `GET /network` returns it as JSON, and `GET /graph.png` renders it as a PNG. The control plane proxies both as `GET /api/sessions/{id}/network` and `GET /api/sessions/{id}/graph.png`; MCP exposes the same log through `get_network` and the same image through `resource_graph`.
 
 Packet layout, `stream_init` / `stream_reset`, ABR, and how to write a custom viewer are in [Transport](transport.md). Host vs container binaries and local build names are in [Binaries](binaries.md).

@@ -117,11 +117,47 @@ server-side). A tool on a missing or non-running session fails with
   click there. A ref whose geometry is 0,0 (some AX backends omit layout) will
   mis-target — confirm with `screenshot` and prefer `navigate`/`get_links`.
 
+### Session data (cookies, headers, storage)
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `set_session_data` | `session_id`; any of `cookies` (`name`, `value`, `domain`? or `url`?, `path`?, `secure`?, `http_only`?, `same_site` = `strict`/`lax`/`none`, `expires` unix s?), `headers` (`name`, `value`, `domains`? suffix list), `local_storage` / `session_storage` (string maps, applied to the page's current origin), `reload` (false) | `{status, cookies, headers, storage, reloaded}` — applied counts only |
+
+- A cookie with neither `domain` nor `url` is bound to the session's **target**
+  host, so `{"cookies":[{"name":"sid","value":"abc"}]}` is enough after
+  `create_session`.
+- Cookies are domain cookies on a browser-level CDP connection: they apply to
+  the domain and its subdomains, from any tab, and survive navigation.
+  `__Host-`/`__Secure-` names are rejected (`400`): Chromium refuses them with
+  a `Domain` attribute, so applying them would be a silent no-op.
+- `headers` are per tab (`Network.setExtraHTTPHeaders`) and a second call
+  **replaces** the previous set; a tab opened later starts clean. `domains`
+  only gates inclusion against the page's current main-frame host — the set is
+  still sent on every request the tab makes, third-party subresources included.
+  The set is dropped when the viewer's input connection re-attaches (tab
+  switch): re-run the call. Duplicate header names are rejected, not collapsed.
+- `local_storage`/`session_storage` need the page already on that origin. On
+  `about:blank` or a different origin the tool fails (`409 seed_origin_mismatch`
+  in REST terms) — `navigate` first. Session storage is re-applied on each new
+  document by an init script.
+- `reload: true` discards in-page state but is often the difference between a
+  cookie that is set and an SPA that has already booted without it.
+- Same limits and rules as `POST /api/sessions/{id}/seed`
+  ([API → Send custom data](../../api.md#send-custom-data-to-the-page)):
+  50 cookies, 20 headers, 10 storage origins, 64 KiB, 4096 bytes per value;
+  `same_site: "none"` needs `secure: true`. Values are never logged.
+
+The viewer exposes the same call as **Session actions → Custom data…** (owner
+only — a view-only share link has no session token).
+
 ### Network and evidence
 
 All of these read the same capture as the viewer's Network panel, but with
 unclipped fields. The window holds the most recent
-`session.network_log_max_entries` requests (default 1000).
+`session.network_log_max_entries` requests (default 1000). `get_network` has a
+REST twin, `GET /api/sessions/{id}/network`, with the same document and the
+same `type`/`host_contains`/`url_contains`/`limit` filters — use it when MCP is
+not enabled or a plain HTTP client is cheaper (see §5).
 
 | Tool | Arguments | What it gives you |
 |---|---|---|
@@ -184,6 +220,18 @@ probe_host {checks: "robots,securitytxt,sitemap"}
 `type {ref, text}` → `snapshot` → `click` the submit ref → `get_network` to see
 what the interaction actually sent.
 
+**Carry a session / seed a logged-in page**
+
+```
+create_session {url: "https://app.example.com"}
+set_session_data {cookies: [{name: "sid", value: "<token>"}], reload: true}
+# or per-origin storage, after the page has loaded:
+set_session_data {local_storage: {"auth": "<jwt>"}, reload: true}
+```
+
+Cookie without `domain` lands on the session target; storage needs the page
+already on that origin. `reload: true` boots the SPA with the new state.
+
 **Anonymous / geo-pinned research**
 
 `create_session {url, tor: true, tor_country: "se"}` — cold start, slower, and
@@ -201,6 +249,8 @@ source of truth.
 | `GET`/`PATCH`/`DELETE` | `/api/sessions/{id}` | `X-Session-Token` — details / extend TTL / terminate |
 | `POST` | `/api/sessions/{id}/resize` | `X-Session-Token` — change capture resolution |
 | `POST` | `/api/sessions/{id}/audio` | `X-Session-Token` — toggle audio |
+| `POST` | `/api/sessions/{id}/seed` | `X-Session-Token` — cookies/headers/storage into the live page; owner only |
+| `GET` | `/api/sessions/{id}/network` | `X-Session-Token` — the full traffic log; `type`, `host_contains` (hostname), `url_contains` (full URL), `limit` (1–1000). Same document, same filters and same 8 MiB cap as MCP `get_network` |
 | `GET` | `/api/sessions/{id}/graph.png` | `X-Session-Token` — resource graph PNG |
 | `GET` | `/api/sessions/{id}/intel` | `X-Session-Token` — passive DNS + active probes |
 | `POST`/`GET`/`DELETE` | `/api/sessions/{id}/shares[/{token}]` | `X-Session-Token` — view-only share links |
@@ -212,3 +262,20 @@ later call. `429 max_sessions_reached` means the instance cap (`ISOLA_MAX_SESSIO
 is hit — honour `Retry-After`. Never put `session_token` in an HTTP URL; only the
 WebSocket handshake accepts the query form. There is no raw CDP/BiDi passthrough
 (`cdp_url` resolves to isola's input channel, not DevTools).
+
+Traffic log without MCP — same entries, same filters as `get_network`:
+
+```bash
+ID=...; TOKEN=...
+curl -s "http://localhost:8080/api/sessions/$ID/network?type=Document&limit=5" \
+  -H "X-Session-Token: $TOKEN"
+# -> {"count":1,"entries":[{url, method, status, type, mime, bytes, ip,
+#     origin_host, headers, tls:{security_state}, redirects, posture, ...}]}
+```
+
+An unfiltered call returns the streamer's document unchanged; any filter returns
+`entries` + `count` with every field of an accepted entry kept. An unusable
+value (`limit=0`, a `host_contains` over 253 bytes) answers `400
+invalid_network_query` rather than being ignored; a document over 8 MiB answers
+`502 network_failed` (never a truncated 200). `host_contains` is hostname-only
+here too — a path belongs in `url_contains`.
