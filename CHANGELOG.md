@@ -6,6 +6,13 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- A lowercase timezone (`europe/stockholm`) validates on Linux again: the
+  registered spelling is resolved before the tz lookup instead of relying on
+  macOS's case-insensitive filesystem. The tz database is embedded, so a host
+  without `tzdata` can still validate a session's zone.
+
 ## [1.7.0] - 2026-11-22
 
 ### Added

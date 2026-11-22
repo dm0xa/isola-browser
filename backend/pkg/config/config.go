@@ -10,6 +10,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	// Embedded tz database: a zone the session will use must validate on a
+	// host whose image has no tzdata (a scratch container, a minimal CI runner).
+	_ "time/tzdata"
 
 	"gopkg.in/yaml.v3"
 
@@ -148,11 +151,18 @@ func NormalizeTimezone(raw string) (string, error) {
 	if strings.EqualFold(zone, "Local") {
 		return "", fmt.Errorf("invalid timezone %q (want an IANA zone, e.g. Europe/Stockholm)", zone)
 	}
+	// time.LoadLocation matches case-sensitively on a case-sensitive
+	// filesystem, so resolve the registered spelling first. It is also the
+	// spelling Chromium's ICU requires ("europe/stockholm" is not
+	// "Europe/Stockholm").
+	if canonical, ok := canonicalZoneName(zone); ok {
+		zone = canonical
+	}
 	loc, err := time.LoadLocation(zone)
 	if err != nil {
 		return "", fmt.Errorf("unknown timezone %q (want an IANA zone, e.g. Europe/Stockholm)", zone)
 	}
-	return canonicalZoneName(loc.String()), nil
+	return loc.String(), nil
 }
 
 // zoneinfoRoots are the directories tzdata is read from on the supported hosts
@@ -165,20 +175,19 @@ var zoneinfoRoots = []string{
 	"/etc/zoneinfo",
 }
 
-// canonicalZoneName restores the registered spelling of a zone. Go's
-// LoadLocation resolves case-insensitively but keeps the caller's case, while
-// Chromium's ICU expects the canonical id ("europe/stockholm" is not
-// "Europe/Stockholm"). The on-disk names are compared entry by entry because
-// macOS's default filesystem would accept a wrong-case stat. When no zoneinfo
-// tree is readable (the platform resolved the name another way) the validated
-// name is returned unchanged.
-func canonicalZoneName(resolved string) string {
+// canonicalZoneName restores the registered spelling of a zone by walking the
+// zoneinfo trees entry by entry, which is the only case-insensitive match Go
+// offers (`time.LoadLocation` is case-sensitive on Linux). The on-disk names
+// are compared individually because macOS's default filesystem would accept a
+// wrong-case stat. The second result is false when no tree is readable; the
+// caller then validates the name unchanged against the embedded tz database.
+func canonicalZoneName(zone string) (string, bool) {
 	for _, root := range zoneinfoRoots {
-		if canonical, ok := matchZoneName(root, resolved); ok {
-			return canonical
+		if canonical, ok := matchZoneName(root, zone); ok {
+			return canonical, true
 		}
 	}
-	return resolved
+	return "", false
 }
 
 // matchZoneName walks root one path segment at a time, matching each segment
