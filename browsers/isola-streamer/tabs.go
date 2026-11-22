@@ -333,6 +333,10 @@ func startTabCtrl() {
 			// re-asserted too: the runner that just came up has no idea
 			// whether anyone is watching.
 			_, _ = conn.Write([]byte(`{"cmd":"get_tabs"}` + "\n"))
+			// A viewer that attached before this dial got its resize dropped;
+			// deliver it now, or every encoder will wait for a geometry the
+			// surface never reaches.
+			flushPendingResize()
 			syncProducerCapture(true)
 
 			dec := json.NewDecoder(conn)

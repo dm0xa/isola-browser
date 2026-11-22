@@ -6,6 +6,13 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- A stream no longer stalls at "Establishing stream" when the viewer attaches
+  before the sandbox's runner is listening: the resize the viewer asks for is
+  now delivered as soon as the runner connects instead of being dropped. The
+  encoder waited forever for a geometry the surface never reached.
+
 ## [1.7.1] - 2026-11-22
 
 ### Fixed

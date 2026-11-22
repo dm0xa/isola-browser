@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gorilla/websocket"
 	"github.com/soheilhy/cmux"
@@ -14,6 +15,45 @@ import (
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: checkOrigin,
+}
+
+// pendingResize is the last /resize the runner was not connected to receive.
+// The ctrl socket is dialled asynchronously, so a viewer that attaches during
+// a cold start asks for its window size before the runner can hear it.
+var (
+	pendingResizeMu sync.Mutex
+	pendingResize   *[2]int
+)
+
+// setPendingResize records (or clears) a resize the runner has not been told
+// about. Clearing on a successful send keeps the pending value from
+// overwriting a later, larger request.
+func setPendingResize(width, height int, pending bool) {
+	pendingResizeMu.Lock()
+	defer pendingResizeMu.Unlock()
+	if !pending {
+		pendingResize = nil
+		return
+	}
+	pendingResize = &[2]int{width, height}
+}
+
+// flushPendingResize sends the remembered resize once the runner is reachable.
+// Called on every ctrl connect, which is the only way a dropped resize can be
+// delivered: the request itself has already returned.
+func flushPendingResize() {
+	pendingResizeMu.Lock()
+	pending := pendingResize
+	pendingResize = nil
+	pendingResizeMu.Unlock()
+	if pending == nil {
+		return
+	}
+	if !writeCtrlCommand(map[string]any{"cmd": "resize", "width": pending[0], "height": pending[1]}) {
+		setPendingResize(pending[0], pending[1], true)
+		return
+	}
+	log.Printf("tabs: flushed pending resize %dx%d", pending[0], pending[1])
 }
 
 // checkOrigin (VULN-17): no Origin is accepted (the backend relay sends none);
@@ -111,6 +151,13 @@ func setupMux(port string, wsHandler http.HandlerFunc) (net.Listener, error) {
 		notified := writeCtrlCommand(map[string]any{
 			"cmd": "resize", "width": width, "height": height,
 		})
+		// The ctrl socket is dialled asynchronously at startup and a viewer
+		// asks for its window size as soon as it attaches, so on a cold start
+		// this call can arrive before the runner can hear it. Dropping it left
+		// the surface at the launch resolution while every encoder waited for
+		// the requested size, and the stream never started; remember it and
+		// let startTabCtrl send it once the runner is reachable.
+		setPendingResize(width, height, !notified)
 		// Every attached viewer decodes an encoder whose output size was fixed
 		// when it spawned, so each run is replaced and its viewers reset onto
 		// the new geometry (stream_reset reason=resize).
