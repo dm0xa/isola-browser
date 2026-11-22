@@ -6,6 +6,8 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-11-22
+
 ### Fixed
 
 - A stream no longer stalls at "Establishing stream" when the viewer attaches
@@ -594,7 +596,8 @@ publishes the section matching the tag.
 Initial release: a Go control plane that boots a disposable Docker sandbox
 running offscreen Chromium.
 
-[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.7.1...HEAD
+[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.7.2...HEAD
+[1.7.2]: https://github.com/dm0xa/isola-browser/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/dm0xa/isola-browser/compare/v1.7.0...v1.7.1
 [1.7.0]: https://github.com/dm0xa/isola-browser/compare/v1.6.5...v1.7.0
 [1.6.5]: https://github.com/dm0xa/isola-browser/compare/v1.6.4...v1.6.5
