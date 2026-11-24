@@ -68,8 +68,6 @@
     form: $('launch-form'),
     urlInput: $('url-input'),
     openBtn: $('open-btn'),
-    whatsNew: $('whats-new'),
-    whatsNewDismiss: $('whats-new-dismiss'),
     toast: $('demo-toast'),
     themeToggle: $('theme-toggle'),
     typed: $('typed'),
@@ -202,27 +200,6 @@
       el.typed.textContent = text.slice(0, i);
       i += 1;
     }, 180);
-  }
-
-  // The real launcher keeps the release notes dismissed per version; the demo
-  // has no version, so a single flag is enough.
-  function initWhatsNew() {
-    const KEY = 'isola_whats_new_dismissed';
-    let seen = null;
-    try {
-      seen = localStorage.getItem(KEY);
-    } catch (e) {
-      /* storage unavailable — the notes stay visible */
-    }
-    if (seen === '1') el.whatsNew.setAttribute('data-hidden', '');
-    el.whatsNewDismiss.addEventListener('click', () => {
-      el.whatsNew.setAttribute('data-hidden', '');
-      try {
-        localStorage.setItem(KEY, '1');
-      } catch (e) {
-        /* storage unavailable — the choice just won't persist */
-      }
-    });
   }
 
   function initCursor() {
@@ -879,7 +856,6 @@
     initTheme();
     initTyping();
     initCursor();
-    initWhatsNew();
     initSettings();
     initLanding();
     initExtend();

@@ -7,7 +7,6 @@ import { useTheme } from '../lib/ThemeContext';
 import {
   getCommit,
   getVersion,
-  isCaptureEnabled,
   onBackendStatusChange,
   setBackendReachable,
 } from '../lib/config';
@@ -55,35 +54,6 @@ function normalizeUrl(input: string): string {
 }
 
 const GITHUB_URL = 'https://github.com/dm0xa/isola-browser';
-const DOCS_URL = `${GITHUB_URL}/blob/main/docs`;
-
-// Release notes under the address box. Each entry links the documentation that
-// ships with the feature, because the control is not on this page: Record is an
-// opt-in viewer action, Custom data lives in the session menu, and locale/zone
-// sit behind Advanced. `capture` entries are withheld while the deployment has
-// capture disabled — the page must not advertise a control the backend turned
-// off (isCaptureEnabled reads the same flag the viewer gates on).
-const WHATS_NEW: { title: string; detail: string; href: string; capture?: boolean }[] = [
-  {
-    title: 'Record',
-    detail: 'Saves every resource a page loads into a browsable, host-grouped archive.',
-    href: `${DOCS_URL}/configuration.md#capture`,
-    capture: true,
-  },
-  {
-    title: 'Custom data',
-    detail: 'Pushes cookies, headers and storage into an already-running page.',
-    href: `${DOCS_URL}/api.md#send-custom-data-to-the-page`,
-  },
-  {
-    title: 'Locale & zone',
-    detail: 'A coherent per-session identity, random per launch by default.',
-    href: `${DOCS_URL}/configuration.md#session`,
-  },
-];
-// Dismissal is remembered per version: a returning operator reads the notes
-// once, and the next release announces itself again.
-const WHATS_NEW_KEY = 'isola_whats_new_version';
 
 // withCurrent keeps a stored value selectable after an upgrade: the fields used
 // to be free text, and silently dropping a value would change the session's
@@ -168,15 +138,6 @@ export default function LandingPage() {
   // Advanced (timezone/locale) is collapsed by default: it is tuning, not a
   // launch decision like resolution or Tor.
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [whatsNewSeen, setWhatsNewSeen] = useState(() => {
-    try {
-      return localStorage.getItem(WHATS_NEW_KEY) || '';
-    } catch {
-      return '';
-    }
-  });
-  const whatsNewItems = WHATS_NEW.filter((item) => !item.capture || isCaptureEnabled());
-  const whatsNewVisible = whatsNewItems.length > 0 && whatsNewSeen !== getVersion();
   const transport = 'isola';
 
   // Every launch path funnels through here — the address box, the app tiles and
@@ -336,18 +297,6 @@ export default function LandingPage() {
     const target = normalizeUrl(url);
     if (!target) return;
     launchTarget(target);
-  };
-
-  // Persist the version that was read, not a boolean: the notes are per
-  // release, so storing "seen" would hide every future release too.
-  const dismissWhatsNew = () => {
-    const seen = getVersion();
-    setWhatsNewSeen(seen);
-    try {
-      localStorage.setItem(WHATS_NEW_KEY, seen);
-    } catch {
-      /* storage unavailable — the notes reappear on the next load */
-    }
   };
 
   const menuItemClass = (active: boolean) =>
@@ -637,44 +586,6 @@ export default function LandingPage() {
           </div>
         )}
       </form>
-
-      {whatsNewVisible && (
-        <div className="mt-10 w-full max-w-lg">
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 dark:text-gray-600">
-              What's new
-            </span>
-            <button
-              type="button"
-              onClick={dismissWhatsNew}
-              className="-mr-1 p-1 text-zinc-400 hover:text-zinc-700 dark:text-gray-600 dark:hover:text-gray-300 transition-colors"
-              title="Hide until the next release"
-              aria-label="Dismiss what's new"
-            >
-              <X className="w-3 h-3" aria-hidden />
-            </button>
-          </div>
-          <ul className="mt-1.5 border-t border-zinc-300/70 dark:border-gray-800">
-            {whatsNewItems.map((item) => (
-              <li key={item.title} className="border-b border-zinc-300/70 dark:border-gray-800">
-                <a
-                  href={item.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="group flex items-baseline gap-3 py-2"
-                >
-                  <span className="w-24 shrink-0 text-xs text-zinc-800 dark:text-[#aea2a2] transition-colors group-hover:text-zinc-950 dark:group-hover:text-white">
-                    {item.title}
-                  </span>
-                  <span className="flex-1 text-[11px] leading-snug text-zinc-500 dark:text-gray-500 transition-colors group-hover:text-zinc-700 dark:group-hover:text-gray-400">
-                    {item.detail}
-                  </span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
 
       <div className="absolute bottom-4 left-0 right-0 px-6 flex items-center justify-between text-[10px] tracking-widest text-zinc-400 dark:text-gray-700">
         <span className="relative flex items-center gap-2 mr-auto">

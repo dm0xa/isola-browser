@@ -64,6 +64,12 @@ publishes the section matching the tag.
   `409 container_not_ready` (the same signal seed uses) instead of
   `404 session_not_found`.
 
+### Removed
+
+- The **What's new** release-notes list (Record, Custom data, Locale & zone) is
+  gone from the landing page; the same features are documented in
+  [`docs/`](docs/README.md).
+
 ## [1.7.3] - 2026-11-22
 
 ### Fixed

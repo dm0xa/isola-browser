@@ -170,58 +170,6 @@
           </p>
         </form>
 
-        <!-- Release notes (mirrors WHATS_NEW in LandingPage.tsx). The demo has
-             no deployment, so Record is always listed here. -->
-        <div id="whats-new" class="mt-8 w-full max-w-lg">
-          <div class="flex items-baseline justify-between gap-3">
-            <span class="text-[10px] uppercase tracking-[0.2em] text-zinc-500 dark:text-gray-600">What's new</span>
-            <button
-              id="whats-new-dismiss"
-              type="button"
-              class="-mr-1 p-1 text-zinc-400 hover:text-zinc-700 dark:text-gray-600 dark:hover:text-gray-300 transition-colors"
-              title="Hide"
-              aria-label="Dismiss what's new"
-            >
-              ✕
-            </button>
-          </div>
-          <ul class="mt-1.5 border-t border-zinc-300/70 dark:border-gray-800">
-            <li class="border-b border-zinc-300/70 dark:border-gray-800">
-              <a
-                href="https://github.com/dm0xa/isola-browser/blob/main/docs/configuration.md#capture"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="group flex items-baseline gap-3 py-2"
-              >
-                <span class="w-24 shrink-0 text-xs text-zinc-800 dark:text-[#aea2a2] transition-colors group-hover:text-zinc-950 dark:group-hover:text-white">Record</span>
-                <span class="flex-1 text-[11px] leading-snug text-zinc-500 dark:text-gray-500 transition-colors group-hover:text-zinc-700 dark:group-hover:text-gray-400">Saves every resource a page loads into a browsable, host-grouped archive.</span>
-              </a>
-            </li>
-            <li class="border-b border-zinc-300/70 dark:border-gray-800">
-              <a
-                href="https://github.com/dm0xa/isola-browser/blob/main/docs/api.md#send-custom-data-to-the-page"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="group flex items-baseline gap-3 py-2"
-              >
-                <span class="w-24 shrink-0 text-xs text-zinc-800 dark:text-[#aea2a2] transition-colors group-hover:text-zinc-950 dark:group-hover:text-white">Custom data</span>
-                <span class="flex-1 text-[11px] leading-snug text-zinc-500 dark:text-gray-500 transition-colors group-hover:text-zinc-700 dark:group-hover:text-gray-400">Pushes cookies, headers and storage into an already-running page.</span>
-              </a>
-            </li>
-            <li class="border-b border-zinc-300/70 dark:border-gray-800">
-              <a
-                href="https://github.com/dm0xa/isola-browser/blob/main/docs/configuration.md#session"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="group flex items-baseline gap-3 py-2"
-              >
-                <span class="w-24 shrink-0 text-xs text-zinc-800 dark:text-[#aea2a2] transition-colors group-hover:text-zinc-950 dark:group-hover:text-white">Locale &amp; zone</span>
-                <span class="flex-1 text-[11px] leading-snug text-zinc-500 dark:text-gray-500 transition-colors group-hover:text-zinc-700 dark:group-hover:text-gray-400">A coherent per-session identity, random per launch by default.</span>
-              </a>
-            </li>
-          </ul>
-        </div>
-
         <div class="absolute bottom-4 left-0 right-0 px-6 flex items-center justify-between text-[10px] tracking-widest text-zinc-400 dark:text-gray-700">
           <span class="flex items-center gap-2 mr-auto">
             <span class="inline-block w-1.5 h-1.5 rounded-full bg-cyan-500" title="Demo mode — no backend"></span>

@@ -213,24 +213,3 @@ describe('launch identity', () => {
     expect(screen.getByRole('button', { name: /Advanced/ })).toHaveTextContent('Random on launch');
   });
 });
-
-describe("what's new", () => {
-  it('lists the release notes and stays dismissed for that version', () => {
-    const first = renderAt('/');
-
-    expect(screen.getByText('Custom data')).toBeInTheDocument();
-    expect(screen.getByText('Locale & zone')).toBeInTheDocument();
-    // capture.enabled is false in the test config: the page must not advertise
-    // a viewer control the backend turned off.
-    expect(screen.queryByText('Record')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: "Dismiss what's new" }));
-
-    expect(screen.queryByText('Custom data')).toBeNull();
-    expect(localStorage.getItem('isola_whats_new_version')).toBe('dev');
-
-    first.unmount();
-    renderAt('/');
-    expect(screen.queryByText('Custom data')).toBeNull();
-  });
-});
