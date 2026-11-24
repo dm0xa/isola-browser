@@ -6,8 +6,10 @@
 package netfilter
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -60,6 +62,48 @@ func FilterEntries(body []byte, limit int, keep func(EntryMeta, map[string]json.
 		}
 	}
 	return json.Marshal(map[string]any{"entries": out, "count": len(out)})
+}
+
+// FilterEntriesRaw is FilterEntries for callers that never edit an accepted
+// entry. It decodes only the small metadata struct per entry and copies the
+// original raw bytes into the result, so a filtered read does no per-entry map
+// decode or re-encode. The output keeps the input's key order, number spelling
+// and string escapes.
+func FilterEntriesRaw(body []byte, limit int, keep func(EntryMeta) bool) ([]byte, error) {
+	var parsed struct {
+		Entries []json.RawMessage `json:"entries"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return body, err
+	}
+	kept := make([]json.RawMessage, 0, len(parsed.Entries))
+	for _, raw := range parsed.Entries {
+		var meta EntryMeta
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			continue
+		}
+		meta.Host = HostOf(meta.URL)
+		if !keep(meta) {
+			continue
+		}
+		kept = append(kept, raw)
+		if limit > 0 && len(kept) >= limit {
+			break
+		}
+	}
+	var out bytes.Buffer
+	out.Grow(len(body) / 2)
+	out.WriteString(`{"entries":[`)
+	for i, raw := range kept {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		out.Write(bytes.TrimSpace(raw))
+	}
+	out.WriteString(`],"count":`)
+	out.WriteString(strconv.Itoa(len(kept)))
+	out.WriteByte('}')
+	return out.Bytes(), nil
 }
 
 // HostOf returns the lowercased hostname of a captured URL.

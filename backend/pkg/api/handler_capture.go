@@ -178,8 +178,20 @@ func (h *Handler) ListCaptures(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, row)
 	}
+	var usedBytes int64
+	for _, s := range list {
+		usedBytes += s.Bytes
+	}
+	quotaBytes, retentionDays := h.Capture.Quota()
 	setSensitiveNoStore(w)
-	respondJSON(w, http.StatusOK, map[string]any{"captures": out})
+	respondJSON(w, http.StatusOK, map[string]any{
+		"captures": out,
+		"usage": map[string]any{
+			"used_bytes":     usedBytes,
+			"quota_bytes":    quotaBytes,
+			"retention_days": retentionDays,
+		},
+	})
 }
 
 // GetArchive returns meta.json for one archive. The archive key is the only

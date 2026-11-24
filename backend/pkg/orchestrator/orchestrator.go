@@ -538,6 +538,24 @@ func sessionCacheKeys(sid string) []string {
 	}
 }
 
+// finalizeCacheKeys is sessionCacheKeys minus the control token. A finalized
+// session's row must stay readable by its owner: the viewer polls it to show
+// "Session has ended"/"encountered an error", and a failed launch must not look
+// like a token theft (403). The token keeps its original cache TTL and is
+// removed by CleanupOrphanContainers or by that TTL, not by finalization.
+func finalizeCacheKeys(sid string) []string {
+	keys := sessionCacheKeys(sid)
+	out := keys[:0]
+	control := "session:" + sid + ":control_token"
+	for _, k := range keys {
+		if k == control {
+			continue
+		}
+		out = append(out, k)
+	}
+	return out
+}
+
 // FinalizeRunningSession stops the container, clears cache keys, runs hooks, and marks terminated.
 func (o *Orchestrator) FinalizeRunningSession(ctx context.Context, st *store.MemStore, cache *store.MemCache, sess *models.Session) {
 	if sess == nil {
@@ -558,7 +576,7 @@ func (o *Orchestrator) FinalizeRunningSession(ctx context.Context, st *store.Mem
 		}
 	}
 
-	cache.Del(ctx, sessionCacheKeys(sid)...)
+	cache.Del(ctx, finalizeCacheKeys(sid)...)
 
 	if o.onSessionCleanup != nil {
 		o.onSessionCleanup(ctx, sess)

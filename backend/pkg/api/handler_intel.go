@@ -21,7 +21,7 @@ import (
 // viewer and MCP see exactly the same document.
 
 const (
-	intelUpstreamTimeout  = 12 * time.Second
+	intelUpstreamTimeout  = 20 * time.Second
 	intelMaxResponseBytes = 4 << 20
 	intelMaxHostLen       = 253
 	intelMaxIPs           = 32

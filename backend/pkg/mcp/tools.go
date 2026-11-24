@@ -562,7 +562,7 @@ func (s *Service) toolGetNetwork(ctx context.Context, _ *mcp.CallToolRequest, p 
 	typ := strings.TrimSpace(p.Type)
 	hostNeedle := netfilter.Needle(p.HostContains)
 	urlNeedle := netfilter.Needle(p.URLContains)
-	out, err := netfilter.FilterEntries(body, p.Limit, func(meta netfilter.EntryMeta, _ map[string]json.RawMessage) bool {
+	out, err := netfilter.FilterEntriesRaw(body, p.Limit, func(meta netfilter.EntryMeta) bool {
 		if typ != "" && !strings.EqualFold(meta.Type, typ) {
 			return false
 		}

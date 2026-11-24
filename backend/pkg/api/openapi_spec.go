@@ -553,7 +553,7 @@ var openAPISpec = []byte(`{
       "get": {
         "tags": ["Sessions"],
         "summary": "Render the captured network as a resource-graph PNG",
-        "description": "Renders the session's network log as a PNG: hosts, resource-type groups and files, laid out left-to-right (or top-to-bottom). The image is produced by the streamer, which holds the capture, and is never cached. Every option is validated before proxying; renders are limited to 2 in flight per session (429) and 45 seconds (504). Requires owner authorization (X-Session-Token).",
+        "description": "Renders the session's network log as a PNG: hosts, resource-type groups and files, laid out left-to-right (or top-to-bottom). The image is produced by the streamer, which holds the capture, and is never cached. Every option is validated before proxying; renders are limited to 1 in flight per session (429) and 45 seconds (504). Requires owner authorization (X-Session-Token).",
         "operationId": "getResourceGraph",
         "security": [{ "sessionToken": [] }],
         "parameters": [

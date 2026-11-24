@@ -1,7 +1,9 @@
 package app
 
 import (
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,9 +14,12 @@ import (
 // newTestFrontend is the smallest embedded SPA: a shell, one content-hashed
 // asset and the favicon route.
 func newTestFrontend() http.Handler {
+	big := strings.Repeat("console.log('isola');\n", 256)
 	return serveFrontend(fstest.MapFS{
 		"index.html":           &fstest.MapFile{Data: []byte("<html>shell</html>")},
 		"assets/app-abc.js":    &fstest.MapFile{Data: []byte("console.log(1)")},
+		"assets/big-abc.js":    &fstest.MapFile{Data: []byte(big)},
+		"fonts/brand.ttf":      &fstest.MapFile{Data: []byte(big)},
 		"favicon.svg":          &fstest.MapFile{Data: []byte("<svg/>")},
 		"manifest.webmanifest": &fstest.MapFile{Data: []byte(`{"name":"isola"}`)},
 		"icons/icon-192.png":   &fstest.MapFile{Data: []byte("png")},
@@ -139,5 +144,66 @@ func TestNotFoundSeparatesAPIFromClientRoutes(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), "<html>shell</html>") {
 			t.Fatalf("%s: body = %q, want the SPA shell", path, rec.Body.String())
 		}
+	}
+}
+
+// TestServeFrontendCompressesLargeStaticFiles pins the binary-install path:
+// without nginx, the embedded JS/font were shipped raw (819 KB + 419 KB).
+func TestServeFrontendCompressesLargeStaticFiles(t *testing.T) {
+	for _, tc := range []struct{ path, wantType string }{
+		{"/assets/big-abc.js", "text/javascript"},
+		{"/fonts/brand.ttf", "font/ttf"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			req.Header.Set("Accept-Encoding", "gzip")
+			rec := httptest.NewRecorder()
+			newTestFrontend().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d", rec.Code)
+			}
+			if got := rec.Header().Get("Content-Encoding"); got != "gzip" {
+				t.Fatalf("Content-Encoding = %q, want gzip", got)
+			}
+			if got := rec.Header().Get("Vary"); got != "Accept-Encoding" {
+				t.Fatalf("Vary = %q", got)
+			}
+			if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, tc.wantType) {
+				t.Fatalf("Content-Type = %q, want %s…", ct, tc.wantType)
+			}
+			zr, err := gzip.NewReader(rec.Body)
+			if err != nil {
+				t.Fatalf("gzip reader: %v", err)
+			}
+			body, err := io.ReadAll(zr)
+			if err != nil {
+				t.Fatalf("gunzip: %v", err)
+			}
+			if !strings.Contains(string(body), "isola") {
+				t.Fatalf("uncompressed body is wrong: %q", body)
+			}
+		})
+	}
+}
+
+func TestServeFrontendPlainWhenClientDoesNotAcceptGzip(t *testing.T) {
+	rec := httptest.NewRecorder()
+	newTestFrontend().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/big-abc.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Encoding"); got != "" {
+		t.Fatalf("Content-Encoding = %q, want none", got)
+	}
+	if !strings.Contains(rec.Body.String(), "isola") {
+		t.Fatalf("body = %q", rec.Body.String())
+	}
+}
+
+func TestServeFrontendFontsAreCacheable(t *testing.T) {
+	rec := httptest.NewRecorder()
+	newTestFrontend().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/fonts/brand.ttf", nil))
+	if got := rec.Header().Get("Cache-Control"); got != "public, max-age=604800" {
+		t.Fatalf("Cache-Control = %q, want public, max-age=604800", got)
 	}
 }

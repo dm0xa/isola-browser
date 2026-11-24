@@ -880,6 +880,18 @@ function recreateTabWindow(tab, reason) {
   console.log(`[electron] tab #${tab.id} recreated (${reason})`);
 }
 
+// disableDialogs covers alert/confirm, but Electron's offscreen renderer still
+// blocks forever on window.prompt (no native dialog is ever shown). Override the
+// three entry points in the page's main world after each load: alert/confirm
+// are no-ops/false, prompt returns null, so a page can never wedge the tab.
+function suppressJsDialogs(win) {
+  if (!win || win.isDestroyed()) return;
+  void win.webContents.executeJavaScript(
+    "try{window.alert=function(){};window.confirm=function(){return false};window.prompt=function(){return null}}catch(e){}",
+    true,
+  ).catch(() => {});
+}
+
 function attachTabWindow(tab, url) {
   const id = tab.id;
   const win = new BrowserWindow({
@@ -894,6 +906,11 @@ function attachTabWindow(tab, url) {
       nodeIntegration: false,
       sandbox: false,
       backgroundThrottling: false,
+      // The sandbox has no UI for a native JS dialog. alert/confirm froze the
+      // renderer until the CDP auto-accept landed; prompt is handled natively
+      // by Electron and never reached CDP. Disable dialogs at the source:
+      // alert() is a no-op, confirm() false, prompt() null.
+      disableDialogs: true,
     },
   });
 
@@ -930,9 +947,10 @@ function attachTabWindow(tab, url) {
   win.webContents.on('did-finish-load', () => {
     console.log(`[electron] tab #${id} loaded: ${win.webContents.getURL()}`);
     onNavigated(true);
+    suppressJsDialogs(win);
   });
   // `painted` separates rendered loads from bare commits, where capturePage returns a blank.
-  win.webContents.on('did-navigate-in-page', () => onNavigated(true));
+  win.webContents.on('did-navigate-in-page', () => { onNavigated(true); suppressJsDialogs(win); });
   win.webContents.on('did-navigate', () => onNavigated());
   win.webContents.on('page-title-updated', (e, title) => {
     tab.title = title || '';
@@ -959,6 +977,14 @@ function attachTabWindow(tab, url) {
     event.preventDefault();
     logBlocked('navigation', navUrl);
   };
+  // beforeunload: Chrome shows a confirm; the offscreen sandbox has no place
+  // to show it, so Electron asks via will-prevent-unload. preventDefault()
+  // ignores the handler and lets the navigation complete (leaving a tab stuck
+  // with no prompt was worse than a page losing its unload guard).
+  win.webContents.on('will-prevent-unload', (event) => {
+    console.log('[electron] beforeunload ignored');
+    event.preventDefault();
+  });
   win.webContents.on('will-navigate', blockDisallowed);
   win.webContents.on('will-redirect', blockDisallowed);
   win.webContents.on('will-frame-navigate', blockDisallowed);

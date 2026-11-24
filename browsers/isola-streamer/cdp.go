@@ -228,6 +228,25 @@ func (c *CDPClient) readPump() {
 		}
 		json.Unmarshal(raw, &envelope)
 		if envelope.ID == 0 {
+			// A JS dialog blocks the renderer until someone answers it. The
+			// offscreen sandbox has no dialog UI, so an unanswered alert/
+			// confirm/prompt or beforeunload froze the tab forever. Accept it
+			// (the page continues; prompt gets "") and keep reading: the
+			// handleJavaScriptDialog reply arrives as a normal response.
+			if envelope.Method == "Page.javascriptDialogOpening" {
+				var d struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				}
+				_ = json.Unmarshal(envelope.Params, &d)
+				log.Printf("input: auto-accepting %s dialog: %.120s", d.Type, d.Message)
+				go func() {
+					_ = c.send("Page.handleJavaScriptDialog", map[string]interface{}{
+						"accept":     true,
+						"promptText": "",
+					})
+				}()
+			}
 			continue // event
 		}
 		var resp cdpResponse

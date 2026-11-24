@@ -76,6 +76,12 @@ export default function SharePage() {
       if (cancelled) return;
       try {
         const res = await fetch(`/api/share/${token}`);
+        if (res.status === 404 || res.status === 410) {
+          // Revoked, expired, or the session ended: stop the stream instead of
+          // leaving a frozen-but-ticking canvas.
+          if (!cancelled) setStatus('error');
+          return;
+        }
         if (!res.ok) return;
         const data = await res.json();
         if (data.expires_at && !cancelled) {

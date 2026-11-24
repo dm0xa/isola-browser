@@ -1,6 +1,12 @@
 import React from 'react';
 import { CapturePanel } from '../../components/CapturePanel';
-import { IsolaNetworkPanel, type ConsoleEntry, type CookieEntry, type NetEntry, type PanelLayout, type PanelTab } from '../../components/IsolaNetworkPanel';
+import type { ConsoleEntry, CookieEntry, NetEntry, PanelLayout, PanelTab } from '../../components/IsolaNetworkPanel';
+
+// The panel (and ResourceGraph) is ~100 kB raw that most sessions never open;
+// load it on first open instead of on viewer start.
+const IsolaNetworkPanel = React.lazy(() =>
+  import('../../components/IsolaNetworkPanel').then((m) => ({ default: m.IsolaNetworkPanel })),
+);
 import { ISOLA_LOGO_KEYFRAMES } from '../../components/IsolaLogo';
 import type { useIsolaStream } from '../../hooks/useIsolaStream';
 import type { CaptureStatus } from '../../lib/captureApi';
@@ -54,6 +60,7 @@ export const ViewerStreamShell = React.memo(function ViewerStreamShell(props: Vi
           style={containerStyle}
         />
         {networkCaptureEnabled && netPanel !== 'off' && (
+          <React.Suspense fallback={null}>
           <IsolaNetworkPanel
             entries={netEntries}
             consoleEntries={consoleEntries}
@@ -70,6 +77,7 @@ export const ViewerStreamShell = React.memo(function ViewerStreamShell(props: Vi
             savedHashes={savedHashes}
             tabs={browserTabs}
           />
+          </React.Suspense>
         )}
         {capturePanel !== 'off' && (
           <CapturePanel

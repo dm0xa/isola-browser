@@ -574,7 +574,8 @@ export function CaptureArchiveView({
                 <p className="text-sm text-zinc-700 dark:text-gray-200">No captured files</p>
                 <p className="mt-1">
                   Record from the session's menu while browsing; downloaded files appear here when
-                  the capture has pulled them from the sandbox.
+                  the capture has pulled them from the sandbox. A page that finished loading before
+                  Record started has no bodies to save — reload it while recording.
                 </p>
               </>
             )}

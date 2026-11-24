@@ -123,3 +123,47 @@ func TestHostOf(t *testing.T) {
 		}
 	}
 }
+
+func TestFilterEntriesRawPreservesEntryBytes(t *testing.T) {
+	t.Parallel()
+	// Deliberately unusual spelling/key order: the raw filter must not turn
+	// 1.0 into 1 or reorder keys.
+	body := []byte(`{"entries":[
+		{"url":"https://example.com/","type":"Document","status":200,"b":1.0,"html":"<&>","z":1,"a":2},
+		{"url":"https://other.test/x.js","type":"Script","status":200,"b":1e3}
+	]}`)
+
+	out, err := FilterEntriesRaw(body, 0, func(meta EntryMeta) bool {
+		return MatchesHost(meta, "example.com")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"url":"https://example.com/","type":"Document","status":200,"b":1.0,"html":"<&>","z":1,"a":2}`
+	if !strings.Contains(string(out), want) {
+		t.Fatalf("raw entry was re-encoded:\n got %s\nwant substring %s", out, want)
+	}
+	if !strings.Contains(string(out), `"count":1`) {
+		t.Fatalf("count missing from filtered body: %s", out)
+	}
+	if strings.Contains(string(out), "1e3") {
+		t.Fatalf("filter kept a non-matching entry: %s", out)
+	}
+}
+
+func TestFilterEntriesRawLimit(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"entries":[
+		{"url":"https://example.com/1","type":"Document"},
+		{"url":"https://example.com/2","type":"Document"},
+		{"url":"https://example.com/3","type":"Document"}
+	]}`)
+	out, err := FilterEntriesRaw(body, 2, func(EntryMeta) bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := decodeEntries(t, out)
+	if len(entries) != 2 || !strings.Contains(string(out), `"count":2`) {
+		t.Fatalf("limit = %d entries, body %s", len(entries), out)
+	}
+}

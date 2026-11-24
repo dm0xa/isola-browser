@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -96,7 +95,7 @@ func (h *Handler) GetSessionNetwork(w http.ResponseWriter, r *http.Request) {
 
 	out := body.Bytes()
 	if typeFilter != "" || hostNeedle != "" || urlNeedle != "" || limit > 0 {
-		out, err = netfilter.FilterEntries(out, limit, func(meta netfilter.EntryMeta, _ map[string]json.RawMessage) bool {
+		out, err = netfilter.FilterEntriesRaw(out, limit, func(meta netfilter.EntryMeta) bool {
 			if typeFilter != "" && !strings.EqualFold(meta.Type, typeFilter) {
 				return false
 			}

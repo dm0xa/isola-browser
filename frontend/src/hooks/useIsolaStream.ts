@@ -2130,6 +2130,39 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         }
       };
 
+      // A hidden editable is the only way the host IME can compose: composition
+      // events need a focused editable target, and the viewer itself has none.
+      // Normal keys are still handled by onKeyDown (with preventDefault); only
+      // composition text is read here and sent as one `type` message.
+      const ime = document.createElement('textarea');
+      ime.setAttribute('aria-hidden', 'true');
+      ime.tabIndex = -1;
+      ime.autocomplete = 'off';
+      ime.spellcheck = false;
+      Object.assign(ime.style, {
+        position: 'fixed', left: '-9999px', top: '0', width: '1px', height: '1px',
+        opacity: '0', pointerEvents: 'none', resize: 'none', border: '0', padding: '0',
+      });
+      container.appendChild(ime);
+      let composing = false;
+      const onCompositionStart = () => { composing = true; };
+      const onCompositionEnd = (e: CompositionEvent) => {
+        composing = false;
+        ime.value = '';
+        if (e.data) sendEvent({ type: 'type', text: e.data });
+      };
+      const onImeInput = () => {
+        // Non-composition inserts (emoji picker, autofill) are also text the
+        // page should receive; composition commits are handled above.
+        if (composing) return;
+        const text = ime.value;
+        ime.value = '';
+        if (text) sendEvent({ type: 'type', text });
+      };
+      ime.addEventListener('compositionstart', onCompositionStart);
+      ime.addEventListener('compositionend', onCompositionEnd);
+      ime.addEventListener('input', onImeInput);
+
       const focusViewer = () => {
         // Drop host-side selections on the way in, or host Ctrl+C copies chrome.
         const sel = window.getSelection();
@@ -2143,9 +2176,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
           if (!el || !container.contains(el)) sel.removeAllRanges();
         }
         try {
-          container.focus({ preventScroll: true });
+          ime.focus({ preventScroll: true });
         } catch {
-          container.focus();
+          ime.focus();
         }
       };
 
@@ -2266,10 +2299,16 @@ export function useIsolaStream(defaultTargetUrl?: string) {
 
       const onKeyDown = (e: KeyboardEvent) => {
         // Editable chrome takes priority over the capture-phase key handlers.
+        // The hidden IME target is the one exception: its keys are forwarded
+        // like a canvas key, and prevented from inserting locally.
         const t = e.target as HTMLElement | null;
-        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
+        const onIme = t === ime;
+        if (t && !onIme && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
           return;
         }
+        // During composition let the IME own the key; the commit arrives as
+        // compositionend and is sent as text.
+        if (e.isComposing || e.key === 'Process') return;
         if (e.repeat) return;
         // Copy/select-all follow focus (see copyChordStaysLocal).
         if (e.metaKey || e.ctrlKey) {
@@ -2300,6 +2339,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
 
       const onKeyUp = (e: KeyboardEvent) => {
         const t = e.target as HTMLElement | null;
+        if (t === ime) return;
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
           return;
         }
@@ -2325,6 +2365,10 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         window.removeEventListener('mouseup', onMouseUp);
         window.removeEventListener('keydown', onKeyDown, true);
         window.removeEventListener('keyup', onKeyUp, true);
+        ime.removeEventListener('compositionstart', onCompositionStart);
+        ime.removeEventListener('compositionend', onCompositionEnd);
+        ime.removeEventListener('input', onImeInput);
+        ime.remove();
         if (reconnectTimerRef.current) {
           clearTimeout(reconnectTimerRef.current);
           reconnectTimerRef.current = null;

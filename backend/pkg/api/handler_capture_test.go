@@ -681,6 +681,19 @@ func TestCaptureListRequiresOperatorBearer(t *testing.T) {
 	if row["archive_id"] != sid.String() || row["items"].(float64) != 1 {
 		t.Fatalf("capture row = %v", row)
 	}
+	usage, _ := body["usage"].(map[string]any)
+	if usage == nil {
+		t.Fatalf("usage missing from capture list: %v", body)
+	}
+	if got := usage["used_bytes"].(float64); got < float64(len(data)) {
+		t.Fatalf("usage.used_bytes = %v, want >= %d", got, len(data))
+	}
+	if got := usage["quota_bytes"].(float64); got != float64(capture.DefaultTotalQuotaBytes) {
+		t.Fatalf("usage.quota_bytes = %v, want %d", got, capture.DefaultTotalQuotaBytes)
+	}
+	if got := usage["retention_days"].(float64); got != 0 {
+		t.Fatalf("usage.retention_days = %v, want 0 (keep indefinitely)", got)
+	}
 
 	// The operator bearer can also delete without the archive key.
 	w = httptest.NewRecorder()

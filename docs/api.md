@@ -31,7 +31,7 @@ Base URL for a local deployment: `http://localhost:8080`.
 | `POST` | `/api/sessions/{id}/capture/start` | session | Start recording downloaded resources. Returns `archive_id` and a one-time `archive_key`. |
 | `POST` | `/api/sessions/{id}/capture/stop` | session | Stop recording, final pull, totals. |
 | `GET` | `/api/sessions/{id}/capture` | session | Live recording status for the session. |
-| `GET` | `/api/captures` | optional bearer | List archives (same bearer posture as session creation). |
+| `GET` | `/api/captures` | optional bearer | List archives (same bearer posture as session creation), plus `usage.used_bytes`, `usage.quota_bytes` (0 = unlimited) and `usage.retention_days` (0 = kept indefinitely). |
 | `GET` | `/api/captures/{archiveID}` | archive key | Archive `meta.json`, including every resource row. |
 | `GET` | `/api/captures/{archiveID}/blobs/{sha256}` | archive key | One stored body by digest, as an attachment. |
 | `GET` | `/api/captures/{archiveID}/files/{path...}` | archive key | One stored body by its readable archive path. |
@@ -219,7 +219,9 @@ posture is only as trustworthy as the connection that delivered the headers.
 ## Network log
 
 `GET /api/sessions/{id}/network` returns everything the sandbox captured for the
-session, as `{"entries": [...], "count": N}`. Each entry is one request: `id`,
+session. With any filter it answers `{"entries": [...], "count": N}`; with no
+filter it is the streamer's document passed through byte-for-byte (its own
+`entries` array, no `count`). Each entry is one request: `id`,
 `url`, `method`, `status`, `type`, `mime`, `bytes`, `ip`, `protocol`, `failed`,
 `tab`, `ts`, plus the `headers`, `tls` verdict, `redirects`, `posture`,
 `origin_host`, `third_party`, `tracker` and `beacon` fields described above.
@@ -330,7 +332,7 @@ never persisted and disappears with the recording.
 # Start: save the one-time archive key, it is not shown again
 curl -s -X POST "http://localhost:8080/api/sessions/$ID/capture/start" \
   -H "X-Session-Token: $TOKEN"
-# -> {"archive_id":"<session id>","archive_key":"<32 hex>","started_at":"..."}
+# -> {"archive_id":"<session id>","archive_key":"<64 hex>","started_at":"..."}
 
 # Live progress
 curl -s "http://localhost:8080/api/sessions/$ID/capture" \

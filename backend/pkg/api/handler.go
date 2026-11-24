@@ -1021,7 +1021,7 @@ const (
 	// defaultMaxGraphInFlight serialises renders per session. Render cost grows
 	// with the capture size and the sandbox is memory-capped, so concurrent
 	// renders are what push it into the OOM killer.
-	defaultMaxGraphInFlight = 2
+	defaultMaxGraphInFlight = 1
 )
 
 // acquireGraphSlot reserves one render slot for a session.
@@ -1803,7 +1803,14 @@ func (h *Handler) authorizeSessionOwner(r *http.Request, session *models.Session
 	if expected == "" {
 		return false, nil
 	}
-	return subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1, nil
+	if subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
+		return false, nil
+	}
+	// Any authenticated owner call is activity: an API client polling /network
+	// or /intel must not be idle-reaped at five minutes just because it never
+	// opened a viewer WebSocket.
+	_ = h.store.UpdateLastActivity(r.Context(), session.ID)
+	return true, nil
 }
 
 func respondJSON(w http.ResponseWriter, status int, data interface{}) {

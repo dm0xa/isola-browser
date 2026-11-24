@@ -1129,7 +1129,10 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
               const open = openKey === rowKey;
               const similar = !open && openId !== null && e.id === openId;
               return (
-                <div key={rowKey}>
+                // Offscreen rows skip layout/paint; the intrinsic size keeps the
+                // scrollbar stable. Important at the 1000-entry cap, where each
+                // appended entry otherwise repaints the whole list.
+                <div key={rowKey} className="[content-visibility:auto] [contain-intrinsic-size:auto_24px]">
                   <div
                     onClick={() => setOpenKey(open ? null : rowKey)}
                     className={`group flex cursor-pointer items-center gap-2 px-2 py-0.5 hover:bg-zinc-200/70 dark:hover:bg-gray-800/70 ${open ? 'bg-zinc-200/90 dark:bg-gray-800/90' : similar ? 'bg-cyan-500/10' : flagged.length ? 'bg-amber-500/5' : ''}`}

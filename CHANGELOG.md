@@ -70,6 +70,43 @@ publishes the section matching the tag.
   gone from the landing page; the same features are documented in
   [`docs/`](docs/README.md).
 
+### Changed
+
+- The web UI is ~38% smaller on first load and is now served compressed on the
+  binary/LaunchAgent install path: hashed assets and the 419 KB brand font are
+  gzipped (initial JS 819 KB → ~519 KB raw / ~170 KB gzip, font → ~86 KB),
+  fonts/icons cache for a week, and the viewer/network/captures pages plus the
+  Analysis panel (105 KB) load on demand. The toolbar logo no longer runs a
+  perpetual filter animation: idle viewer task time measured 60 → ~10 ms/s,
+  layouts 60 → 1/s.
+- Filtering the network log no longer re-encodes every kept entry: the REST and
+  MCP `get_network` paths copy the original entry bytes and decode only the
+  filter fields (measured ~7× less backend CPU at 1000 entries).
+- `graph.png` allows one render per session instead of two; a maximum-frame
+  render peaks around 600 MB in the sandbox, so two left too little headroom.
+- Idle reaping now treats authenticated owner API calls as activity, so a
+  REST-only client is not terminated at five minutes while polling.
+- A finalized session keeps its control token (until its cache TTL), so the
+  owner can still read a terminal row; a failed launch shows its `error` status
+  instead of `403`.
+- `GET /api/captures` includes `usage` (`used_bytes`, `quota_bytes`,
+  `retention_days`); the empty capture panel explains that a page loaded before
+  Record has no bodies to save.
+- Share viewers stop when the link is revoked or the session ends (`404`/`410`
+  are terminal instead of ignored).
+
+### Fixed
+
+- A page's `alert()`/`confirm()`/`prompt()` no longer freezes the tab: the
+  runner disables native dialogs and stubs the three page entry points
+  (`prompt()` returns null), and the streamer also auto-accepts a CDP
+  `Page.javascriptDialogOpening` if one appears. A `beforeunload` handler no
+  longer traps navigation in the Electron runner.
+- IME composition works: the viewer hosts a hidden editable target, skips
+  chords while composing, and sends `compositionend` text as one `type` event.
+- Intel recon allows 20 s upstream (a DNS/ASN lookup that took >12 s surfaced a
+  spurious `504`).
+
 ## [1.7.3] - 2026-11-22
 
 ### Fixed

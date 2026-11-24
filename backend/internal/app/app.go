@@ -3,6 +3,8 @@
 package app
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,7 +13,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -353,8 +358,30 @@ func respondJSONError(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
+// gzipStaticExt are the embedded static types worth compressing on the wire.
+// PNG/JPEG/WOFF2/ZIP are already compressed and are served as-is.
+var gzipStaticExt = map[string]bool{
+	".js": true, ".mjs": true, ".css": true, ".html": true, ".svg": true,
+	".json": true, ".webmanifest": true, ".txt": true, ".xml": true,
+	".ttf": true, ".otf": true, ".map": true,
+}
+
+func compressibleStatic(reqPath string) bool {
+	if reqPath == "" || reqPath == "/" || reqPath == "/index.html" {
+		return true
+	}
+	return gzipStaticExt[strings.ToLower(path.Ext(reqPath))]
+}
+
+func acceptsGzip(r *http.Request) bool {
+	return strings.Contains(strings.ToLower(r.Header.Get("Accept-Encoding")), "gzip")
+}
+
 // serveFrontend: FileServer over embed.FS sends no validators — pin hashed
-// /assets forever, revalidate the shell.
+// /assets forever, revalidate the shell. The embedded assets have no
+// Content-Encoding of their own, so text and the 419 KB TTF are gzipped once
+// per process: the binary install path (which has no nginx) otherwise shipped
+// 819 KB of JS and 419 KB of font uncompressed.
 func serveFrontend(fsys fs.FS) http.Handler {
 	// Go's built-in mime table has no .webmanifest entry, so http.FileServer
 	// would sniff the body and serve the manifest as text/plain. Register the
@@ -362,11 +389,57 @@ func serveFrontend(fsys fs.FS) http.Handler {
 	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
 
 	files := http.FileServer(http.FS(fsys))
+	var gzMu sync.Mutex
+	gzCache := map[string][]byte{}
+	compressed := func(name string, data []byte) []byte {
+		gzMu.Lock()
+		defer gzMu.Unlock()
+		if c, ok := gzCache[name]; ok {
+			return c
+		}
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		_, _ = zw.Write(data)
+		_ = zw.Close()
+		gzCache[name] = buf.Bytes()
+		return buf.Bytes()
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/assets/") {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/assets/"):
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		} else {
+		case strings.HasPrefix(r.URL.Path, "/fonts/"), strings.HasPrefix(r.URL.Path, "/icons/"):
+			// Stable filenames: cache for a week instead of re-downloading the
+			// 419 KB font on every navigation. A rename picks the new file up.
+			w.Header().Set("Cache-Control", "public, max-age=604800")
+		default:
 			w.Header().Set("Cache-Control", "no-cache")
+		}
+
+		if compressibleStatic(r.URL.Path) {
+			w.Header().Set("Vary", "Accept-Encoding")
+			if (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
+				r.Header.Get("Range") == "" && acceptsGzip(r) {
+				name := strings.TrimPrefix(r.URL.Path, "/")
+				if name == "" {
+					name = "index.html"
+				}
+				if data, err := fs.ReadFile(fsys, name); err == nil && len(data) >= 512 {
+					ct := mime.TypeByExtension(path.Ext(name))
+					if ct != "" {
+						body := compressed(name, data)
+						w.Header().Set("Content-Encoding", "gzip")
+						w.Header().Set("Content-Type", ct)
+						w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+						if r.Method == http.MethodHead {
+							return
+						}
+						_, _ = w.Write(body)
+						return
+					}
+				}
+			}
 		}
 		files.ServeHTTP(w, r)
 	})

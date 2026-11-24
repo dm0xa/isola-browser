@@ -74,6 +74,15 @@ func TestGetSessionRequiresOwnerToken(t *testing.T) {
 	} else if got, ok := body["session_token"]; !ok || got != controlToken {
 		t.Fatalf("owner token = %v, want %q", got, controlToken)
 	}
+	// An authenticated API read counts as activity (REST-only clients must not
+	// be idle-reaped while they are polling).
+	row, err := st.GetSession(ctx, sid)
+	if err != nil || row == nil || row.LastActivityAt == nil {
+		t.Fatalf("last activity not recorded: row=%v err=%v", row, err)
+	}
+	if time.Since(*row.LastActivityAt) > time.Minute {
+		t.Fatalf("last activity = %v, want recent", row.LastActivityAt)
+	}
 
 	for _, presented := range []string{"", "attacker-guess", "stale-token-from-old-session"} {
 		code, body := get(presented)
@@ -101,7 +110,22 @@ func TestGetSessionRequiresOwnerToken(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("recovery status = %d: %v", code, body)
 	}
-	if got, _ := body["session_token"].(string); got == "" || got == controlToken {
-		t.Fatalf("recovery token = %q, want a freshly issued token", got)
+	recovered, _ := body["session_token"].(string)
+	if recovered == "" || recovered == controlToken {
+		t.Fatalf("recovery token = %q, want a freshly issued token", recovered)
+	}
+
+	// A terminal row stays readable by its owner: finalization keeps the control
+	// token so the viewer can show "Session has ended" instead of "token
+	// required", and a failed launch does not look like token theft.
+	if err := st.TerminateSession(ctx, sid); err != nil {
+		t.Fatal(err)
+	}
+	code, body = get(recovered)
+	if code != http.StatusOK {
+		t.Fatalf("terminated owner GET = %d: %v", code, body)
+	}
+	if body["status"] != models.SessionStatusTerminated {
+		t.Fatalf("terminated owner GET status = %v, want terminated", body["status"])
 	}
 }

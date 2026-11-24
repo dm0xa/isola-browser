@@ -1,11 +1,15 @@
 import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
-import ViewerPage from './pages/ViewerPage';
-import NetworkPage from './pages/NetworkPage';
-import CapturesPage from './pages/CapturesPage';
-import RunPage from './pages/RunPage';
-import SharePage from './pages/SharePage';
+
+// Route-level chunks: the landing page must not download the viewer, the
+// Analysis panel or the captures/network pages. LandingPage stays eager so the
+// first paint has no extra round trip.
+const ViewerPage = React.lazy(() => import('./pages/ViewerPage'));
+const NetworkPage = React.lazy(() => import('./pages/NetworkPage'));
+const CapturesPage = React.lazy(() => import('./pages/CapturesPage'));
+const RunPage = React.lazy(() => import('./pages/RunPage'));
+const SharePage = React.lazy(() => import('./pages/SharePage'));
 import { ThemeProvider } from './lib/ThemeContext';
 import { LoadingOverlay } from './components/LoadingOverlay';
 import { useLaunchProgress } from './lib/launchProgress';

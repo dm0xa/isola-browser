@@ -455,6 +455,22 @@ func (m *Manager) Status(ctx context.Context, sessionID string) (Status, error) 
 }
 
 // List returns every archive on disk, newest first.
+// Quota returns the host-wide archive budget and retention window so an API
+// caller can show usage without reading the config or the logs. A zero quota
+// means unlimited; zero retention days means archives are kept indefinitely.
+func (m *Manager) Quota() (totalBytes int64, retentionDays int) {
+	if m == nil {
+		return 0, 0
+	}
+	if m.cfg.TotalQuotaBytes > 0 {
+		totalBytes = m.cfg.TotalQuotaBytes
+	}
+	if m.cfg.Retention > 0 {
+		retentionDays = int(m.cfg.Retention.Hours() / 24)
+	}
+	return totalBytes, retentionDays
+}
+
 func (m *Manager) List() ([]Summary, error) {
 	if !m.Enabled() {
 		return nil, ErrDisabled

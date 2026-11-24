@@ -11,8 +11,9 @@ import (
 
 // TestSessionCacheKeys pins every cache entry that belongs to a session. The two
 // teardown paths (FinalizeRunningSession and CleanupOrphanContainers) free this
-// set through the same function, so a key added to one path only cannot exist —
-// and a key silently dropped here is a leak, which this test catches.
+// set through the same function, except the control token: finalization keeps it
+// so the owner can still read the terminal row. A key added to one path only
+// cannot exist, and a key silently dropped here is a leak.
 func TestSessionCacheKeys(t *testing.T) {
 	sid := "0e30b942-d68c-4a6f-9a11-2f0e2a1b3c4d"
 	want := []string{
@@ -43,7 +44,8 @@ func TestSessionCacheKeys(t *testing.T) {
 }
 
 // TestFinalizeRunningSessionClearsEveryCacheKey is the behavioural half: after a
-// session is finalized nothing it cached may answer a later lookup.
+// session is finalized nothing it cached may answer a later lookup, except the
+// control token that makes the terminal row readable by its owner.
 func TestFinalizeRunningSessionClearsEveryCacheKey(t *testing.T) {
 	stubDocker(t, "exit 0\n")
 
@@ -68,8 +70,16 @@ func TestFinalizeRunningSessionClearsEveryCacheKey(t *testing.T) {
 	}
 	o.FinalizeRunningSession(ctx, st, cache, sess)
 
+	control := "session:" + id.String() + ":control_token"
 	for _, key := range sessionCacheKeys(id.String()) {
-		if _, err := cache.Get(ctx, key); err == nil {
+		_, err := cache.Get(ctx, key)
+		if key == control {
+			if err != nil {
+				t.Errorf("control token must survive finalization so the owner can read the terminal row: %v", err)
+			}
+			continue
+		}
+		if err == nil {
 			t.Errorf("cache key %q survived finalization", key)
 		}
 	}
