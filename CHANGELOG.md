@@ -14,6 +14,15 @@ publishes the section matching the tag.
   its resolved exit country equals `tor.exit_country`, since the proxy and the
   egress scoping are fixed at container boot; a failed Tor fill backs off for
   five minutes rather than booting a container every pool pass.
+- `scripts/doctor.sh` is a read-only local diagnostic for a sandbox that will
+  not start: it reports Docker and Colima state, lists `isola-*` containers,
+  resolves each running container's published `5900/tcp` mapping, probes it
+  from the host and probes the streamer's `/healthz` inside that same
+  container, checks `GET /api/config` on the backend, and prints a single
+  `VERDICT` line. [Deployment](docs/deployment.md#troubleshooting-sessions-fail-to-start)
+  gained a matching section for the `published port unreachable` /
+  `warm pool: claim probe, discarded` signature, including the fix
+  (`colima restart`).
 
 ### Changed
 

@@ -158,6 +158,54 @@ docker compose up --build -d
 
 Rebuilding replaces the images; the `isola-data` volume and your `.env` are preserved. In-flight sessions end when their containers are replaced.
 
+## Troubleshooting: sessions fail to start
+
+Start with [`scripts/doctor.sh`](../scripts/doctor.sh) — it is read-only (it never creates, starts, stops, removes or restarts a container) and prints one `VERDICT` line, exiting non-zero when unhealthy:
+
+```bash
+scripts/doctor.sh
+```
+
+It reports the Docker runtime (and `colima status` when Colima is installed), lists every `isola-*` container, resolves each running container's published `5900/tcp` mapping, probes that address from the host, probes the streamer's `/healthz` from *inside* the same container, and checks the backend at `${ISOLA_URL:-http://localhost:8080}/api/config` (`ISOLA_PORT` sets the port when `ISOLA_URL` is unset).
+
+### The signature
+
+The UI only says *"The sandbox could not start. If it fails again, check the isola log for the reason."* The backend log carries the actual reason:
+
+- `published port unreachable, browser-net` — the container is running and its published port is listed by `docker port`, but a connection from the host is refused. The control plane then falls back to the container IP on `browser-net`; when the backend itself runs on the host, that fallback has no route, so the session fails.
+- `warm pool: claim probe, discarded` — a pooled container was discarded during the claim probe for the same reason: its streamer was not reachable from the backend.
+- `connection refused` on a host `127.0.0.1:<port>` — the same fault seen from outside isola, for example `curl http://127.0.0.1:32772/healthz`.
+
+### Is it the container or the publish path?
+
+Ask the streamer inside the container directly:
+
+```bash
+docker exec <container> bash -c \
+  'exec 3<>/dev/tcp/127.0.0.1/5900 && printf "GET /healthz HTTP/1.0\r\n\r\n" >&3 && head -1 <&3'
+```
+
+`HTTP/1.0 200 OK` means the streamer is healthy and the fault is in the host port path. A refusal or empty answer means the container itself is unhealthy — read that container's log instead (`docker logs <container>`).
+
+### Verdicts
+
+`scripts/doctor.sh` ends with exactly one of these:
+
+| Verdict | Meaning | What to do |
+| :--- | :--- | :--- |
+| `VERDICT: ok` | Backend answers, containers run, published ports reachable from the host. | Nothing. |
+| `VERDICT: host port publishing is broken (containers healthy) — run: colima restart` | `/healthz` answers inside the container but the published `127.0.0.1:<port>` refuses from the host. | `colima restart` (Colima), or restart the container runtime otherwise. |
+| `VERDICT: no isola containers running (warm pool disabled or backend stopped)` | No `isola-*` container is up — usually the warm pool is disabled or the backend was stopped. | Start isola, or check `warm_pool.size`. |
+| `VERDICT: backend not reachable — start isola or check the port (…)` | Nothing answered `GET /api/config` at the probed URL. | Start isola, or set `ISOLA_URL` / `ISOLA_PORT` to the port it actually listens on. |
+| `VERDICT: containers are up but the streamer is not answering inside them` | The container's own `/healthz` failed. | Read `docker logs <container>`; the image or entrypoint is the problem, not Docker's networking. |
+| `VERDICT: docker daemon is not reachable` | `docker info` failed. | Start the Docker runtime. |
+
+### Fix and what to expect
+
+For Colima, `colima restart` restores the port-forwarding process that had stopped forwarding published ports. On Docker Desktop or a Linux daemon, restart that runtime (`sudo systemctl restart docker`, or restart Docker Desktop). Sessions already started cannot be repaired in place; close them and launch new ones.
+
+After the runtime is back, re-run `scripts/doctor.sh` until it prints `VERDICT: ok`. The warm pool rebuilds its idle containers within about a minute, so the first launches after the restart may cold-start while the pool refills.
+
 ## Production Checklist
 
 - [ ] TLS terminated in front of Isola; container bound to `127.0.0.1`.

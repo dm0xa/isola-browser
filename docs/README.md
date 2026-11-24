@@ -23,6 +23,7 @@ This directory is the external documentation — what an operator or an API cons
 | Run it in production | [Deployment](deployment.md) |
 | Choose a release version and cut it | [Versioning](versioning.md) |
 | Diagnose a problem | [Troubleshooting](troubleshooting.md) |
+| Diagnose a session that fails to start | [Deployment → Troubleshooting: sessions fail to start](deployment.md#troubleshooting-sessions-fail-to-start) |
 
 ## At a Glance
 
