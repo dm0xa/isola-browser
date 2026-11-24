@@ -252,6 +252,11 @@ func (c *CDPClient) dispatchChord(combo string) error {
 	if def.vk == 0 && text != "" {
 		return c.insertText(text)
 	}
+	// A shortcut types nothing: Ctrl/Meta/Alt plus an ASCII key is a command
+	// (Ctrl+A, Alt+ArrowLeft), never a character.
+	if mods&(cdpModCtrl|cdpModAlt|cdpModMeta) != 0 {
+		text = ""
+	}
 	if err := c.dispatchKeyEvent("keyDown", def, mods, text); err != nil {
 		return err
 	}

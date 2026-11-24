@@ -94,6 +94,16 @@ jobs:
         working-directory: browsers/isola-streamer
         run: go test -race ./...
 
+      # Named separately so a regression in the viewer → CDP key path is
+      # visible in the job list instead of buried in the suite: punctuation
+      # used to be dropped before Chromium saw it.
+      - name: Streamer input regression
+        working-directory: browsers/isola-streamer
+        run: >-
+          go test -race -count=1 -v
+          -run 'TestEveryPrintableASCIIResolves|TestPunctuationUsesPhysicalKey|TestNonASCIISymbolIsTyped|TestSplitChordKeepsLiteralPlus|TestInputDispatch'
+          .
+
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -165,7 +175,9 @@ jobs:
   # viewer attaches, reconnects, forces a capture re-send, resizes, and leaves.
   # A session that silently latches at the background rate (~1 fps) while every
   # metric still says "active" is invisible to the unit suites — this job is the
-  # only place the two rates are measured together.
+  # only place the two rates are measured together. The same image then types
+  # real strings into a page, covering the viewer → CDP → Chromium path that
+  # unit tests can only follow up to the command boundary.
   fps:
     needs: changes
     if: needs.changes.outputs.browsers == 'true'
@@ -203,6 +215,15 @@ jobs:
           ISOLA_FPS_E2E: '1'
           ISOLA_FPS_E2E_RESOLUTION: 960x540
         run: go test -run TestViewerFrameRateOnRealSite -v -count=1 -timeout 10m .
+
+      # Same image, same real Electron/Chromium: the unit suite proves the CDP
+      # commands, this proves Chromium actually types the characters into a form.
+      - name: Typing symbols in a real sandbox
+        working-directory: browsers/isola-streamer
+        env:
+          ISOLA_INPUT_E2E: '1'
+          ISOLA_INPUT_E2E_RESOLUTION: 960x540
+        run: go test -run TestSandboxTypingOnRealSite -v -count=1 -timeout 10m .
 
       - name: Container inventory
         if: failure()
