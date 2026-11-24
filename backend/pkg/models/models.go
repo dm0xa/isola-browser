@@ -39,6 +39,10 @@ type Session struct {
 	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 	TerminatedAt   *time.Time `json:"terminated_at,omitempty"`
 	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
+	// ErrorCode is the stable snake_case reason a launch failed, set only when
+	// Status is error (sandbox_publish_unreachable, stream_not_ready,
+	// create_failed). Absent on healthy sessions.
+	ErrorCode string `json:"error_code,omitempty"`
 }
 
 // CreateSessionRequest is the payload for POST /api/sessions.

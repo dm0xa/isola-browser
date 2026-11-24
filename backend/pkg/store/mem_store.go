@@ -198,6 +198,24 @@ func (ms *MemStore) UpdateSessionStatus(ctx context.Context, id uuid.UUID, statu
 	return nil
 }
 
+// MarkSessionFailed records a failed launch: the row becomes error with the
+// stable reason surfaced as error_code on GET /api/sessions/{id}. No-op when
+// the row is gone (the owner deleted it mid-launch).
+func (ms *MemStore) MarkSessionFailed(ctx context.Context, id uuid.UUID, errorCode string) error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	sess, ok := ms.sessions[id]
+	if !ok {
+		return nil
+	}
+	sess.Status = models.SessionStatusError
+	sess.ErrorCode = errorCode
+	sess.ContainerID = ""
+	sess.ContainerHost = ""
+	sess.ContainerPort = 0
+	return nil
+}
+
 func (ms *MemStore) ActivateSession(ctx context.Context, id uuid.UUID, containerID, containerHost string, containerPort int, duration time.Duration) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -213,6 +231,7 @@ func (ms *MemStore) ActivateSession(ctx context.Context, id uuid.UUID, container
 		return ErrSessionNotProvisioning
 	}
 	sess.Status = models.SessionStatusRunning
+	sess.ErrorCode = ""
 	sess.ContainerID = containerID
 	sess.ContainerHost = containerHost
 	sess.ContainerPort = containerPort

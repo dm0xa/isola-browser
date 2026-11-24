@@ -418,7 +418,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("create session: goroutine panic for %s: %v", session.ID.String(), r)
-				h.store.UpdateSessionStatus(context.Background(), session.ID, models.SessionStatusError, "", "", 0)
+				h.markSessionFailed(context.Background(), session.ID, "create_failed")
 			}
 		}()
 
@@ -482,9 +482,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 			})
 			if err != nil {
 				log.Printf("create session: orchestrator error: %v", err)
-				if err := h.store.UpdateSessionStatus(bgCtx, session.ID, models.SessionStatusError, "", "", 0); err != nil {
-					log.Printf("create session: failed to update error status: %v", err)
-				}
+				h.markSessionFailed(bgCtx, session.ID, sessionCreateErrorCode(err))
 				return
 			}
 		}
@@ -511,7 +509,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 				failSess.ContainerHost = info.Host
 				failSess.ContainerPort = info.Port
 				h.orch.FinalizeRunningSession(bgCtx, h.store, h.cache, &failSess)
-				h.store.UpdateSessionStatus(bgCtx, session.ID, models.SessionStatusError, "", "", 0)
+				h.markSessionFailed(bgCtx, session.ID, "stream_not_ready")
 				return
 			}
 		}
@@ -592,6 +590,28 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		Status:    models.SessionStatusProvisioning,
 		// ExpiresAt / RemainingMin / ExtendAvailable set once browser is running
 	})
+}
+
+// markSessionFailed records a create-path failure: the row becomes error and
+// carries the stable reason surfaced as error_code on GET /api/sessions/{id}.
+func (h *Handler) markSessionFailed(ctx context.Context, id uuid.UUID, code string) {
+	if err := h.store.MarkSessionFailed(ctx, id, code); err != nil {
+		log.Printf("create session: failed to record failure %q: %v", code, err)
+	}
+}
+
+// sessionCreateErrorCode maps a launch failure to the stable reason stored on
+// the session row. A publish-path failure is not a dead sandbox: the container
+// can be alive inside while the host cannot dial it.
+func sessionCreateErrorCode(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, orchestrator.ErrPublishUnreachable):
+		return "sandbox_publish_unreachable"
+	default:
+		return "create_failed"
+	}
 }
 
 // claimWarmContainer serves a session from the warm pool when the request is

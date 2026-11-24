@@ -675,3 +675,149 @@ func TestWarmPoolOrphanCollectorSkipsOnLookupError(t *testing.T) {
 		t.Fatalf("terminated = %v, want none (no DB answer means no safe collection)", *terminated)
 	}
 }
+
+// publishUnreachable is the probe verdict for a container that is alive inside
+// but cannot be dialed through the host's published port.
+func publishUnreachable(info *SessionInfo) error {
+	return &PublishUnreachableError{
+		ContainerID:   info.ContainerID,
+		PublishedAddr: "127.0.0.1:5900",
+		InternalAlive: true,
+	}
+}
+
+// A broken host publish path is not a dead container: the claim must hand the
+// container back instead of destroying it, and the pool must stop serving
+// claims until a probe answers again.
+func TestWarmPoolClaimKeepsContainerWhenPublishPathIsDown(t *testing.T) {
+	t.Parallel()
+	p, created, terminated := newTestPool(t, 1)
+	if !p.fillOne(context.Background(), warmMode{}) {
+		t.Fatal("fillOne failed")
+	}
+	p.mu.Lock()
+	id := p.warm[0].info.ContainerID
+	p.mu.Unlock()
+
+	var probeMu sync.Mutex
+	probes := 0
+	publishDown := true
+	p.prober = func(ctx context.Context, info *SessionInfo) error {
+		probeMu.Lock()
+		defer probeMu.Unlock()
+		probes++
+		if publishDown {
+			return publishUnreachable(info)
+		}
+		return nil
+	}
+
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30, false, ""); got != nil {
+		t.Fatalf("Claim with publish path down = %+v, want nil (cold fallback)", got)
+	}
+	if !poolTracks(p, id) {
+		t.Fatal("claim destroyed a container whose probe said the publish path is down")
+	}
+	if len(*terminated) != 0 {
+		t.Fatalf("terminated = %v, want none", *terminated)
+	}
+	if len(*created) != 1 {
+		t.Fatalf("created = %v, want no refill churn during the outage", *created)
+	}
+
+	// Degraded: no further claims are served (and nothing is probed/popped).
+	probeMu.Lock()
+	before := probes
+	probeMu.Unlock()
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30, false, ""); got != nil {
+		t.Fatalf("Claim while degraded = %+v, want nil", got)
+	}
+	probeMu.Lock()
+	after := probes
+	probeMu.Unlock()
+	if after != before {
+		t.Fatalf("probes while degraded = %d, want %d (claims must not pop containers)", after, before)
+	}
+	if !poolTracks(p, id) {
+		t.Fatal("container left the pool while degraded")
+	}
+
+	// Recovery: a successful reconcile probe re-enables claims.
+	publishDown = false
+	p.reconcile(context.Background())
+
+	got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30, false, "")
+	if got == nil || got.ContainerID != id {
+		t.Fatalf("Claim after recovery = %+v, want container %s", got, id)
+	}
+}
+
+// reconcile must not prune a container that reports ErrPublishUnreachable, even
+// twice, but must still prune a genuinely dead one (two strikes).
+func TestWarmPoolReconcileKeepsPublishUnreachableContainers(t *testing.T) {
+	t.Parallel()
+	p, _, terminated := newTestPool(t, 1)
+	if !p.fillOne(context.Background(), warmMode{}) {
+		t.Fatal("fillOne failed")
+	}
+	p.mu.Lock()
+	id := p.warm[0].info.ContainerID
+	p.mu.Unlock()
+
+	p.prober = func(ctx context.Context, info *SessionInfo) error {
+		return publishUnreachable(info)
+	}
+	p.reconcile(context.Background())
+	p.reconcile(context.Background())
+
+	if !poolTracks(p, id) {
+		t.Fatal("reconcile pruned a container whose probe said the publish path is down")
+	}
+	if len(*terminated) != 0 {
+		t.Fatalf("terminated = %v, want none", *terminated)
+	}
+
+	// Genuinely dead: still two strikes, then termination.
+	p.prober = func(ctx context.Context, info *SessionInfo) error {
+		return errors.New("container dead")
+	}
+	p.reconcile(context.Background())
+	p.reconcile(context.Background())
+
+	if poolTracks(p, id) {
+		t.Fatal("reconcile kept a genuinely dead container after two strikes")
+	}
+	if len(*terminated) == 0 {
+		t.Fatal("genuinely dead container was not terminated")
+	}
+}
+
+// probeWarm must classify "host cannot dial, container alive inside" as
+// ErrPublishUnreachable rather than a plain probe failure.
+func TestWarmPoolProbeClassifiesPublishUnreachable(t *testing.T) {
+	prev := containerStreamAliveProbe
+	containerStreamAliveProbe = func(ctx context.Context, dockerHost, containerID string) bool {
+		return true
+	}
+	defer func() { containerStreamAliveProbe = prev }()
+
+	orch, err := New("unix:///nonexistent/docker.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := NewWarmPool(orch, &config.Config{
+		WarmPoolEnabled: true,
+		WarmPoolSize:    1,
+		Resolution:      "1920x1080",
+		BrowserTheme:    "dark",
+	})
+
+	err = p.probeWarm(context.Background(), &SessionInfo{
+		ContainerID: "warm-container-x",
+		Host:        "127.0.0.1",
+		Port:        1, // closed: the host dial refuses
+	})
+	if !errors.Is(err, ErrPublishUnreachable) {
+		t.Fatalf("probeWarm = %v, want ErrPublishUnreachable", err)
+	}
+}

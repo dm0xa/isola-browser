@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -74,6 +75,11 @@ type WarmPool struct {
 	misses     map[string]int   // consecutive probe failures per container id
 	started    bool
 	disabled   bool
+	// publishDegraded is set when a probe proved the container is alive inside
+	// but the host cannot dial its published port. Claims are not served (the
+	// cold path takes over) and idle containers are kept instead of torn down
+	// until a probe answers again.
+	publishDegraded bool
 	// torFillsBlockedUntil suppresses Tor fills after a failed one: a network
 	// that cannot bootstrap Tor would otherwise boot and destroy a container
 	// every reconcile tick, and each attempt holds the shared fill worker for
@@ -130,6 +136,47 @@ func (p *WarmPool) noteMiss(containerID string) int {
 func (p *WarmPool) clearMiss(containerID string) {
 	p.mu.Lock()
 	delete(p.misses, containerID)
+	p.mu.Unlock()
+}
+
+// notePublishUnreachable marks the host publish path as broken and reports
+// whether this call is the transition, so the warning is logged once per outage.
+func (p *WarmPool) notePublishUnreachable() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	first := !p.publishDegraded
+	p.publishDegraded = true
+	return first
+}
+
+// clearPublishUnreachable clears the outage flag once a probe answers again,
+// reporting whether it was set.
+func (p *WarmPool) clearPublishUnreachable() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	was := p.publishDegraded
+	p.publishDegraded = false
+	return was
+}
+
+// requeueClaim returns a claimed container to the idle pool when the probe
+// proved it alive but unreachable through the host. The pending shield is
+// removed in the same critical section as the reinsert, so the container is
+// tracked by warm or by pending at every instant. Drain may have stopped it
+// first; that branch re-terminates idempotently rather than re-adding a dead
+// container to a disabled pool.
+func (p *WarmPool) requeueClaim(claimed *warmContainer) {
+	id := claimed.info.ContainerID
+	p.mu.Lock()
+	if p.disabled {
+		p.mu.Unlock()
+		// Drain ran while the claim was popped; it may have missed the
+		// container, so stop it here to avoid a leak.
+		p.terminate(context.Background(), id)
+		return
+	}
+	delete(p.pending, id)
+	p.warm = append(p.warm, claimed)
 	p.mu.Unlock()
 }
 
@@ -263,7 +310,9 @@ func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int,
 		mode.country = ""
 	}
 	p.mu.Lock()
-	if p.disabled {
+	if p.disabled || p.publishDegraded {
+		// Nothing in the pool can be reached through the host while the
+		// publish path is down, so serve no claims: the handler cold-starts.
 		p.mu.Unlock()
 		return nil, ""
 	}
@@ -297,6 +346,18 @@ func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int,
 	// pool, but it may have died since (OOM, runtime restart). One retry so a
 	// momentary streamer hiccup does not cost the user their fast path.
 	if err := p.probeWithRetry(ctx, &claimed.info.SessionInfo); err != nil {
+		if errors.Is(err, ErrPublishUnreachable) {
+			// The container answers on its own loopback, so it is healthy: the
+			// host's port publishing is what broke. Put it back instead of
+			// destroying a live sandbox, and stop serving claims until a probe
+			// answers again (cold launches still work).
+			p.requeueClaim(claimed)
+			if p.notePublishUnreachable() {
+				log.Warn().Err(err).Str("container_id", claimed.info.ContainerID).
+					Msg("warm pool: claim blocked, host publishing unreachable")
+			}
+			return nil, ""
+		}
 		log.Warn().Err(err).Str("container_id", claimed.info.ContainerID).
 			Msg("warm pool: claim probe, discarded")
 		p.clearPending(claimed.info.ContainerID)
@@ -486,6 +547,20 @@ func (p *WarmPool) reconcile(ctx context.Context) {
 		cancel()
 		if err == nil {
 			p.clearMiss(wc.info.ContainerID)
+			if p.clearPublishUnreachable() {
+				log.Info().Msg("warm pool: host publishing recovered")
+			}
+			continue
+		}
+		if errors.Is(err, ErrPublishUnreachable) {
+			// Alive inside, unreachable from the host: a broken publish path is
+			// not a dead container, so keep it and do not count a miss. Claims
+			// stay off until a probe answers again.
+			p.clearMiss(wc.info.ContainerID)
+			if p.notePublishUnreachable() {
+				log.Warn().Err(err).Str("container_id", wc.info.ContainerID).
+					Msg("warm pool: host publishing unreachable, keeping containers")
+			}
 			continue
 		}
 		// Two strikes, mirroring the session health checker: one failed probe
@@ -899,13 +974,24 @@ func (p *WarmPool) probeWithRetry(ctx context.Context, info *SessionInfo) error 
 
 // probeWarm: ask the stream endpoint itself. `docker inspect <64-hex-id>` is
 // unreliable on Podman's compat API; a false negative here costs a real container.
+// When the host cannot dial the stream but the container's own loopback answers,
+// the failure is classified as ErrPublishUnreachable so the pool keeps it.
 func (p *WarmPool) probeWarm(ctx context.Context, info *SessionInfo) error {
 	ready, err := p.orch.waitForIsolaReady(info.Host, info.Port)
-	if err != nil {
-		return err
+	if err == nil && ready {
+		return nil
 	}
-	if !ready {
-		return fmt.Errorf("stream healthz not ready")
+	if err == nil {
+		err = fmt.Errorf("stream healthz not ready")
 	}
-	return nil
+	if p.orch != nil && info.ContainerID != "" &&
+		containerStreamAliveProbe(ctx, p.orch.host, info.ContainerID) {
+		return &PublishUnreachableError{
+			ContainerID:   info.ContainerID,
+			PublishedAddr: net.JoinHostPort(info.Host, strconv.Itoa(info.Port)),
+			InternalAlive: true,
+			Err:           err,
+		}
+	}
+	return err
 }
