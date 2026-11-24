@@ -81,9 +81,17 @@ func handleInputWS(w http.ResponseWriter, r *http.Request) {
 				return
 			case <-t.C:
 				wmu.Lock()
+				// Re-arm the deadline for this write too. writeJSON does it for
+				// event replies, but the keepalive goroutine used to write with
+				// the last deadline still armed: after ~10 s of container-side
+				// silence the write failed, and gorilla's sticky write error
+				// silently killed every later push (tabs, network, clipboard,
+				// selection) until the relay closed the channel at 90 s.
+				_ = conn.SetWriteDeadline(time.Now().Add(inputWSWriteDeadline))
 				err := conn.WriteJSON(map[string]any{"type": "keepalive"})
 				wmu.Unlock()
 				if err != nil {
+					log.Printf("input: keepalive write: %v", err)
 					return
 				}
 			}
@@ -168,7 +176,15 @@ func handleInputWS(w http.ResponseWriter, r *http.Request) {
 			go func() {
 				text := ""
 				if cdpClient != nil && cdpClient.Available() {
-					t, err := cdpClient.evaluateString("window.getSelection().toString()")
+					t, err := cdpClient.evaluateString(`(function(){
+						var s = window.getSelection().toString();
+						if (s) return s;
+						var el = document.activeElement;
+						if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+							try { return el.value.substring(el.selectionStart, el.selectionEnd); } catch (e) {}
+						}
+						return "";
+					})()`)
 					if err != nil {
 						log.Printf("input: get_selection: %v", err)
 					} else {

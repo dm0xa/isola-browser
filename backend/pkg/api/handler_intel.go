@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -93,6 +94,14 @@ func (h *Handler) GetSessionIntel(w http.ResponseWriter, r *http.Request) {
 	if n > intelMaxResponseBytes {
 		log.Printf("intel: upstream body exceeds %d bytes", intelMaxResponseBytes)
 		respondError(w, http.StatusBadGateway, "intel_failed")
+		return
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// The streamer reports its own {error,detail} document. Forwarding it
+		// verbatim broke the API's {error:{code,message}} envelope, so a client
+		// could not handle recon errors the same way as every other call.
+		respondIntelUpstreamError(w, resp.StatusCode, body.Bytes())
 		return
 	}
 
@@ -208,4 +217,32 @@ func validateIntelHost(host string) error {
 		return errors.New("host must contain a dot")
 	}
 	return nil
+}
+
+// respondIntelUpstreamError maps the streamer's {error,detail} document onto the
+// control plane's stable error envelope.
+func respondIntelUpstreamError(w http.ResponseWriter, status int, raw []byte) {
+	var upstream struct {
+		Error  string `json:"error"`
+		Detail string `json:"detail"`
+	}
+	_ = json.Unmarshal(raw, &upstream)
+	message := strings.TrimSpace(upstream.Detail)
+	if message == "" {
+		message = strings.TrimSpace(upstream.Error)
+	}
+	if message == "" {
+		message = "Recon request failed"
+	}
+	setSensitiveNoStore(w)
+	switch {
+	case status == http.StatusBadRequest:
+		respondErrorMessage(w, http.StatusBadRequest, "invalid_intel_query", message)
+	case status == http.StatusForbidden && upstream.Error == "intel_disabled_by_operator":
+		respondErrorMessage(w, http.StatusForbidden, "intel_disabled", message)
+	case status == http.StatusMethodNotAllowed:
+		respondErrorMessage(w, http.StatusBadGateway, "intel_failed", message)
+	default:
+		respondErrorMessage(w, http.StatusBadGateway, "intel_failed", message)
+	}
 }

@@ -357,9 +357,9 @@ func (c *CDPClient) dispatchIframeMouse(conn *iframeConn, ev inputEvent, lx, ly 
 	case "mousemove":
 		err = conn.send("Input.dispatchMouseEvent", mouseMovedParams(lx, ly, ev.Buttons))
 	case "mousedown":
-		err = conn.send("Input.dispatchMouseEvent", mouseButtonParams("mousePressed", ev.Button, lx, ly))
+		err = conn.send("Input.dispatchMouseEvent", mouseButtonParams("mousePressed", ev.Button, lx, ly, ev.ClickCount))
 	case "mouseup":
-		err = conn.send("Input.dispatchMouseEvent", mouseButtonParams("mouseReleased", ev.Button, lx, ly))
+		err = conn.send("Input.dispatchMouseEvent", mouseButtonParams("mouseReleased", ev.Button, lx, ly, ev.ClickCount))
 	case "mousewheel":
 		err = conn.send("Input.dispatchMouseEvent", mouseWheelParams(ev.DeltaX, ev.DeltaY, lx, ly))
 	default:
@@ -458,7 +458,10 @@ func mouseMovedParams(x, y, buttons int) map[string]interface{} {
 	return params
 }
 
-func mouseButtonParams(eventType, button string, x, y int) map[string]interface{} {
+func mouseButtonParams(eventType, button string, x, y, clickCount int) map[string]interface{} {
+	if clickCount < 1 {
+		clickCount = 1
+	}
 	return map[string]interface{}{
 		"type":       eventType,
 		"x":          x,
@@ -466,7 +469,7 @@ func mouseButtonParams(eventType, button string, x, y int) map[string]interface{
 		"modifiers":  0,
 		"button":     cdpButtonName(button),
 		"buttons":    cdpButtonsMask(button, eventType),
-		"clickCount": 1,
+		"clickCount": clickCount,
 	}
 }
 

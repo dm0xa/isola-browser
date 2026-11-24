@@ -562,3 +562,29 @@ func BenchmarkRenderGraphPNG(b *testing.B) {
 		}
 	}
 }
+
+func TestGraphModelSkipsHostlessURLs(t *testing.T) {
+	entries := append(sampleEntries(),
+		netDumpEntry{URL: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'/>", Type: "Image", Status: 200},
+		netDumpEntry{URL: "blob:https://duckduckgo.com/6f1c", Type: "Image", Status: 200},
+	)
+	m := buildGraphModel(entries, "", nil)
+	for _, n := range m.Nodes {
+		if strings.HasPrefix(n.Host, "data:") || strings.HasPrefix(n.Host, "blob:") {
+			t.Fatalf("hostless URL became a graph node: %+v", n)
+		}
+	}
+	// The inline resources are absent, so the original host/resource counts hold.
+	var hosts, resources int
+	for _, n := range m.Nodes {
+		switch n.Kind {
+		case "host":
+			hosts++
+		case "resource":
+			resources++
+		}
+	}
+	if hosts != 2 || resources != 6 {
+		t.Fatalf("hosts/resources = %d/%d, want 2/6", hosts, resources)
+	}
+}

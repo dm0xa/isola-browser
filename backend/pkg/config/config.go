@@ -580,7 +580,7 @@ func LoadFrom(path string) (*Config, error) {
 	// Docker/Podman's embedded resolver.
 	cfg.DNS.Mode = "plain"
 	cfg.DNS.Servers = []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"}
-	cfg.CORS.Origin = "http://localhost:5173"
+	cfg.CORS.Origin = "http://localhost:8080"
 	cfg.Session.DefaultMin = 10
 	cfg.Session.MaxMin = 30
 	cfg.Session.ExtendMin = 5

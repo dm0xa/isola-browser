@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useIsolaStream, type IsolaQuality } from '../hooks/useIsolaStream';
 import type { NetEntry, ConsoleEntry, CookieEntry, PanelLayout, PanelTab } from '../components/IsolaNetworkPanel';
@@ -6,9 +6,10 @@ import { LoadingOverlay } from '../components/LoadingOverlay';
 import { getToolbarButtons, getPluginProviders, usePlugins } from '../plugins/registry';
 import { useTheme } from '../lib/ThemeContext';
 import { api } from '../lib/api';
+import { apiErrorStatus } from '../lib/apiError';
 import { getCommit, getVersion, isCaptureEnabled, isIntelEnabled, isTimerEnabled } from '../lib/config';
 import { fetchSessionIntel, type DocumentHeaders, type IntelFetch } from '../lib/intel';
-import { clearSessionToken, getSessionToken, storeSessionToken } from '../lib/sessionToken';
+import { clearSessionToken, consumeSessionTokenFromUrl, getSessionToken, storeSessionToken } from '../lib/sessionToken';
 import { endLaunch, setLaunchStatus, useLaunchProgress } from '../lib/launchProgress';
 import { useSessionTimer } from './viewer/useSessionTimer';
 import { useCaptureRecording } from '../hooks/useCaptureRecording';
@@ -87,6 +88,16 @@ export default function ViewerPage() {
   const [netPanel, setNetPanel] = useState<PanelLayout | 'off'>('off');
   // Live custom-data dialog (cookies/headers/storage for the running page).
   const [sessionDataOpen, setSessionDataOpen] = useState(false);
+  // Return focus to the menu trigger after the Custom data dialog closes; the
+  // dialog lives inside the menu, so without this focus falls to <body> and the
+  // next Tab restarts at the top of the page.
+  const sessionDataWasOpen = useRef(false);
+  useEffect(() => {
+    if (sessionDataWasOpen.current && !sessionDataOpen) {
+      document.querySelector<HTMLButtonElement>('button[aria-label="Session actions"]')?.focus();
+    }
+    sessionDataWasOpen.current = sessionDataOpen;
+  }, [sessionDataOpen]);
   // Saved-resources overlay. Docks in the same corner as the network panel, so
   // the two are mutually exclusive (opening one closes the other).
   const [capturePanel, setCapturePanel] = useState<PanelLayout | 'off'>('off');
@@ -219,7 +230,8 @@ export default function ViewerPage() {
 
   const toggleCapture = useCallback(() => {
     if (capture.state === 'recording') void capture.stop();
-    else void capture.start();
+    else if (capture.state === 'idle' || capture.state === 'error') void capture.start();
+    // 'stopped' is final for this session: the archive id is the session id.
   }, [capture]);
 
   // Recon goes through the API proxy, which validates the query and forwards it
@@ -230,21 +242,17 @@ export default function ViewerPage() {
     return fetchSessionIntel(id, token, query);
   }, [id]);
 
-  useEffect(() => {
-    // Priority: URL ?token= param > sessionStorage > empty.
-    // This lets the session owner share a full URL (including token) and
-    // guarantees the WebSocket handshake won't 401 on a fresh browser tab.
-    const urlToken = searchParams.get('token');
-    if (urlToken && id) {
-      storeSessionToken(id, urlToken);
-      // Clean the token from the URL so it doesn't appear in browser
-      // history or get leaked via referrer headers.
-      const cleaned = new URLSearchParams(searchParams);
-      cleaned.delete('token');
-      setSearchParams(cleaned, { replace: true });
-    }
+  // Layout effect: the capture hook's mount status read must see a token from a
+  // #token=/?token= deep link, and passive effects from hooks called earlier in
+  // this component run before this one would.
+  useLayoutEffect(() => {
+    // Priority: URL #token= (fragment, never sent to the server) or ?token= >
+    // sessionStorage > empty. consumeSessionTokenFromUrl stores it and scrubs
+    // it from the address bar so it cannot leak through history or Referer;
+    // the captures page uses the same helper, so both deep links agree.
+    if (id) consumeSessionTokenFromUrl(id);
     sessionTokenRef.current = id ? getSessionToken(id) : '';
-  }, [id, searchParams, setSearchParams]);
+  }, [id]);
 
   useEffect(() => {
     // The admin bearer token was captured into shadowTokenRef above; remove it
@@ -443,9 +451,6 @@ export default function ViewerPage() {
         if (data.session_token) {
           sessionTokenRef.current = data.session_token;
           storeSessionToken(id, data.session_token);
-        } else if (data.share_url && data.status === 'running' && !viewOnly) {
-          window.location.replace(data.share_url);
-          return;
         } else if (data.status === 'running' && sessionTokenRef.current) {
           // Stale token in sessionStorage — clear so next poll can fetch a fresh one.
           clearSessionToken(id);
@@ -532,12 +537,26 @@ export default function ViewerPage() {
           }
           return; // stop polling — terminal
         }
-      } catch (err: any) {
-        if (err.response?.status === 404) {
+      } catch (err) {
+        const httpStatus = apiErrorStatus(err);
+        if (httpStatus === 400 || httpStatus === 404) {
+          // 400 is `invalid_session_id` from a malformed deep link; 404 is an
+          // unknown one. Both are terminal — polling a 400 at 5/s forever left
+          // the viewer on "Starting remote browser…" indefinitely.
           endLaunch();
           setStatus('error');
           if (!restartingRef.current) {
             setSessionError('Session not found');
+          }
+          return;
+        }
+        if (httpStatus === 401 || httpStatus === 403) {
+          // The session row is owner-only (no anonymous downgrade to a share
+          // link): a deep link without the control token cannot attach.
+          endLaunch();
+          setStatus('error');
+          if (!restartingRef.current) {
+            setSessionError('Session token required — reopen this session from the page that created it');
           }
           return;
         }

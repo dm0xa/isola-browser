@@ -14,6 +14,7 @@ import {
   type PostureReport,
 } from '../lib/intel';
 import { CLASS_ACCENT, CLASS_ACCENT_LIGHT, CLASS_LABEL, CLASS_NAME, CLASS_ORDER, classifyResource, type ResourceClass } from '../lib/resourceType';
+import { apiErrorText } from '../lib/apiError';
 import { useTheme } from '../lib/ThemeContext';
 import { ResourceGraph } from './ResourceGraph';
 
@@ -145,13 +146,21 @@ export function analyze(url: string): AnalyzedURL {
     scheme = u.protocol;
     port = u.port;
   } catch {
-    host = url.slice(0, 60);
-    path = '';
+    host = '';
+    path = url;
   }
-  // `blob:`, `data:` and `file:` URLs parse but carry no hostname. They must
-  // not collapse into one nameless host card, so fall back to the URL itself —
-  // the same label the Go side gives them.
-  if (!host) host = url.slice(0, 60);
+  if (!host) {
+    // `blob:`, `data:`, `file:` and `about:` URLs parse but carry no hostname.
+    // They are not domains: no Domains row, no graph host card, and none of the
+    // host-shaped security flags (a data: image is not a "random domain").
+    // The Network row still shows the URL through `path`.
+    return {
+      host: '',
+      path: url,
+      label: url.slice(0, 60),
+      flags: { ip: false, insecure: false, riskyTld: false, randomHost: false, oddPort: false },
+    };
+  }
   const flags: NetFlags = {
     ip: /^(\d{1,3}\.){3}\d{1,3}$/.test(host),
     insecure: scheme === 'http:',
@@ -446,6 +455,9 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
   const [reconHost, setReconHost] = useState('');
   const [reconChecks, setReconChecks] = useState<ReadonlySet<string>>(new Set(DEFAULT_RECON_CHECKS));
   const [reconResult, setReconResult] = useState<IntelResponse | null>(null);
+  // Host the visible recon result belongs to. DNS + probes merge for one host,
+  // but a query for another host must not show the previous host's rows.
+  const reconResultHostRef = useRef('');
   const [reconBusy, setReconBusy] = useState('');
   const [reconError, setReconError] = useState('');
   const [enriched, setEnriched] = useState<Record<string, IntelResponse>>({});
@@ -642,6 +654,7 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
     const q = filter.trim().toLowerCase();
     for (const row of analyzed) {
       const { e, host, flags } = row;
+      if (!host) continue;
       if (onlyFlagged && !Object.values(flags).some(Boolean)) continue;
       if (q && !e.url.toLowerCase().includes(q) && !host.includes(q)) continue;
       let agg = map.get(host);
@@ -733,9 +746,13 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
       const res = checks
         ? await onIntel({ host, checks, mode: 'probe' })
         : await onIntel({ host, mode: 'dns' });
-      setReconResult((prev) => ({ ...(prev || {}), ...res, dns: res.dns ?? prev?.dns }));
+      // DNS and probes merge for the same host; a query for a different host
+      // starts from its own reply instead of carrying the previous host's rows.
+      const sameHost = reconResultHostRef.current === host;
+      reconResultHostRef.current = host;
+      setReconResult((prev) => (sameHost ? { ...(prev || {}), ...res, dns: res.dns ?? prev?.dns } : res));
     } catch (err) {
-      setReconError(err instanceof Error ? err.message : String(err));
+      setReconError(apiErrorText(err, 'Recon request failed'));
     } finally {
       setReconBusy('');
     }
@@ -751,7 +768,7 @@ export function IsolaNetworkPanel({ entries, consoleEntries, cookieEntries, layo
         : await onIntel({ host, mode: 'dns' });
       setEnriched((prev) => ({ ...prev, [host]: res }));
     } catch (err) {
-      setReconError(err instanceof Error ? err.message : String(err));
+      setReconError(apiErrorText(err, 'Recon request failed'));
     } finally {
       setReconBusy('');
     }

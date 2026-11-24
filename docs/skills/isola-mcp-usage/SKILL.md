@@ -36,8 +36,9 @@ Speaking HTTP directly — three rules:
 
 1. Stateful: first request is `initialize`; take `Mcp-Session-Id` from the
    response header and echo it on every later request.
-2. Send `Content-Type: application/json` **and** `Accept: application/json,
-   text/event-stream`; otherwise 400 before the JSON is parsed.
+2. Send `Content-Type: application/json` — without it the server answers
+   `415` — and `Accept: application/json, text/event-stream` (SDK clients send
+   it; a missing `Accept` is tolerated by the server itself).
 3. Responses are SSE: parse the `data: {...}` line. A notification (no `id`,
    e.g. `notifications/initialized`) returns `202` with an empty body.
 

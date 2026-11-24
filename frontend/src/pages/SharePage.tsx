@@ -58,7 +58,7 @@ export default function SharePage() {
     const baseUrl = `${protocol}://${window.location.host}/ws/${sessionIdRef.current}`;
     const streamWsUrl = `${baseUrl}?share_token=${encodeURIComponent(token)}&channel=isola`;
     const inputWsUrl = `${baseUrl}?share_token=${encodeURIComponent(token)}&channel=input`;
-    isolaRef.current.connect(streamWsUrl, inputWsUrl, el, true);
+    isolaRef.current.connect(streamWsUrl, inputWsUrl, el, true, undefined, sessionIdRef.current || undefined);
 
     return () => {
       if (connectedRef.current) {

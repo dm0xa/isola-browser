@@ -17,12 +17,11 @@ import (
 	"github.com/dm0xa/isola-browser/backend/pkg/store"
 )
 
-// TestGetSessionNeverLeaksControlTokenToNonOwner guards the anonymous
-// re-issue path: a caller who knows the session id but presents a wrong (or
-// stale) token must not receive the live control token. The recovery branch
-// must only fire when the token is genuinely gone, because "knowing a session
-// id is never sufficient" (docs/security.md).
-func TestGetSessionNeverLeaksControlTokenToNonOwner(t *testing.T) {
+// TestGetSessionRequiresOwnerToken guards "knowing a session id is never
+// sufficient" (docs/security.md): an anonymous or wrongly-authenticated read is
+// refused instead of downgraded to a view-only share link, and the live control
+// token is only ever returned to its owner.
+func TestGetSessionRequiresOwnerToken(t *testing.T) {
 	mem := store.NewMemStore()
 	st := mem
 	cache := store.NewMemCache()
@@ -51,7 +50,7 @@ func TestGetSessionNeverLeaksControlTokenToNonOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	get := func(presentedToken string) map[string]any {
+	get := func(presentedToken string) (int, map[string]any) {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, "/api/sessions/"+sid.String(), nil)
 		if presentedToken != "" {
@@ -63,23 +62,46 @@ func TestGetSessionNeverLeaksControlTokenToNonOwner(t *testing.T) {
 
 		w := httptest.NewRecorder()
 		h.GetSession(w, req)
-		if w.Code != http.StatusOK {
-			t.Fatalf("GetSession status = %d: %s", w.Code, w.Body.String())
-		}
 		var body map[string]any
 		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-			t.Fatal(err)
+			t.Fatalf("decode body (status %d): %v", w.Code, err)
 		}
-		return body
+		return w.Code, body
 	}
 
-	if got, ok := get(controlToken)["session_token"]; !ok || got != controlToken {
+	if code, body := get(controlToken); code != http.StatusOK {
+		t.Fatalf("owner status = %d: %v", code, body)
+	} else if got, ok := body["session_token"]; !ok || got != controlToken {
 		t.Fatalf("owner token = %v, want %q", got, controlToken)
 	}
-	if got, ok := get("attacker-guess")["session_token"]; ok {
-		t.Fatalf("non-owner received session_token %v", got)
+
+	for _, presented := range []string{"", "attacker-guess", "stale-token-from-old-session"} {
+		code, body := get(presented)
+		if code != http.StatusForbidden {
+			t.Fatalf("GetSession with token %q status = %d, want 403: %v", presented, code, body)
+		}
+		if _, ok := body["session_token"]; ok {
+			t.Fatalf("GetSession with token %q leaked session_token", presented)
+		}
+		if _, ok := body["share_url"]; ok {
+			t.Fatalf("GetSession with token %q minted a share_url", presented)
+		}
+		if _, ok := body["container_host"]; ok {
+			t.Fatalf("GetSession with token %q leaked the container address", presented)
+		}
 	}
-	if got, ok := get("stale-token-from-old-session")["session_token"]; ok {
-		t.Fatalf("stale token received session_token %v", got)
+
+	// Genuine token recovery: the stored control token is gone (restart) and the
+	// caller presents *a* token — issue a fresh one rather than locking the
+	// browser out of its own anonymous session.
+	if err := cache.Del(ctx, "session:"+sid.String()+":control_token"); err != nil {
+		t.Fatal(err)
+	}
+	code, body := get("token-from-before-the-restart")
+	if code != http.StatusOK {
+		t.Fatalf("recovery status = %d: %v", code, body)
+	}
+	if got, _ := body["session_token"].(string); got == "" || got == controlToken {
+		t.Fatalf("recovery token = %q, want a freshly issued token", got)
 	}
 }

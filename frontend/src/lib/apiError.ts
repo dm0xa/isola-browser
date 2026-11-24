@@ -33,3 +33,15 @@ export function apiErrorText(err: unknown, fallback: string): string {
   if (err instanceof Error && err.message) return err.message;
   return fallback;
 }
+
+// apiErrorStatus is the HTTP status on a failed axios request, or 0 when the
+// failure never reached a response (network error, abort).
+export function apiErrorStatus(err: unknown): number {
+  if (err && typeof err === 'object' && 'response' in err) {
+    const resp = err.response;
+    if (resp && typeof resp === 'object' && 'status' in resp && typeof resp.status === 'number') {
+      return resp.status;
+    }
+  }
+  return 0;
+}

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -76,5 +77,49 @@ func TestNavigateStreamerRetriesTimeout(t *testing.T) {
 	}
 	if attempts.Load() != 2 {
 		t.Fatalf("attempts = %d, want 2 (first attempt timed out)", attempts.Load())
+	}
+}
+
+// TestDocumentSeenIgnoresEarlierDocuments guards navigate's document_seen: the
+// network log is cumulative, so a Document captured before the navigation must
+// not make a failed load look successful.
+func TestDocumentSeenIgnoresEarlierDocuments(t *testing.T) {
+	var entries atomic.Value
+	entries.Store([]map[string]any{
+		{"id": "d1", "ts": 1000, "url": "https://example.com/", "type": "Document", "status": 200},
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/network" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"entries": entries.Load()})
+	}))
+	defer srv.Close()
+
+	id := uuid.New().String()
+	svc := newStreamerService(t, id, srv.Listener.Addr().String())
+	seen := svc.snapshotNetworkKeys(context.Background(), id)
+	if len(seen) != 1 {
+		t.Fatalf("baseline = %v, want one entry", seen)
+	}
+
+	// Only the old document plus a *failed* new one (status 0): not a load.
+	entries.Store([]map[string]any{
+		{"id": "d1", "ts": 1000, "url": "https://example.com/", "type": "Document", "status": 200},
+		{"id": "d2", "ts": 2000, "url": "https://qa-nonexistent.invalid/", "type": "Document", "status": 0, "failed": true},
+	})
+	if got := svc.waitForDocumentNetwork(context.Background(), id, seen, 500*time.Millisecond); got {
+		t.Fatal("document_seen = true for a failed navigation")
+	}
+
+	// A new successful Document is this navigation's result.
+	entries.Store([]map[string]any{
+		{"id": "d1", "ts": 1000, "url": "https://example.com/", "type": "Document", "status": 200},
+		{"id": "d3", "ts": 3000, "url": "https://example.org/", "type": "Document", "status": 200},
+	})
+	if got := svc.waitForDocumentNetwork(context.Background(), id, seen, 2*time.Second); !got {
+		t.Fatal("document_seen = false for a new successful document")
 	}
 }

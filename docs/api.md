@@ -56,13 +56,13 @@ Base URL for a local deployment: `http://localhost:8080`.
 | `url` | string | Initial page to load. |
 | `resolution` | string | e.g. `"1280x720"`. Capped by `session.max_resolution`. |
 | `browser_type` | string | Accepted for compatibility; has no effect (a single browser image is used). |
-| `browser_theme` | string | `dark`, `light`, or `auto`. |
+| `browser_theme` | string | `dark`, `light`, or `auto`; anything else is `400 invalid_browser_theme`. |
 | `transport` | string | Ignored; always `isola`. |
 | `audio_enabled` | bool | Capture Opus audio. |
-| `bandwidth_kbps` | int | Encoder bitrate cap in kbps; `0` derives it from the resolution. |
-| `frame_rate` | int | Capture framerate (default `30`). |
+| `bandwidth_kbps` | int | Encoder bitrate cap in kbps; `0` derives it from the resolution. Negative values are `400 invalid_bandwidth`. |
+| `frame_rate` | int | Capture framerate, `0`–`120` (default `30`); out-of-range values are `400 invalid_frame_rate`. |
 | `tor_enabled` | bool | Route the session through Tor. |
-| `tor_country` | string | Pin Tor exit nodes to one or more ISO 3166-1 alpha-2 countries (comma-separated, e.g. `"se"` or `"se,no"`). Requires `tor_enabled`; overrides the server default (`tor.exit_country`). |
+| `tor_country` | string | Pin Tor exit nodes to one or more ISO 3166-1 alpha-2 countries (comma-separated, e.g. `"se"` or `"se,no"`). Requires `tor_enabled`; overrides the server default (`tor.exit_country`). Validation is structural (two letters, at most 10 codes); a code with no reachable exit fails the session rather than leaking through another country. |
 | `timezone` | string | Page-visible IANA timezone (e.g. `"Europe/Stockholm"`), validated with the host's zoneinfo; unknown names are `400 invalid_timezone`. Overrides the server default (`session.timezone`); empty keeps the deployment default, and with neither set the sandbox stays on UTC. A warm-pool claim applies the requested identity over CDP, so naming one does not force a cold start. |
 | `locale` | string | Page-visible BCP-47 tag (e.g. `"sv-SE"`), validated as `^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$`; malformed tags are `400 invalid_locale`. Drives `navigator.languages`, `Intl` formatting and `Accept-Language`. Overrides the server default (`session.locale`); empty keeps the deployment default, and with neither set the sandbox stays on `en-US`. |
 | `network_monitor` | bool | Stream CDP network events to the viewer's Network tab. |
@@ -317,7 +317,11 @@ same image from the `resource_graph` tool
 
 With `capture.enabled` (see [Configuration](configuration.md#capture)), the
 viewer's **Record** row saves every response body the sandbox downloads and
-keeps the archive after the session ends.
+keeps the archive after the session ends. A session is recorded **once**: the
+archive is keyed by the session id, so starting again while recording returns
+the same archive and key (idempotent `200`), and starting after a clean Stop
+returns `409 archive_exists`. `GET /api/sessions/{id}/capture` before a
+recording answers `200` with `recording:false` and zero counters.
 
 ```bash
 # Start: save the one-time archive key, it is not shown again

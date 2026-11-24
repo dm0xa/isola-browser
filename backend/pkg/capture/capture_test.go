@@ -1103,7 +1103,48 @@ func TestStatusAndList(t *testing.T) {
 		t.Fatalf("summary = %+v", list[0])
 	}
 
-	if _, err := m.Status(context.Background(), "never-recorded"); !errors.Is(err, ErrArchiveNotFound) {
+	// Before Record: a status document, not an error — a viewer polls this and
+	// cannot tell 404 "no archive" apart from "session gone".
+	if st, err := m.Status(context.Background(), "never-recorded"); err != nil {
 		t.Fatalf("unrecorded status err = %v", err)
+	} else if st.Recording || st.Items != 0 || st.SessionID != "never-recorded" {
+		t.Fatalf("unrecorded status = %+v", st)
+	}
+}
+
+func TestStartIsIdempotent(t *testing.T) {
+	fake := newFakeStreamer(nil, nil)
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+
+	m := newTestManager(t, Config{Enabled: true})
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	first, err := m.Start(context.Background(), "session-idem", "https://a.example/", addr)
+	if err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	// The archive directory exists after the first start. The retry must hand
+	// the same archive back rather than failing the dir-exists check.
+	second, err := m.Start(context.Background(), "session-idem", "https://a.example/", addr)
+	if err != nil {
+		t.Fatalf("retry start: %v", err)
+	}
+	if second.ArchiveID != first.ArchiveID || second.ArchiveKey != first.ArchiveKey || !second.StartedAt.Equal(first.StartedAt) {
+		t.Fatalf("retry start = %+v, first = %+v", second, first)
+	}
+	if _, err := m.Stop(context.Background(), "session-idem"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+}
+
+func TestStartRefusesExistingArchiveWithoutRecorder(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(archiveDir(filepath.Join(root, "captures"), "session-old"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestManager(t, Config{Enabled: true, Dir: filepath.Join(root, "captures")})
+	_, err := m.Start(context.Background(), "session-old", "https://a.example/", "127.0.0.1:1")
+	if !errors.Is(err, ErrArchiveExists) {
+		t.Fatalf("start over an existing archive err = %v, want ErrArchiveExists", err)
 	}
 }

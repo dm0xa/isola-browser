@@ -8,16 +8,20 @@ import (
 )
 
 type inputEvent struct {
-	Type    string `json:"type"`
-	Button  string `json:"button,omitempty"`
-	X       int    `json:"x,omitempty"`
-	Y       int    `json:"y,omitempty"`
-	Buttons int    `json:"buttons,omitempty"` // bitmask while moving: L=1 R=2 M=4
-	DeltaX  int    `json:"deltaX,omitempty"`
-	DeltaY  int    `json:"deltaY,omitempty"`
-	Key     string `json:"key,omitempty"`
-	Combo   string `json:"combo,omitempty"`
-	Text    string `json:"text,omitempty"`
+	Type   string `json:"type"`
+	Button string `json:"button,omitempty"`
+	// ClickCount carries the multi-click sequence (2 = double-click). Chromium
+	// synthesises word/line selection and dblclick from this; every press used
+	// to be 1, so double- and triple-click did nothing.
+	ClickCount int    `json:"click_count,omitempty"`
+	X          int    `json:"x,omitempty"`
+	Y          int    `json:"y,omitempty"`
+	Buttons    int    `json:"buttons,omitempty"` // bitmask while moving: L=1 R=2 M=4
+	DeltaX     int    `json:"deltaX,omitempty"`
+	DeltaY     int    `json:"deltaY,omitempty"`
+	Key        string `json:"key,omitempty"`
+	Combo      string `json:"combo,omitempty"`
+	Text       string `json:"text,omitempty"`
 }
 
 var cdpClient *CDPClient

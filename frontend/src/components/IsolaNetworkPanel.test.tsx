@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  analyze,
   buildTabOptions,
   IsolaNetworkPanel,
   methodOf,
@@ -393,5 +394,30 @@ describe('IsolaNetworkPanel copy action', () => {
       'time\tmethod\tstatus\tbytes\ttype\tip\tsha1\terror\turl\n' +
         '2026-01-02T03:04:05.678Z\tGET\t200\t1234\tXHR\t\t\t\thttps://example.com/api',
     );
+  });
+});
+
+
+describe('analyze', () => {
+  it('treats a data: URL as a resource, never as a host', () => {
+    const info = analyze('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg"/>');
+    expect(info.host).toBe('');
+    expect(info.path).toContain('data:image/svg+xml');
+    expect(Object.values(info.flags).some(Boolean)).toBe(false);
+  });
+
+  it('treats blob:, file: and about: URLs as hostless', () => {
+    for (const url of ['blob:https://example.com/6f1c', 'file:///etc/passwd', 'about:blank']) {
+      const info = analyze(url);
+      expect(info.host).toBe('');
+      expect(Object.values(info.flags).some(Boolean)).toBe(false);
+    }
+  });
+
+  it('still parses a real host and its path', () => {
+    const info = analyze('https://www.example.com/a/b.js?x=1');
+    expect(info.host).toBe('www.example.com');
+    expect(info.path).toBe('/a/b.js?x=1');
+    expect(info.label).toBe('b.js');
   });
 });

@@ -166,14 +166,14 @@ func (c *CDPClient) dispatchMouseMove(x, y, buttons int) error {
 	return c.send("Input.dispatchMouseEvent", mouseMovedParams(x, y, buttons))
 }
 
-func (c *CDPClient) dispatchMouseButton(eventType, button string, x, y int) error {
+func (c *CDPClient) dispatchMouseButton(eventType, button string, x, y, clickCount int) error {
 	if x >= 0 && y >= 0 {
 		c.setMousePosition(x, y)
 	} else {
 		fx, fy := c.mousePosition()
 		x, y = int(fx), int(fy)
 	}
-	return c.send("Input.dispatchMouseEvent", mouseButtonParams(eventType, button, x, y))
+	return c.send("Input.dispatchMouseEvent", mouseButtonParams(eventType, button, x, y, clickCount))
 }
 
 func (c *CDPClient) dispatchMouseWheel(deltaX, deltaY, x, y int) error {
@@ -335,7 +335,7 @@ func (c *CDPClient) handleInput(ev inputEvent) bool {
 		if ev.Button == "right" && c.swallowRightPress(ev.X, ev.Y) {
 			return true
 		}
-		return c.dispatchMouseButton("mousePressed", ev.Button, ev.X, ev.Y) == nil
+		return c.dispatchMouseButton("mousePressed", ev.Button, ev.X, ev.Y, ev.ClickCount) == nil
 	case "mouseup":
 		if c.dispatchViaIframe(ev) {
 			return true
@@ -343,7 +343,7 @@ func (c *CDPClient) handleInput(ev inputEvent) bool {
 		if ev.Button == "right" && c.swallowingRightUp() {
 			return true
 		}
-		return c.dispatchMouseButton("mouseReleased", ev.Button, ev.X, ev.Y) == nil
+		return c.dispatchMouseButton("mouseReleased", ev.Button, ev.X, ev.Y, ev.ClickCount) == nil
 	case "mousewheel":
 		if c.dispatchViaIframe(ev) {
 			return true

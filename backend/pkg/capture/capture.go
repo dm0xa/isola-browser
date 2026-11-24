@@ -97,6 +97,7 @@ var (
 	ErrInvalidArchiveID = errors.New("invalid archive id")
 	ErrInvalidHash      = errors.New("invalid sha256")
 	ErrAlreadyRecording = errors.New("another resource capture is already recording")
+	ErrArchiveExists    = errors.New("an archive already exists for this session")
 	ErrQuotaExceeded    = errors.New("resource capture quota exceeded")
 )
 

@@ -230,9 +230,46 @@ func (s *Service) waitAutomationReady(ctx context.Context, sessionID string) err
 	return fmt.Errorf("timed out waiting for automation (snapshot/CDP not ready)")
 }
 
-// waitForDocumentNetwork polls until a Document request appears in the network log
-// (status may be 403 on bot-protected sites — that still counts as loaded).
-func (s *Service) waitForDocumentNetwork(ctx context.Context, sessionID string, maxWait time.Duration) bool {
+// networkEntryKey identifies one captured request independently of its filter
+// fields: the CDP request id, with a timestamp/URL fallback for entries that
+// predate ids.
+func networkEntryKey(id string, ts int64, url string) string {
+	if id != "" {
+		return id
+	}
+	return fmt.Sprintf("%d|%s", ts, url)
+}
+
+// snapshotNetworkKeys records every request currently in the log. A navigation
+// waits for a Document that is not in this set, so a document captured before
+// the call can never be reported as the result of it.
+func (s *Service) snapshotNetworkKeys(ctx context.Context, sessionID string) map[string]bool {
+	seen := map[string]bool{}
+	body, code, err := s.streamerGET(ctx, sessionID, "/network")
+	if err != nil || code != http.StatusOK {
+		return seen
+	}
+	var parsed struct {
+		Entries []struct {
+			ID  string `json:"id"`
+			TS  int64  `json:"ts"`
+			URL string `json:"url"`
+		} `json:"entries"`
+	}
+	if json.Unmarshal(body, &parsed) != nil {
+		return seen
+	}
+	for _, e := range parsed.Entries {
+		seen[networkEntryKey(e.ID, e.TS, e.URL)] = true
+	}
+	return seen
+}
+
+// waitForDocumentNetwork polls until a *new* Document request appears in the
+// network log (status may be 403 on bot-protected sites — that still counts as
+// loaded). seen is the pre-navigation snapshot; nil means "any Document", which
+// is what a fresh session wants.
+func (s *Service) waitForDocumentNetwork(ctx context.Context, sessionID string, seen map[string]bool, maxWait time.Duration) bool {
 	deadline := time.Now().Add(maxWait)
 	for time.Now().Before(deadline) {
 		if err := ctx.Err(); err != nil {
@@ -242,15 +279,22 @@ func (s *Service) waitForDocumentNetwork(ctx context.Context, sessionID string, 
 		if err == nil && code == http.StatusOK {
 			var parsed struct {
 				Entries []struct {
+					ID     string `json:"id"`
+					TS     int64  `json:"ts"`
+					URL    string `json:"url"`
 					Type   string `json:"type"`
 					Status int    `json:"status"`
 				} `json:"entries"`
 			}
 			if json.Unmarshal(body, &parsed) == nil {
 				for _, e := range parsed.Entries {
-					if strings.EqualFold(e.Type, "Document") && e.Status > 0 {
-						return true
+					if !strings.EqualFold(e.Type, "Document") || e.Status <= 0 {
+						continue
 					}
+					if seen != nil && seen[networkEntryKey(e.ID, e.TS, e.URL)] {
+						continue
+					}
+					return true
 				}
 			}
 		}

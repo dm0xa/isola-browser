@@ -143,7 +143,7 @@ Two things worth knowing:
 Any MCP client works — Cursor, another IDE, an SDK, which all handle the handshake below for you. Three things matter if you speak to `POST /mcp` yourself:
 
 1. **It is a stateful Streamable-HTTP endpoint.** The first request must be `initialize`; that response carries an `Mcp-Session-Id` header which every later request must echo. The endpoint is the same URL throughout — there is no separate SSE URL to discover.
-2. **Headers are mandatory.** `Content-Type: application/json` and an `Accept` containing **both** `application/json` and `text/event-stream`, or the server answers `400` before it looks at the JSON.
+2. **Send both headers.** `Content-Type: application/json` is required — without it the server answers `415` — and `Accept` should list **both** `application/json` and `text/event-stream`. The server tolerates a missing `Accept`, but SDK clients send it, and a proxy may not.
 3. **Replies arrive as SSE.** A response is a `data: {...}` line, not a bare JSON body; a notification (no `id`) gets `202 Accepted` with an empty body.
 
 ```bash
@@ -176,7 +176,7 @@ curl -s -X POST http://localhost:8080/mcp \
        "params":{"name":"create_session","arguments":{"url":"https://example.com"}}}'
 ```
 
-`tools/list` returns the same eleven tools with their input schemas, so a client can read the arguments from there rather than hard-coding them. SDKs also send `Mcp-Protocol-Version` with the negotiated revision; the server only insists on that header for the newest protocol revisions.
+`tools/list` returns all eighteen tools with their input schemas, so a client can read the arguments from there rather than hard-coding them. SDKs also send `Mcp-Protocol-Version` with the negotiated revision; the server only insists on that header for the newest protocol revisions.
 
 A working client is about 30 lines — Node 22+, no dependencies (save as `isola-mcp.mjs`; top-level `await` needs an ES module):
 
@@ -245,11 +245,20 @@ The input socket speaks Isola's JSON input protocol. The bundled viewer is built
 | Message                                                                     | Effect                                               |
 | --------------------------------------------------------------------------- | ---------------------------------------------------- |
 | `{"type":"mousemove","x":..,"y":..,"buttons":..}`                           | Move the pointer (`buttons` bitmask: L=1, R=2, M=4). |
-| `{"type":"mousedown"|"mouseup","x":..,"y":..,"button":"left|right|middle"}` | Press/release a button.                              |
+| `{"type":"mousedown"\|"mouseup","x":..,"y":..,"button":"left\|right\|middle"}` | Press/release a button.                              |
 | `{"type":"mousewheel","deltaX":..,"deltaY":..}`                             | Scroll.                                              |
 | `{"type":"type","text":"..."}`                                              | Type text.                                           |
 | `{"type":"chord","combo":"ctrl+a"}`                                         | Send a key chord.                                    |
-| `{"type":"clipboard_set"|"clipboard_sync"}`                                 | Set/sync the clipboard.                              |
+| `{"type":"clipboard_set"\|"clipboard_sync","text":"..."}`                    | Paste text into the focused field (the host→sandbox direction). |
+
+`mousedown` and `mouseup` also accept `click_count` (default `1`): `2` makes
+Chromium select a word and fire `dblclick`, `3` selects a line. Send the same
+count on the press and the release.
+
+Synthetic chords reach the page, not the browser chrome: `F5` and `Ctrl+R` do
+not reload the tab and `Ctrl+T`/`Ctrl+W` do not open or close one, because
+Chromium does not run its own accelerators for CDP-dispatched keys. Use the
+`tab_reload` / `tab_new` / `tab_close` control messages instead.
 
 ### Control and tab messages
 
@@ -260,7 +269,7 @@ Some messages get a reply on the same socket:
 | `{"type":"get_selection"}`                                                                         | `{"type":"selection","text":"..."}` |
 | `{"type":"select_all"}`                                                                            | —                                   |
 | `{"type":"select_range","x1":..,"y1":..,"x2":..,"y2":..}`                                          | —                                   |
-| `{"type":"tab_new"|"tab_switch"|"tab_close"|"tab_navigate"|"tab_back"|"tab_reload"|"tab_recover"|"get_tabs"}` | Tab state                           |
+| `{"type":"tab_new"\|"tab_switch"\|"tab_close"\|"tab_navigate"\|"tab_back"\|"tab_reload"\|"tab_recover"\|"get_tabs"}` | Tab state                           |
 
 `tab_recover` replaces the tab's renderer and reloads the page, so it costs the page's state. A viewer's `tab_recover` always acts. The sandbox's own renderer watchdog asks the runner for recovery on the internal control socket with `"auto": true`, and that path is budgeted: at most one automatic recovery per URL in ten minutes, and at most three in ten minutes in total (`ISOLA_STALL_SAME_URL_MS`, `ISOLA_STALL_RECOVER_WINDOW_MS`, `ISOLA_STALL_RECOVER_MAX`). Once the budget is spent the picture stays frozen, `renderer_stall` keeps reporting it, and only a manual `tab_recover` replaces the renderer — a page that wedges every fresh renderer would otherwise be reloaded in a loop.
 
@@ -279,7 +288,7 @@ The socket is not only a request channel — the sandbox reports state on it as 
 | `{"type":"cookie","n":"name","v":"...","d":"domain","p":"/","ss":"Lax","exp":"...","h":true,"s":true}` | A cookie was set or changed. |
 | `{"type":"cursor","c":"text","u":"https://..."}` | Computed cursor shape under the pointer, plus the hovered URL. |
 | `{"type":"renderer_stall","stalled":true,"ms":...,"recoveries":...}` | The sandbox replaced a wedged renderer, or recovered from one. |
-| `{"type":"clipboard_sync","text":"..."}` | The sandbox clipboard changed (a copy happened inside the page). |
+| `{"type":"clipboard_sync","text":"..."}` | The sandbox clipboard changed (a copy happened inside the page). This is the sandbox→host direction; the client-side message of the same name pastes host text into the focused field. |
 
 The `net` / `net_init` / `console` / `cookie` pushes exist only for a session created with `network_monitor`, and on a long-lived session they cover the most recent `session.network_log_max_entries` requests (default 1000) and 300 console lines.
 

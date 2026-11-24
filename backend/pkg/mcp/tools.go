@@ -207,7 +207,7 @@ func (s *Service) toolCreateSession(ctx context.Context, _ *mcp.CallToolRequest,
 			waitDoc = *p.WaitDocument
 		}
 		if waitDoc {
-			documentSeen = s.waitForDocumentNetwork(ctx, resp.ID, 25*time.Second)
+			documentSeen = s.waitForDocumentNetwork(ctx, resp.ID, nil, 25*time.Second)
 		}
 	}
 	result := map[string]any{
@@ -245,6 +245,10 @@ func (s *Service) toolNavigate(ctx context.Context, _ *mcp.CallToolRequest, p *n
 	if err := s.ensureSession(ctx, p.SessionID); err != nil {
 		return nil, nil, err
 	}
+	// Snapshot before navigating: a Document from an earlier page must not be
+	// mistaken for this navigation's result (a failed load whose entry has
+	// status 0 would otherwise report document_seen=true from history).
+	seen := s.snapshotNetworkKeys(ctx, p.SessionID)
 	if err := s.navigateStreamer(ctx, p.SessionID, p.URL); err != nil {
 		return nil, nil, err
 	}
@@ -254,7 +258,7 @@ func (s *Service) toolNavigate(ctx context.Context, _ *mcp.CallToolRequest, p *n
 	}
 	result := map[string]any{"status": "ok", "url": strings.TrimSpace(p.URL)}
 	if waitDoc {
-		result["document_seen"] = s.waitForDocumentNetwork(ctx, p.SessionID, 25*time.Second)
+		result["document_seen"] = s.waitForDocumentNetwork(ctx, p.SessionID, seen, 25*time.Second)
 		if inspect, err := s.inspectSummary(ctx, p.SessionID, false); err == nil {
 			result["inspect"] = inspect
 		}

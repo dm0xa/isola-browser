@@ -281,6 +281,27 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		req.BrowserType = h.cfg.BrowserType
 	}
 
+	switch req.BrowserTheme {
+	case "", "dark", "light", "auto":
+	default:
+		respondErrorMessage(w, http.StatusBadRequest, "invalid_browser_theme",
+			fmt.Sprintf("Browser theme must be dark, light or auto (got %q)", req.BrowserTheme))
+		return
+	}
+	// 0 means "use the default". A negative rate used to be stored verbatim
+	// while the encoder ran at 30, so the returned session disagreed with the
+	// sandbox; refuse values the capture path cannot honour.
+	if req.FrameRate < 0 || req.FrameRate > 120 {
+		respondErrorMessage(w, http.StatusBadRequest, "invalid_frame_rate",
+			fmt.Sprintf("frame_rate must be between 0 and 120 (got %d)", req.FrameRate))
+		return
+	}
+	if req.BandwidthKbps < 0 {
+		respondErrorMessage(w, http.StatusBadRequest, "invalid_bandwidth",
+			fmt.Sprintf("bandwidth_kbps must be zero or positive (got %d)", req.BandwidthKbps))
+		return
+	}
+
 	// Validate browser type
 	if !h.cfg.IsBrowserEnabled(req.BrowserType) {
 		respondErrorMessage(w, http.StatusBadRequest, "unsupported_browser_type", fmt.Sprintf("Unsupported or disabled browser type: %s (supported: chromium)", req.BrowserType))
@@ -682,6 +703,22 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
+	requestHasToken := extractSessionToken(r) != ""
+	if !ownerAuthorized {
+		// A session row carries the container address and the page identity, so
+		// it is owner-only. The one exception below is a genuine token recovery:
+		// an anonymous session whose control token is gone accepts any presented
+		// token and issues a fresh one. Knowing the id alone is never sufficient
+		// (docs/security.md); a wrong token is refused rather than downgraded to
+		// a view-only share link.
+		recoverable := session.UserID == uuid.Nil &&
+			session.Status == models.SessionStatusRunning &&
+			requestHasToken
+		if !recoverable {
+			respondError(w, http.StatusForbidden, "session_does_not_belong_to_you")
+			return
+		}
+	}
 
 	// Attach wsUrl and timing info
 	type sessionWithMeta struct {
@@ -689,6 +726,7 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 		SessionToken    string `json:"session_token,omitempty"`
 		ShareURL        string `json:"share_url,omitempty"`
 		WsURL           string `json:"ws_url"`
+		CdpURL          string `json:"cdp_url,omitempty"`
 		RemainingMin    int    `json:"remaining_min"`
 		ExtendAvailable bool   `json:"extend_available"`
 		MaxExpiresAt    string `json:"max_expires_at,omitempty"`
@@ -727,30 +765,26 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 
 	sessionToken := ""
 	shareURL := ""
-	requestHasToken := extractSessionToken(r) != ""
 	if ownerAuthorized {
 		sessionToken, err = h.getControlToken(r.Context(), session.ID.String())
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "internal_error")
 			return
 		}
-	} else if session.UserID == uuid.Nil && session.Status == models.SessionStatusRunning && requestHasToken {
-		// Recover only a genuinely expired token; returning a live one would let
-		// anyone knowing the session id take over the session.
+	} else {
+		// The recoverable branch admitted above: hand out a control token only
+		// when the stored one is genuinely gone. Returning a live one would let
+		// anyone who saw the session id take over the session.
 		existing, getErr := h.getControlToken(r.Context(), session.ID.String())
 		if getErr != nil {
 			respondError(w, http.StatusInternalServerError, "internal_error")
 			return
 		}
-		if existing == "" {
-			sessionToken, err = h.ensureControlToken(r.Context(), session)
-			if err != nil {
-				respondError(w, http.StatusInternalServerError, "internal_error")
-				return
-			}
+		if existing != "" {
+			respondError(w, http.StatusForbidden, "session_does_not_belong_to_you")
+			return
 		}
-	} else if session.Status == models.SessionStatusRunning {
-		shareURL, err = h.ensureShareURL(r.Context(), r, session)
+		sessionToken, err = h.ensureControlToken(r.Context(), session)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "internal_error")
 			return
@@ -763,6 +797,7 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 		SessionToken:    sessionToken,
 		ShareURL:        shareURL,
 		WsURL:           fmt.Sprintf("/ws/%s", session.ID.String()),
+		CdpURL:          fmt.Sprintf("/ws/%s?channel=input", session.ID.String()),
 		RemainingMin:    remainingMin,
 		ExtendAvailable: extendAvailable,
 		MaxExpiresAt:    maxExpiryStr,
@@ -782,6 +817,14 @@ func (h *Handler) DeleteSession(w http.ResponseWriter, r *http.Request) {
 	session, err := h.store.GetSession(r.Context(), id)
 	if err != nil || session == nil {
 		respondError(w, http.StatusNotFound, "session_not_found")
+		return
+	}
+	// Idempotent delete: finalization drops the control token, so a retried
+	// DELETE can no longer prove ownership of a session it already ended.
+	// Answering 403 told a client it did not own its own session.
+	if session.Status == models.SessionStatusTerminated {
+		setSensitiveNoStore(w)
+		respondJSON(w, http.StatusOK, map[string]string{"status": models.SessionStatusTerminated})
 		return
 	}
 	ownerAuthorized, err := h.authorizeSessionOwner(r, session)
@@ -1206,25 +1249,11 @@ func (h *Handler) GetOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 
 // CreateShare generates a secure share token for a view-only session link.
 func (h *Handler) CreateShare(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "invalid_session_id")
-		return
-	}
-
-	session, err := h.store.GetSession(r.Context(), id)
-	if err != nil || session == nil || session.Status != models.SessionStatusRunning {
-		respondError(w, http.StatusNotFound, "session_not_found")
-		return
-	}
-
-	ownerAuthorized, err := h.authorizeSessionOwner(r, session)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "internal_error")
-		return
-	}
-	if !ownerAuthorized {
-		respondError(w, http.StatusForbidden, "session_does_not_belong_to_you")
+	// ownedActiveSession parses the id (400), proves ownership first (403),
+	// answers 409 while the container is still provisioning (a share is
+	// meaningless before the page runs), and 404 for anything finished.
+	session, ok := h.ownedActiveSession(w, r)
+	if !ok {
 		return
 	}
 
@@ -1613,55 +1642,6 @@ func publicAppBaseURL(r *http.Request, configuredOrigin string) string {
 	return fmt.Sprintf("%s://%s", scheme, r.Host)
 }
 
-func (h *Handler) ensureShareURL(ctx context.Context, r *http.Request, session *models.Session) (string, error) {
-	if session == nil || session.Status != models.SessionStatusRunning {
-		return "", nil
-	}
-
-	baseURL := publicAppBaseURL(r, h.cfg.CORSOrigin)
-	tokens, err := h.cache.SMembers(ctx, sessionSharesKey(session.ID.String()))
-	if err == nil {
-		now := time.Now()
-		for _, token := range tokens {
-			if strings.TrimSpace(token) == "" {
-				continue
-			}
-			sessionID, getErr := h.cache.Get(ctx, shareTokenKey(token))
-			if getErr != nil || sessionID != session.ID.String() {
-				continue
-			}
-			meta, metaErr := h.cache.HGetAll(ctx, shareMetaKey(token))
-			if metaErr == nil {
-				if expiresAt, parseErr := time.Parse(time.RFC3339, meta["expires_at"]); parseErr == nil && expiresAt.After(now) {
-					return fmt.Sprintf("%s/share/%s", baseURL, token), nil
-				}
-			}
-			return fmt.Sprintf("%s/share/%s", baseURL, token), nil
-		}
-	}
-
-	tokenBytes := make([]byte, 16)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return "", err
-	}
-	token := hex.EncodeToString(tokenBytes)
-
-	remaining := shareTTL(session)
-	now := time.Now()
-	h.cache.Set(ctx, shareTokenKey(token), session.ID.String(), remaining)
-	metaKey := shareMetaKey(token)
-	h.cache.HSet(ctx, metaKey,
-		"created_at", now.Format(time.RFC3339),
-		"expires_at", now.Add(remaining).Format(time.RFC3339),
-	)
-	h.cache.Expire(ctx, metaKey, remaining)
-	sharesKey := sessionSharesKey(session.ID.String())
-	h.cache.SAdd(ctx, sharesKey, token)
-	h.cache.Expire(ctx, sharesKey, remaining)
-
-	return fmt.Sprintf("%s/share/%s", baseURL, token), nil
-}
-
 func requestOrigin(r *http.Request) string {
 	if origin := config.NormalizeOrigin(r.Header.Get("Origin")); origin != "" {
 		return origin
@@ -1948,6 +1928,12 @@ func errorMessageForCode(code string) string {
 		return "Timezone is invalid"
 	case "invalid_locale":
 		return "Locale is invalid"
+	case "invalid_browser_theme":
+		return "Browser theme must be dark, light or auto"
+	case "invalid_frame_rate":
+		return "Frame rate must be between 1 and 120"
+	case "invalid_bandwidth":
+		return "Bandwidth must be zero (automatic) or a positive number of kbps"
 	case "session_unlimited":
 		return "Session is unlimited — nothing to extend"
 	case "extend_failed":
@@ -1964,6 +1950,8 @@ func errorMessageForCode(code string) string {
 		return "Invalid intelligence query"
 	case "intel_failed":
 		return "Failed to reach the session's intelligence endpoint"
+	case "intel_disabled":
+		return "Recon is disabled by the operator"
 	case "graph_render_timeout":
 		return "Resource graph render timed out"
 	case "invalid_graph_options":
@@ -2000,6 +1988,10 @@ func errorMessageForCode(code string) string {
 		return "No resource capture is recording for this session"
 	case "capture_failed":
 		return "Resource capture failed"
+	case "capture_already_recording":
+		return "A resource capture is already starting for this session"
+	case "archive_exists":
+		return "An archive already exists for this session"
 	case "capture_quota_exceeded":
 		return "Resource capture quota exceeded"
 	case "archive_not_found":

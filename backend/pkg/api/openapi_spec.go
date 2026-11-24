@@ -93,6 +93,8 @@ var openAPISpec = []byte(`{
             "properties": {
               "session_token": { "type": "string", "description": "Control token (only returned for session owner)" },
               "ws_url": { "type": "string", "example": "/ws/550e8400-e29b-41d4-a716-446655440000" },
+              "cdp_url": { "type": "string", "example": "/ws/550e8400-e29b-41d4-a716-446655440000?channel=input", "description": "Compatibility field: resolves to the Isola input channel, not raw CDP" },
+              "share_url": { "type": "string", "description": "Existing view-only share link, when one was created" },
               "remaining_min": { "type": "integer", "description": "Minutes until expiry (-1 = unlimited)" },
               "extend_available": { "type": "boolean", "description": "Whether session can be extended" },
               "max_expires_at": { "type": "string", "format": "date-time", "nullable": true },
@@ -114,6 +116,10 @@ var openAPISpec = []byte(`{
           "tor_country": { "type": "string", "description": "Pin Tor exits to one or more ISO 3166-1 alpha-2 countries (e.g. 'se' or 'se,no'). Requires tor_enabled." },
           "timezone": { "type": "string", "description": "Page-visible IANA timezone (e.g. 'Europe/Stockholm'). Overrides session.timezone; empty keeps the deployment default (UTC when unset).", "example": "Europe/Stockholm" },
           "locale": { "type": "string", "description": "Page-visible BCP-47 locale (e.g. 'sv-SE'). Drives navigator.languages, Intl formatting and Accept-Language. Overrides session.locale; empty keeps the deployment default (en-US when unset).", "example": "sv-SE" },
+          "frame_rate": { "type": "integer", "minimum": 0, "maximum": 120, "default": 30, "description": "Capture framerate; 0 uses the default" },
+          "bandwidth_kbps": { "type": "integer", "minimum": 0, "description": "Encoder bitrate cap in kbps; 0 derives it from the resolution" },
+          "audio_enabled": { "type": "boolean", "default": false, "description": "Capture Opus audio alongside the video stream" },
+          "network_monitor": { "type": "boolean", "default": false, "description": "Stream CDP network events to the viewer" },
           "fingerprint": { "type": "string", "description": "Client fingerprint for rate limiting" }
         }
       },
@@ -182,6 +188,19 @@ var openAPISpec = []byte(`{
           "width": { "type": "integer", "description": "Effective width (may be clamped)" },
           "height": { "type": "integer", "description": "Effective height (may be clamped)" },
           "clamped": { "type": "boolean", "description": "Whether dimensions were clamped to session resolution" }
+        }
+      },
+      "AudioToggleRequest": {
+        "type": "object",
+        "required": ["enabled"],
+        "properties": {
+          "enabled": { "type": "boolean", "description": "Turn Opus audio capture on or off" }
+        }
+      },
+      "AudioToggleResponse": {
+        "type": "object",
+        "properties": {
+          "audio_enabled": { "type": "boolean" }
         }
       },
       "SeedRequest": {
@@ -418,14 +437,15 @@ var openAPISpec = []byte(`{
       "get": {
         "tags": ["Sessions"],
         "summary": "Get session details",
-        "description": "Returns full session metadata. Returns limited info for unauthenticated viewers; full details (including session_token) for the owner via X-Session-Token.",
+        "description": "Returns the session row (including the container address and, for a running session, an existing share_url). Owner-only: X-Session-Token is required, and a share viewer uses GET /api/share/{token} instead.",
         "operationId": "getSession",
-        "security": [{ "sessionToken": [] }, {}],
+        "security": [{ "sessionToken": [] }],
         "parameters": [
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Session ID" }
         ],
         "responses": {
           "200": { "description": "Session details", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionWithMeta" } } } },
+          "403": { "description": "Missing or wrong session token", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "404": { "description": "Session not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       },
@@ -478,6 +498,28 @@ var openAPISpec = []byte(`{
           "200": { "description": "Resize applied", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ResizeResponse" } } } },
           "400": { "description": "Invalid request or unsupported transport", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
           "403": { "description": "Not authorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+    "/api/sessions/{id}/audio": {
+      "post": {
+        "tags": ["Sessions"],
+        "summary": "Toggle Opus audio capture",
+        "description": "Turns audio capture on or off for a running Isola session. Audio packets arrive on the video socket as marker 0x03. Requires owner authorization (X-Session-Token).",
+        "operationId": "toggleAudio",
+        "security": [{ "sessionToken": [] }],
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Session ID" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AudioToggleRequest" } } }
+        },
+        "responses": {
+          "200": { "description": "Audio state applied", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AudioToggleResponse" } } } },
+          "400": { "description": "Invalid request body", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "403": { "description": "Not authorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "404": { "description": "Session not found or not running", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
     },

@@ -337,7 +337,9 @@ func respondCaptureError(w http.ResponseWriter, err error) {
 	case errors.Is(err, capture.ErrInvalidPath):
 		respondError(w, http.StatusBadRequest, "invalid_path")
 	case errors.Is(err, capture.ErrAlreadyRecording):
-		respondError(w, http.StatusConflict, "capture_failed")
+		respondError(w, http.StatusConflict, "capture_already_recording")
+	case errors.Is(err, capture.ErrArchiveExists):
+		respondError(w, http.StatusConflict, "archive_exists")
 	default:
 		respondError(w, http.StatusBadGateway, "capture_failed")
 	}

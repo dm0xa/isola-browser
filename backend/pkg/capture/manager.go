@@ -121,17 +121,30 @@ func (m *Manager) Start(ctx context.Context, sessionID, targetURL, streamerAddr 
 		return StartResult{}, errors.New("capture: empty streamer address")
 	}
 
+	// Idempotent retry first: a second start on a live recording must hand the
+	// same archive back. Checking the archive directory before this branch made
+	// every retry fail (the first start creates it), so a client retry saw 502.
+	m.mu.Lock()
+	if rec, ok := m.sessions[sessionID]; ok {
+		res := StartResult{ArchiveID: sessionID, ArchiveKey: rec.key, StartedAt: rec.startedAt}
+		m.mu.Unlock()
+		return res, nil
+	}
+	m.mu.Unlock()
+
 	dir := archiveDir(m.cfg.Dir, sessionID)
 	if _, err := os.Stat(dir); err == nil {
-		return StartResult{}, fmt.Errorf("capture: archive %s already exists", sessionID)
+		// An archive for this id already exists on disk but this process has no
+		// recorder for it (a restart happened mid-session). Refuse instead of
+		// overwriting evidence the operator may still need.
+		return StartResult{}, ErrArchiveExists
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return StartResult{}, err
 	}
 
 	m.mu.Lock()
 	if rec, ok := m.sessions[sessionID]; ok {
-		// Idempotent retry: the streamer start is idempotent for one session,
-		// and the key is still in memory, so hand the same archive back.
+		// A concurrent start won the race while we stat'ed the directory.
 		res := StartResult{ArchiveID: sessionID, ArchiveKey: rec.key, StartedAt: rec.startedAt}
 		m.mu.Unlock()
 		return res, nil
@@ -386,6 +399,12 @@ func (m *Manager) Status(ctx context.Context, sessionID string) (Status, error) 
 	if rec == nil {
 		meta, err := readMeta(archiveDir(m.cfg.Dir, sessionID))
 		if err != nil {
+			if errors.Is(err, ErrArchiveNotFound) {
+				// Never recorded: a status document, not an error. A viewer can
+				// poll before pressing Record and must see recording:false rather
+				// than a 404 it cannot tell apart from a missing archive.
+				return Status{SessionID: sessionID, Recording: false}, nil
+			}
 			return Status{}, err
 		}
 		startedAt := parseMetaTime(meta.CreatedAt)

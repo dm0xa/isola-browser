@@ -38,7 +38,7 @@ Pinning is strict (`StrictNodes`): if no reachable exit exists in the chosen cou
 
 | Key | Default | Env | Meaning |
 | :--- | :--- | :--- | :--- |
-| `cors.origin` | `http://localhost:5173` | `CORS_ORIGIN` | Allowed browser origin(s). Set this to your public origin when you serve Isola through a reverse proxy on a different host. Several origins may be given, separated by commas or spaces. |
+| `cors.origin` | `http://localhost:8080` | `CORS_ORIGIN` | Allowed browser origin(s). Set this to your public origin when you serve Isola through a reverse proxy on a different host. Several origins may be given, separated by commas or spaces; the first is also the base for share links when the request's own `Origin` is not in the list. |
 
 ### `session`
 

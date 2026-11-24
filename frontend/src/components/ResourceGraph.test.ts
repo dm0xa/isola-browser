@@ -867,17 +867,19 @@ describe('buildGraph pages', () => {
 });
 
 describe('buildGraph hostless URLs', () => {
-  it('labels blob: and data: requests instead of merging them into one blank card', () => {
+  it('drops blob: and data: requests — they have no host to draw', () => {
     const g = buildGraph([
       { ...entry('https://example.com/', 'Document'), oh: 'example.com' },
       { ...entry('blob:https://example.com/5f2a', 'XHR'), oh: 'example.com' },
       { ...entry('data:application/json,%7B%7D', 'XHR'), oh: 'example.com' },
     ], 'example.com');
 
+    // A hostless URL used to become a "host" card labelled with the whole data
+    // URI, which also surfaced in the Domains tab as a random-looking domain.
+    // Inline payloads are not fetched from a host, so they are not graph nodes.
     const hosts = g.nodes.filter((n) => n.kind === 'host').map((n) => n.host);
-    expect(hosts).toContain('blob:https://example.com/5f2a');
-    expect(hosts).toContain('data:application/json,%7B%7D');
-    expect(hosts).not.toContain('');
+    expect(hosts).toEqual(['example.com']);
+    expect(g.nodes.filter((n) => n.kind === 'resource')).toHaveLength(1);
   });
 
   it('drops a response with no URL instead of drawing a nameless card', () => {

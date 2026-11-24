@@ -95,3 +95,16 @@ func TestIframeRoutePlan(t *testing.T) {
 		t.Fatalf("press outside must probe even just after a probe")
 	}
 }
+
+func TestMouseButtonParamsCarriesClickCount(t *testing.T) {
+	t.Parallel()
+	params := mouseButtonParams("mousePressed", "left", 10, 20, 2)
+	if got, _ := params["clickCount"].(int); got != 2 {
+		t.Fatalf("clickCount = %v, want 2", params["clickCount"])
+	}
+	// A streamer client that predates click_count must still produce a click.
+	params = mouseButtonParams("mouseReleased", "left", 10, 20, 0)
+	if got, _ := params["clickCount"].(int); got != 1 {
+		t.Fatalf("default clickCount = %v, want 1", params["clickCount"])
+	}
+}

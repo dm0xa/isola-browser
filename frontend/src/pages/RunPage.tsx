@@ -172,7 +172,11 @@ export default function RunPage() {
       if (cancelled) return;
       if ((err as { name?: string })?.name === 'AbortError') return;
       endLaunch();
-      setError((err as Error)?.message || 'Failed to launch. Is the backend running?');
+      const raw = err instanceof Error ? err.message : '';
+      // Browsers word a dropped connection as "Failed to fetch" / "Load failed";
+      // that is not an instruction a user can act on.
+      const networkFailure = !raw || /failed to fetch|load failed|networkerror/i.test(raw);
+      setError(networkFailure ? 'Failed to launch. Is the backend running?' : raw);
     });
 
     return () => {

@@ -120,6 +120,11 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
   const recElapsed = captureState === 'recording'
     ? elapsedSeconds(captureStatus?.started_at, now)
     : null;
+  // A recording is one-shot per session. After Stop (or after reloading a
+  // viewer for a recording started elsewhere) the archive is final, so the row
+  // reports it as saved instead of offering a start the backend refuses.
+  const savedItems = captureSummary?.items ?? captureStatus?.items ?? 0;
+  const savedBytes = captureSummary?.bytes ?? captureStatus?.bytes ?? 0;
   // End session takes two clicks. The first arms the button; the second, while
   // it stays armed, actually ends. A stray single click no longer kills the
   // session. A quick double-click still counts, because the first click arms
@@ -237,14 +242,14 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
               REC {formatDuration(recElapsed ?? 0)} · {formatBytes(captureStatus?.bytes ?? 0)}
             </button>
           )}
-          {captureState !== 'recording' && !!captureSummary && captureSummary.items > 0 && (
+          {captureState !== 'recording' && savedItems > 0 && (
             <button
               type="button"
               onClick={onToggleCapturePanel}
               title="Open the saved resources recorded in this session"
               className="flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-mono text-emerald-700 ring-1 ring-inset ring-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 dark:text-emerald-300"
             >
-              Saved {captureSummary.items} {captureSummary.items === 1 ? 'file' : 'files'} · {formatBytes(captureSummary.bytes)}
+              Saved {savedItems} {savedItems === 1 ? 'file' : 'files'} · {formatBytes(savedBytes)}
             </button>
           )}
           {captureError && (
@@ -403,15 +408,16 @@ export function ViewerToolbar(props: ViewerToolbarProps) {
                       and explains itself. */}
                   {!viewOnly && (
                     <ViewerMenuItem
-                      icon={<Circle size={15} className={captureState === 'recording' ? 'fill-red-500 text-red-500' : ''} />}
-                      label={captureState === 'recording' ? 'Stop recording' : 'Record resources'}
+                      icon={<Circle size={15} className={captureState === 'recording' ? 'fill-red-500 text-red-500' : captureState === 'stopped' ? 'fill-emerald-500 text-emerald-500' : ''} />}
+                      label={captureState === 'recording' ? 'Stop recording' : captureState === 'stopped' ? 'Recording saved' : 'Record resources'}
                       dimmed
                       toggled={captureState === 'recording'}
                       disabled={
                         !captureEnabled ||
                         !isConnected ||
                         captureState === 'starting' ||
-                        captureState === 'stopping'
+                        captureState === 'stopping' ||
+                        captureState === 'stopped'
                       }
                       onClick={() => { setMenuOpen(false); onToggleCapture(); }}
                     />

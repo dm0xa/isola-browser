@@ -15,6 +15,52 @@ publishes the section matching the tag.
   character with the physical key's `code`/virtual key code, and a `+` key no
   longer collides with the chord separator.
 
+- A session row is owner-only again. `GET /api/sessions/{id}` without the
+  session token (or with a wrong one) answers `403` instead of returning the
+  container address and minting a view-only share link, so knowing a session id
+  is never sufficient. A viewer deep link without its token now says so instead
+  of silently downgrading to a share view; share viewers keep reconnecting
+  through their share link.
+- Share links point at the app's own origin on a default install. The compiled
+  `cors.origin` default was `http://localhost:5173` (the Vite dev server), so
+  the viewer's **Share** button copied a link that never connected on `:8080`.
+- Resource capture can be started only once per session, and the API now says
+  so: a retried start while recording returns the same archive (idempotent
+  `200`), a start after Stop returns `409 archive_exists` instead of a generic
+  `502`, and `GET .../capture` before a recording returns `recording:false`
+  instead of `404`. The viewer restores capture state on load and shows a
+  finished recording as saved rather than offering a start that cannot work.
+- Recon errors use the API's `{"error":{"code","message"}}` envelope instead of
+  forwarding the streamer's own `{error,detail}` body, and the panel shows the
+  actionable message rather than axios's "Request failed with status code 400".
+- Deleting an already-terminated session is idempotent (`200`) instead of
+  reporting `403 session_does_not_belong_to_you` after finalization dropped the
+  token.
+- `browser_theme`, `frame_rate` and `bandwidth_kbps` are validated at creation:
+  an unknown theme, a negative or over-120 frame rate, or a negative bitrate is
+  a `400` instead of being stored while the sandbox ran with a different value.
+- MCP `navigate` reports `document_seen` for that navigation only: a failed load
+  no longer inherits `true` from a document captured earlier in the session.
+- MCP `screenshot` retries through the CDP re-attach after a navigation for up
+  to four seconds instead of failing the first attempt with
+  `screenshot failed`.
+- `data:`, `blob:` and `file:` responses are no longer listed as domains or
+  drawn as graph hosts, and they no longer raise a bogus "random domain" flag.
+- `POST /api/sessions/{id}/audio` is in the OpenAPI document, and the automation
+  guide's stale "eleven tools" count is corrected to eighteen.
+
+- A malformed viewer deep link (`/session/<non-uuid>`) ends in the "Session
+  not found" state instead of polling a `400` five times a second forever.
+- A dropped launch request says "Failed to launch. Is the backend running?"
+  instead of surfacing the browser's raw "Failed to fetch".
+- The `#token=` deep link is honored by the viewer as well as by the captures
+  page, and both store it and scrub it from the address bar.
+- Closing **Custom data…** returns focus to the Session actions button instead
+  of dropping it on `<body>`.
+- Creating a share link while the session is still provisioning answers
+  `409 container_not_ready` (the same signal seed uses) instead of
+  `404 session_not_found`.
+
 ## [1.7.3] - 2026-11-22
 
 ### Fixed

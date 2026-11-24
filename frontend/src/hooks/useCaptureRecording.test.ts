@@ -96,7 +96,7 @@ describe('useCaptureRecording', () => {
     expect(result.current.error).toBe('already recording');
   });
 
-  it('stops, keeps the summary, and returns to idle', async () => {
+  it('stops, keeps the summary, and lands in stopped', async () => {
     vi.mocked(startCapture).mockResolvedValue({ archive_id: 'sess-1', archive_key: 'key-1' });
     vi.mocked(stopCapture).mockResolvedValue({ items: 4, bytes: 2048, deduped: 2, complete: true });
     vi.mocked(getCaptureStatus).mockResolvedValue({
@@ -114,7 +114,7 @@ describe('useCaptureRecording', () => {
     });
 
     expect(stopCapture).toHaveBeenCalledWith('sess-1', 'token-1');
-    expect(result.current.state).toBe('idle');
+    expect(result.current.state).toBe('stopped');
     expect(result.current.summary).toEqual({ items: 4, bytes: 2048, deduped: 2, complete: true });
   });
 
@@ -139,7 +139,8 @@ describe('useCaptureRecording', () => {
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });
-    expect(getCaptureStatus).toHaveBeenCalledTimes(1);
+    // One call on mount (restore), one per 5 s poll.
+    expect(getCaptureStatus).toHaveBeenCalledTimes(2);
     expect(result.current.state).toBe('recording');
 
     vi.mocked(getCaptureStatus).mockResolvedValue({
@@ -152,8 +153,8 @@ describe('useCaptureRecording', () => {
     await act(async () => {
       vi.advanceTimersByTime(5000);
     });
-    expect(getCaptureStatus).toHaveBeenCalledTimes(2);
-    expect(result.current.state).toBe('idle');
+    expect(getCaptureStatus).toHaveBeenCalledTimes(3);
+    expect(result.current.state).toBe('stopped');
   });
 
   it('marks saved hashes from the archive manifest', async () => {
@@ -198,5 +199,47 @@ describe('useCaptureRecording', () => {
 
     expect(vi.mocked(getCaptureStatus).mock.calls.length).toBe(callsBefore);
     expect(stopCapture).not.toHaveBeenCalled();
+  });
+});
+
+describe('useCaptureRecording mount restore', () => {
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', memoryStorage());
+    vi.stubGlobal('sessionStorage', memoryStorage());
+    sessionStorage.setItem('isola_session_token:sess-1', 'token-1');
+    vi.mocked(getCaptureStatus).mockReset();
+    vi.mocked(getArchive).mockReset();
+    vi.mocked(getArchive).mockResolvedValue(emptyArchive());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('adopts a recording that was started in another tab', async () => {
+    vi.mocked(getCaptureStatus).mockResolvedValue({
+      recording: true,
+      items: 3,
+      bytes: 900,
+      deduped: 0,
+      truncated: false,
+      started_at: '2026-11-21T10:00:00Z',
+    });
+    const { result } = renderHook(() => useCaptureRecording('sess-1'));
+    await waitFor(() => expect(result.current.state).toBe('recording'));
+  });
+
+  it('shows a finished archive as stopped instead of offering a start', async () => {
+    vi.mocked(getCaptureStatus).mockResolvedValue({
+      recording: false,
+      items: 7,
+      bytes: 4096,
+      deduped: 1,
+      truncated: false,
+      started_at: '2026-11-21T10:00:00Z',
+    });
+    const { result } = renderHook(() => useCaptureRecording('sess-1'));
+    await waitFor(() => expect(result.current.state).toBe('stopped'));
+    expect(result.current.status?.items).toBe(7);
   });
 });

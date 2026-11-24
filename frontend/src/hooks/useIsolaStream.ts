@@ -1132,13 +1132,28 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     };
     // Only explicit user focus clears/selects; autofocus leaves the current value alone.
     let userFocus = false;
+    let typedSinceFocus = false;
     const markUserFocus = () => { userFocus = true; };
     url.addEventListener('mousedown', markUserFocus);
-    url.addEventListener('keydown', (e) => { if (e.key !== 'Enter') markUserFocus(); });
+    url.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') {
+        markUserFocus();
+        typedSinceFocus = true;
+      }
+    });
     url.addEventListener('focus', () => {
       if (!userFocus) return; // autofocus: leave current value alone
       if (url.value === 'about:blank') url.value = '';
-      requestAnimationFrame(() => url.select());
+      typedSinceFocus = false;
+      // Select immediately: deferring this solely to the next frame let a fast
+      // first keystroke land before the select, after which select() re-selected
+      // the field and the next character replaced what was typed.
+      url.select();
+      // A click's mouseup can still collapse the selection made in focus, so
+      // restore it once the click has finished — unless the user started typing.
+      requestAnimationFrame(() => {
+        if (url.isConnected && document.activeElement === url && !typedSinceFocus) url.select();
+      });
     });
     url.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') navigate();
@@ -1981,15 +1996,27 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         const sid = connectParamsRef.current?.sessionId;
         if (sid) {
           try {
-            const token = getSessionToken(sid);
+            // Share viewers have no control token: probe their view-only share
+            // link instead of the owner-only session row.
+            let shareToken = '';
+            try {
+              shareToken = new URL(connectParamsRef.current?.streamWsUrl || '', window.location.href)
+                .searchParams.get('share_token') || '';
+            } catch {
+              shareToken = '';
+            }
+            const token = shareToken ? '' : getSessionToken(sid);
             // 4s abort: a half-open probe must not park the viewer on "Reconnecting…" forever.
             const ac = new AbortController();
             const abortTimer = setTimeout(() => ac.abort(), 4000);
-            const res = await fetch(`/api/sessions/${sid}`, {
-              headers: token ? { 'X-Session-Token': token } : undefined,
-              signal: ac.signal,
-            }).finally(() => clearTimeout(abortTimer));
-            if (res.status === 404 || res.status === 401 || res.status === 403) {
+            const res = await fetch(
+              shareToken ? `/api/share/${encodeURIComponent(shareToken)}` : `/api/sessions/${sid}`,
+              {
+                headers: token ? { 'X-Session-Token': token } : undefined,
+                signal: ac.signal,
+              },
+            ).finally(() => clearTimeout(abortTimer));
+            if (res.status === 404 || res.status === 401 || res.status === 403 || res.status === 410) {
               setConnected(false);
               setReconnecting(false);
               setError('Session is no longer available');
@@ -2140,6 +2167,21 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         sendEvent({ type: 'mousemove', x, y, buttons: e.buttons });
       };
 
+      // Multi-click sequence: Chromium selects a word on clickCount 2 and a
+      // line on 3, and only fires `dblclick` for the second press. Every press
+      // used to report 1, so double/triple-click did nothing.
+      const clickSeq = { at: 0, x: 0, y: 0, count: 0 };
+      let pressClickCount = 1;
+      const nextClickCount = (x: number, y: number): number => {
+        const now = performance.now();
+        const near = Math.abs(x - clickSeq.x) <= 4 && Math.abs(y - clickSeq.y) <= 4;
+        clickSeq.count = now - clickSeq.at <= 400 && near ? Math.min(clickSeq.count + 1, 3) : 1;
+        clickSeq.at = now;
+        clickSeq.x = x;
+        clickSeq.y = y;
+        return clickSeq.count;
+      };
+
       const onMouseDown = (e: MouseEvent) => {
         e.preventDefault();
         focusViewer();
@@ -2148,7 +2190,8 @@ export function useIsolaStream(defaultTargetUrl?: string) {
           // text latches the remote cursor shape; upgradable mid-drag.
           dragStartRef.current = { x, y, text: remoteCursorRef.current === 'text' };
         }
-        sendEvent({ type: 'mousedown', button: buttonName(e), x, y, buttons: e.buttons });
+        pressClickCount = e.button === 0 ? nextClickCount(x, y) : 1;
+        sendEvent({ type: 'mousedown', button: buttonName(e), x, y, buttons: e.buttons, click_count: pressClickCount });
       };
 
       const onMouseUp = (e: MouseEvent) => {
@@ -2165,7 +2208,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
           }
           dragStartRef.current = null;
         }
-        sendEvent({ type: 'mouseup', button: buttonName(e), x, y, buttons: e.buttons });
+        sendEvent({ type: 'mouseup', button: buttonName(e), x, y, buttons: e.buttons, click_count: pressClickCount });
       };
 
       // CDP wheel deltas apply instantly; spread each gesture over ~120ms in three slices.

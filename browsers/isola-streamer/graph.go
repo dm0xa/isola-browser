@@ -109,11 +109,14 @@ type urlFacts struct {
 func parseRequestURL(raw string) urlFacts {
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" {
+		// data:, blob:, about: and file: URLs have no host. They are not graph
+		// nodes: reporting the URL as a "host" drew inline images as domains and
+		// flagged them as random hostnames.
 		short := raw
 		if len(short) > 60 {
 			short = short[:60]
 		}
-		return urlFacts{Host: short, Label: short}
+		return urlFacts{Host: "", Label: short}
 	}
 	host := u.Hostname()
 	label := host

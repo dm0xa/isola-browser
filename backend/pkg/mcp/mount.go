@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -52,8 +53,18 @@ func Mount(r chi.Router, cfg *config.Config, deps Deps) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		// The HTTP server's 15 s write deadline is sized for REST calls. A tool
+		// call legitimately waits for a container (create_session ≈ 30–120 s
+		// with Tor), and exceeding the deadline closed the connection after the
+		// handler had produced a response: the client saw an empty reply
+		// instead of the tool result or its error.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(mcpMaxCallDuration))
 		ctx := context.WithValue(req.Context(), clientAddrKey{}, req.RemoteAddr)
 		mcpHandler.ServeHTTP(w, req.WithContext(ctx))
 	}))
 	log.Info().Msg("mcp: mounted")
 }
+
+// mcpMaxCallDuration bounds one MCP HTTP response. It covers the slowest tool
+// (create_session's stream-ready wait plus the document wait) with headroom.
+const mcpMaxCallDuration = 3 * time.Minute

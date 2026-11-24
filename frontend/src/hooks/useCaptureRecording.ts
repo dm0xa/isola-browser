@@ -18,9 +18,10 @@ import {
   type CaptureStatus,
   type CaptureStopResult,
 } from '../lib/captureApi';
+import { apiErrorStatus } from '../lib/apiError';
 import { getSessionToken } from '../lib/sessionToken';
 
-export type CaptureState = 'idle' | 'starting' | 'recording' | 'stopping' | 'error';
+export type CaptureState = 'idle' | 'starting' | 'recording' | 'stopping' | 'stopped' | 'error';
 
 const STATUS_POLL_MS = 5000;
 // The manifest is heavier than the status line (one object per file), so the
@@ -37,7 +38,7 @@ export interface UseCaptureRecording {
   savedHashes: ReadonlySet<string>;
   start: () => Promise<void>;
   stop: () => Promise<void>;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<CaptureSessionStatus | null>;
 }
 
 export function useCaptureRecording(sessionId: string | undefined): UseCaptureRecording {
@@ -73,31 +74,41 @@ export function useCaptureRecording(sessionId: string | undefined): UseCaptureRe
     setSavedHashes(new Set());
   }, [sessionId]);
 
-  const refresh = useCallback(async () => {
-    if (!sessionId) return;
+  const refresh = useCallback(async (): Promise<CaptureSessionStatus | null> => {
+    if (!sessionId) return null;
     try {
       const next: CaptureSessionStatus = await getCaptureStatus(sessionId, getSessionToken(sessionId));
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || !next) return null;
       setStatus(next);
       if (next.archive_id) setArchiveId(next.archive_id);
       setError('');
       if (next.recording) {
         setState((cur) => (cur === 'stopping' || cur === 'error' ? cur : 'recording'));
       } else {
-        setState((cur) => (cur === 'stopping' ? cur : 'idle'));
+        // An archive exists once a recording has started, even after a clean
+        // stop. Recording is one-shot per session (the archive id is the
+        // session id), so the row must read "saved" instead of offering a start
+        // that the backend answers with archive_exists.
+        setState((cur) => {
+          if (cur === 'stopping') return 'stopped';
+          if (next.items > 0 || next.started_at) return 'stopped';
+          return cur === 'error' ? 'error' : 'idle';
+        });
       }
+      return next;
     } catch (err) {
-      if (!mountedRef.current) return;
-      // 404 = never recorded (or the session is already gone): a stable idle
-      // state, not an error worth shouting about.
-      if (err && typeof err === 'object' && 'response' in err) {
-        const resp = err.response;
-        if (resp && typeof resp === 'object' && 'status' in resp && resp.status === 404) {
-          setState((cur) => (cur === 'stopping' ? cur : 'idle'));
-          return;
-        }
+      if (!mountedRef.current) return null;
+      // 404 = never recorded (or the session is already gone); 401/403 = this
+      // viewer has no control token. Both are a stable idle state, not a
+      // capture error — the session-level error already explains a no-token
+      // deep link, and a share viewer never owns capture.
+      const status = apiErrorStatus(err);
+      if (status === 400 || status === 404 || status === 401 || status === 403) {
+        setState((cur) => (cur === 'stopping' ? cur : 'idle'));
+        return null;
       }
       setError(captureErrorText(err));
+      return null;
     }
   }, [sessionId]);
 
@@ -118,6 +129,14 @@ export function useCaptureRecording(sessionId: string | undefined): UseCaptureRe
       // Manifest refresh is best-effort; the recording itself is unaffected.
     }
   }, [sessionId, archiveId]);
+
+  // Reloading the viewer (or opening one for a recording started elsewhere)
+  // must re-read the authoritative status; the hook used to start in idle and
+  // only poll while it believed it was recording.
+  useEffect(() => {
+    if (!sessionId) return;
+    void refresh();
+  }, [sessionId, refresh]);
 
   const start = useCallback(async () => {
     if (!sessionId || busyRef.current) return;
@@ -148,12 +167,26 @@ export function useCaptureRecording(sessionId: string | undefined): UseCaptureRe
       setState('recording');
     } catch (err) {
       if (!mountedRef.current) return;
+      // A 409 means the server already has a recording or a final archive for
+      // this session (another tab, or a Stop this viewer has not seen yet).
+      // Adopt that state instead of showing a dead-end error.
+      if (apiErrorStatus(err) === 409) {
+        const next = await refresh();
+        if (!mountedRef.current) return;
+        if (!next) {
+          // The status read failed too: report the conflict instead of leaving
+          // the row stuck on "starting".
+          setError(captureErrorText(err));
+          setState('error');
+        }
+        return;
+      }
       setError(captureErrorText(err));
       setState('error');
     } finally {
       busyRef.current = false;
     }
-  }, [sessionId]);
+  }, [sessionId, refresh]);
 
   const stop = useCallback(async () => {
     if (!sessionId || busyRef.current) return;
@@ -164,8 +197,11 @@ export function useCaptureRecording(sessionId: string | undefined): UseCaptureRe
       const res = await stopCapture(sessionId, getSessionToken(sessionId));
       if (!mountedRef.current) return;
       setSummary(res);
-      setState('idle');
+      // Leave `stopping` for refresh() to resolve into `stopped`.
       await refresh();
+      if (mountedRef.current) {
+        setState((cur) => (cur === 'stopping' ? 'stopped' : cur));
+      }
       await refreshManifest();
     } catch (err) {
       if (!mountedRef.current) return;
