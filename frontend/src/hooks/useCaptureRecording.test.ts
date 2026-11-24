@@ -216,7 +216,7 @@ describe('useCaptureRecording mount restore', () => {
     vi.unstubAllGlobals();
   });
 
-  it('adopts a recording that was started in another tab', async () => {
+  it('adopts a recording that was started in another tab and stores its key', async () => {
     vi.mocked(getCaptureStatus).mockResolvedValue({
       recording: true,
       items: 3,
@@ -224,9 +224,12 @@ describe('useCaptureRecording mount restore', () => {
       deduped: 0,
       truncated: false,
       started_at: '2026-11-21T10:00:00Z',
+      archive_id: 'sess-1',
+      archive_key: 'key-from-status',
     });
     const { result } = renderHook(() => useCaptureRecording('sess-1'));
     await waitFor(() => expect(result.current.state).toBe('recording'));
+    expect(getArchiveKey('sess-1')).toBe('key-from-status');
   });
 
   it('shows a finished archive as stopped instead of offering a start', async () => {

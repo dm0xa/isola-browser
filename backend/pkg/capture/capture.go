@@ -68,6 +68,11 @@ type Status struct {
 	Deduped   int64
 	Truncated bool
 	StartedAt time.Time
+	// ArchiveKey is present only while this process holds the recording. It is
+	// the one-time key returned by Start, repeated to the session owner so a
+	// viewer that attaches mid-recording can browse the archive after Stop.
+	// Never persisted: after Stop it is gone (only KeySHA256 remains).
+	ArchiveKey string
 }
 
 // Summary is one archive row for the operator listing.

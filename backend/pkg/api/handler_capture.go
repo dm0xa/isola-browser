@@ -123,6 +123,11 @@ func (h *Handler) GetCaptureStatus(w http.ResponseWriter, r *http.Request) {
 		"deduped":    st.Deduped,
 		"truncated":  st.Truncated,
 	}
+	if st.ArchiveKey != "" {
+		// Owner-only handler: the key lets a viewer that attached mid-recording
+		// browse the archive after Stop. It is not persisted server-side.
+		body["archive_key"] = st.ArchiveKey
+	}
 	if !st.StartedAt.IsZero() {
 		body["started_at"] = st.StartedAt.UTC().Format(time.RFC3339Nano)
 	}

@@ -321,7 +321,10 @@ keeps the archive after the session ends. A session is recorded **once**: the
 archive is keyed by the session id, so starting again while recording returns
 the same archive and key (idempotent `200`), and starting after a clean Stop
 returns `409 archive_exists`. `GET /api/sessions/{id}/capture` before a
-recording answers `200` with `recording:false` and zero counters.
+recording answers `200` with `recording:false` and zero counters. While a
+recording is live, the owner-only status response also carries `archive_key`, so
+a viewer that attached mid-recording can browse the files after Stop; the key is
+never persisted and disappears with the recording.
 
 ```bash
 # Start: save the one-time archive key, it is not shown again

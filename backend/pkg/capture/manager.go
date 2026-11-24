@@ -430,13 +430,14 @@ func (m *Manager) Status(ctx context.Context, sessionID string) (Status, error) 
 
 	rec.mu.Lock()
 	st := Status{
-		Recording: true,
-		SessionID: sessionID,
-		Items:     len(rec.items),
-		Bytes:     rec.bytes,
-		Deduped:   rec.deduped,
-		Truncated: rec.truncated,
-		StartedAt: rec.startedAt,
+		Recording:  true,
+		SessionID:  sessionID,
+		Items:      len(rec.items),
+		Bytes:      rec.bytes,
+		Deduped:    rec.deduped,
+		Truncated:  rec.truncated,
+		StartedAt:  rec.startedAt,
+		ArchiveKey: rec.key,
 	}
 	addr := rec.addr
 	rec.mu.Unlock()

@@ -55,6 +55,8 @@ export interface CaptureStatus {
 
 export interface CaptureSessionStatus extends CaptureStatus {
   archive_id?: string;
+  /** Present while the server still holds the recording (owner-only status). */
+  archive_key?: string;
 }
 
 export interface CaptureStartResult {

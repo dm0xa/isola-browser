@@ -1076,7 +1076,8 @@ func TestStatusAndList(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	m := newTestManager(t, Config{Enabled: true})
-	if _, err := m.Start(context.Background(), "session-status", "https://a.example/", strings.TrimPrefix(srv.URL, "http://")); err != nil {
+	startRes, err := m.Start(context.Background(), "session-status", "https://a.example/", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	waitFor(t, "item ingested", func() bool {
@@ -1090,6 +1091,11 @@ func TestStatusAndList(t *testing.T) {
 	}
 	if !st.Recording || st.Items != 1 || st.SessionID != "session-status" {
 		t.Fatalf("status = %+v", st)
+	}
+	// The owner-only status repeats the one-time key while the recording is
+	// live so a viewer that attached later can browse the archive after Stop.
+	if st.ArchiveKey != startRes.ArchiveKey {
+		t.Fatalf("status key = %q, want %q", st.ArchiveKey, startRes.ArchiveKey)
 	}
 
 	list, err := m.List()

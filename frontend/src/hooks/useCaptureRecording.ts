@@ -81,6 +81,9 @@ export function useCaptureRecording(sessionId: string | undefined): UseCaptureRe
       if (!mountedRef.current || !next) return null;
       setStatus(next);
       if (next.archive_id) setArchiveId(next.archive_id);
+      // A recording started elsewhere (REST, another tab) still hands its key
+      // to the owner here, so Stop in this viewer can browse the files.
+      if (next.archive_key) setArchiveKey(sessionId, next.archive_key);
       setError('');
       if (next.recording) {
         setState((cur) => (cur === 'stopping' || cur === 'error' ? cur : 'recording'));
