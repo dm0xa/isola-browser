@@ -119,6 +119,9 @@ export default function ViewerPage() {
   // is true.
   const [networkCaptureEnabled, setNetworkCaptureEnabled] = useState(false);
   const [sessionError, setSessionError] = useState<string>('');
+  // Backend's stable launch-failure reason (`error_code`), shown only on the
+  // error screen; empty means the failure happened after the sandbox started.
+  const [sessionErrorCode, setSessionErrorCode] = useState<string>('');
   const connectedRef = useRef(false);
   const connectingRef = useRef(false);
   const connectStartedAtRef = useRef(0);
@@ -534,6 +537,9 @@ export default function ViewerPage() {
           // new session will replace this view momentarily.
           if (!restartingRef.current) {
             setSessionError(data.status === 'terminated' ? 'Session has ended' : 'Session encountered an error');
+            // The backend records why creation failed; it is the only place a
+            // launch failure can be told apart from a sandbox that ran and died.
+            setSessionErrorCode(typeof data.error_code === 'string' ? data.error_code : '');
           }
           return; // stop polling — terminal
         }
@@ -1171,7 +1177,7 @@ export default function ViewerPage() {
           </p>
           <p className="text-sm font-mono text-red-600 dark:text-[#f87171] mb-2">{errorText}</p>
           <p className="text-xs font-mono text-zinc-500 dark:text-[#6b7280] mb-10 max-w-sm text-center">
-            {sessionErrorDetail(sessionError || '')}
+            {sessionErrorDetail(sessionError || '', sessionErrorCode)}
           </p>
           <div className="flex items-center">
             <Link

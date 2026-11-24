@@ -22,6 +22,23 @@ describe('sessionErrorDetail', () => {
     expect(sessionErrorDetail('')).toContain('unexpected problem');
     expect(sessionErrorDetail('Stream closed')).toContain('unexpected problem');
   });
+
+  it('names the runtime action for a sandbox that could not be reached', () => {
+    const detail = sessionErrorDetail('Session encountered an error', 'sandbox_publish_unreachable');
+    expect(detail).toContain('port publishing');
+    expect(detail).toContain('colima restart');
+    expect(detail).toContain('scripts/doctor.sh');
+  });
+
+  it('distinguishes a stream that never started from a dead runtime', () => {
+    expect(sessionErrorDetail('Session encountered an error', 'stream_not_ready')).toContain('video stream');
+    expect(sessionErrorDetail('Session encountered an error', 'create_failed')).toContain('could not create');
+  });
+
+  it('points at the doctor script when the reason is unknown or absent', () => {
+    expect(sessionErrorDetail('Session encountered an error')).toContain('scripts/doctor.sh');
+    expect(sessionErrorDetail('Session encountered an error', 'some_future_code')).toContain('scripts/doctor.sh');
+  });
 });
 
 describe('shortInputTarget', () => {

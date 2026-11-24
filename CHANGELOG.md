@@ -23,6 +23,10 @@ publishes the section matching the tag.
   gained a matching section for the `published port unreachable` /
   `warm pool: claim probe, discarded` signature, including the fix
   (`colima restart`).
+- A failed launch records its reason on the session as `error_code`
+  (`sandbox_publish_unreachable`, `stream_not_ready`, `create_failed`) in
+  `GET /api/sessions/{id}`, and the viewer turns that code into the matching
+  next action instead of "check the isola log".
 
 ### Changed
 
@@ -37,6 +41,17 @@ publishes the section matching the tag.
   tabs that report the same title are named by the end of their URL instead of
   repeating one word. Chips are keyboard-reachable: Tab focuses the current
   tab, arrow keys walk the strip, Enter switches and Delete closes.
+
+### Fixed
+
+- A container the host cannot reach is no longer treated as a dead container:
+  the orchestrator probes the streamer inside the container, uses the bridge IP
+  only when this backend can actually dial it, and otherwise fails with a
+  `publish unreachable` error naming the published address and the fix.
+- A broken host port-publishing path no longer burns the warm pool: a
+  publish-unreachable claim probe returns the container to the pool and pauses
+  claims (cold launches continue) instead of terminating a healthy sandbox, and
+  reconciliation stops counting those probes as misses.
 
 ## [1.8.0] - 2026-11-24
 
