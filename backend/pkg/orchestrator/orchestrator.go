@@ -459,37 +459,22 @@ func (o *Orchestrator) CreateSession(ctx context.Context, params CreateSessionPa
 
 	// Published host ports first (backend on host); a mapping in inspect is not
 	// proof of reachability, so verify with a real connection before committing.
-	host := ""
-	port := 0
-	cdpPort := 0
+	// The bridge IP is only a fallback when this process can dial it, and a
+	// runtime that stopped forwarding ports is reported as such (see reachability.go).
 	hp59, hp9223, containerIP, endpointErr := o.containerEndpoints(ctx, containerID)
 	if endpointErr != nil {
 		log.Warn().Err(endpointErr).Str("container_id", containerID).
 			Msg("endpoint: discover")
 	}
-	if endpointErr == nil && hp59 > 0 && hp9223 > 0 {
-		if hostReachable(ctx, "127.0.0.1", hp59) {
-			host = "127.0.0.1"
-			port = hp59
-			cdpPort = hp9223
-			log.Info().Str("container_id", containerID).
-				Int("stream_port", port).Int("cdp_port", cdpPort).
-				Msg("container ready")
-		} else {
-			log.Info().Str("container_id", containerID).
-				Int("stream_port", hp59).
-				Msg("published port unreachable, browser-net")
-		}
+	host, port, cdpPort, err := o.streamEndpoint(ctx, containerID, hp59, hp9223, containerIP)
+	if err != nil {
+		log.Warn().Err(err).Str("container_id", containerID).
+			Msg("endpoint: stream unreachable")
+		return nil, err
 	}
-	if host == "" {
-		if containerIP == "" {
-			return nil, fmt.Errorf("no IP found for container %s", containerID)
-		}
-		host = containerIP
-		port = 5900
-		cdpPort = 9223
-		log.Info().Str("container_id", containerID).Str("ip", host).Msg("container ready")
-	}
+	log.Info().Str("container_id", containerID).Str("host", host).
+		Int("stream_port", port).Int("cdp_port", cdpPort).
+		Msg("container ready")
 
 	return &SessionInfo{
 		SessionID:   params.SessionID,
@@ -888,19 +873,6 @@ func (o *Orchestrator) GetContainerIP(ctx context.Context, containerID string) (
 		return "", fmt.Errorf("no IP found for container %s", containerID)
 	}
 	return ip, nil
-}
-
-// hostReachable reports whether a TCP connection to host:port succeeds within
-// a short deadline. Used to validate that a discovered address (published host
-// port) is actually dialable from this process before the session commits to it.
-func hostReachable(ctx context.Context, host string, port int) bool {
-	d := net.Dialer{Timeout: 2 * time.Second}
-	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
 }
 
 func (o *Orchestrator) getHostPort(ctx context.Context, containerID, portKey string) (int, error) {
