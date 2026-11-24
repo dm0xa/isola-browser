@@ -8,50 +8,31 @@ publishes the section matching the tag.
 
 ### Added
 
-- `warm_pool.tor_size` (default `1`, `0` disables) keeps Tor-baked containers
-  pre-started, so a `tor_enabled` launch is served from the pool instead of
-  paying a cold start plus the circuit gate. A Tor request claims one only when
-  its resolved exit country equals `tor.exit_country`, since the proxy and the
-  egress scoping are fixed at container boot; a failed Tor fill backs off for
-  five minutes rather than booting a container every pool pass.
-- `scripts/doctor.sh` is a read-only local diagnostic for a sandbox that will
-  not start: it reports Docker and Colima state, lists `isola-*` containers,
-  resolves each running container's published `5900/tcp` mapping, probes it
-  from the host and probes the streamer's `/healthz` inside that same
-  container, checks `GET /api/config` on the backend, and prints a single
-  `VERDICT` line. [Deployment](docs/deployment.md#troubleshooting-sessions-fail-to-start)
-  gained a matching section for the `published port unreachable` /
-  `warm pool: claim probe, discarded` signature, including the fix
-  (`colima restart`).
-- A failed launch records its reason on the session as `error_code`
-  (`sandbox_publish_unreachable`, `stream_not_ready`, `create_failed`) in
-  `GET /api/sessions/{id}`, and the viewer turns that code into the matching
-  next action instead of "check the isola log".
+- Tor sessions are pre-warmed: `warm_pool.tor_size` (default `1`) keeps
+  Tor-baked containers ready, claimed only by `tor_enabled` launches whose exit
+  country matches `tor.exit_country`.
+- `scripts/doctor.sh` gives a read-only verdict for a sandbox that will not
+  start: Docker/Colima state, container port publishing, host and in-container
+  stream probes, backend config.
+- A failed launch carries `error_code` on `GET /api/sessions/{id}`
+  (`sandbox_publish_unreachable`, `stream_not_ready`, `create_failed`), and the
+  viewer turns it into the action that fixes it.
 
 ### Changed
 
-- The viewer tab strip now reads left to right: the address bar is a fixed
-  380px field on the left, then back/reload, then the tab chips, which take the
-  remaining width and scroll sideways, with `+` riding at the end of the row
-  right after the last tab.
-- A busy tab set stays readable in the viewer: chips no longer shrink below
-  90px, the chip row scrolls sideways (wheel included) while `+`, back/reload
-  and the address bar stay pinned, the address bar stops at 380px instead of
-  absorbing the strip, the close ✕ shows on the active tab and on hover, and
-  tabs that report the same title are named by the end of their URL instead of
-  repeating one word. Chips are keyboard-reachable: Tab focuses the current
-  tab, arrow keys walk the strip, Enter switches and Delete closes.
+- The viewer tab strip reads left to right: a fixed-width address bar, then
+  back/reload, then scrollable tab chips with `+` after the last tab. Chips never
+  shrink below 90px, tabs sharing a title are told apart by their URL tail, and
+  the strip is reachable from the keyboard.
 
 ### Fixed
 
-- A container the host cannot reach is no longer treated as a dead container:
-  the orchestrator probes the streamer inside the container, uses the bridge IP
-  only when this backend can actually dial it, and otherwise fails with a
-  `publish unreachable` error naming the published address and the fix.
-- A broken host port-publishing path no longer burns the warm pool: a
-  publish-unreachable claim probe returns the container to the pool and pauses
-  claims (cold launches continue) instead of terminating a healthy sandbox, and
-  reconciliation stops counting those probes as misses.
+- A sandbox the host cannot reach is no longer treated as dead: the backend
+  probes the streamer inside the container, uses the bridge IP only when it can
+  dial it, and otherwise reports a publish failure naming the fix.
+- A broken host publish path no longer drains the warm pool: the healthy
+  container goes back into the pool and claims pause until probing recovers,
+  while cold launches keep working.
 
 ## [1.8.0] - 2026-11-24
 
