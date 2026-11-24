@@ -30,6 +30,9 @@ publishes the section matching the tag.
   `502`, and `GET .../capture` before a recording returns `recording:false`
   instead of `404`. The viewer restores capture state on load and shows a
   finished recording as saved rather than offering a start that cannot work.
+- The one-time archive key is repeated to the session owner while a recording is
+  live, so a viewer opened mid-recording (or after a REST/other-tab start) can
+  browse the saved files after Stop. The key is still never persisted.
 - Recon errors use the API's `{"error":{"code","message"}}` envelope instead of
   forwarding the streamer's own `{error,detail}` body, and the panel shows the
   actionable message rather than axios's "Request failed with status code 400".
