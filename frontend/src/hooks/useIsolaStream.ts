@@ -114,7 +114,6 @@ function ensureTabBarStyles() {
   document.head.appendChild(style);
 }
 
-
 // Input backlog (see sendEvent): events buffered while no socket is
 // sendable are replayed on open if younger than the TTL.
 const INPUT_BACKLOG_TTL_MS = 600;
@@ -1061,6 +1060,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       const x = document.createElement('button');
       x.type = 'button';
       x.setAttribute('aria-label', `Close ${label}`);
+      // Out of the tab order: the chip itself owns Enter (switch) and Delete
+      // (close), so Tab walks the strip, not one ✕ per tab.
+      x.tabIndex = -1;
       x.textContent = '✕';
       x.style.flex = '0 0 16px';
       x.style.width = '16px';
@@ -1091,6 +1093,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         if (e.target !== x) sendCtrl({ type: 'tab_switch', id: t.id });
       };
       chip.onkeydown = (e) => {
+        // Keys aimed at the close button are the browser's (it is not tabbable,
+        // but a pointer click can focus it in some engines).
+        if (e.target !== chip) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           sendCtrl({ type: 'tab_switch', id: t.id });
