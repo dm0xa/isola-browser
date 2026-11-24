@@ -6,106 +6,63 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
-### Fixed
+## [1.8.0] - 2026-11-24
 
-- Typing symbols in the sandbox works again: `!@#$%^&*()`, punctuation such as
-  `,.;:'"[]{}<>/?\|` and a literal `+` all reach the page. The streamer was
-  translating a punctuation key into a key name it could not resolve back, so
-  the event was dropped before Chromium saw it; it now dispatches the
-  character with the physical key's `code`/virtual key code, and a `+` key no
-  longer collides with the chord separator.
+### Added
 
-- A session row is owner-only again. `GET /api/sessions/{id}` without the
-  session token (or with a wrong one) answers `403` instead of returning the
-  container address and minting a view-only share link, so knowing a session id
-  is never sufficient. A viewer deep link without its token now says so instead
-  of silently downgrading to a share view; share viewers keep reconnecting
-  through their share link.
-- Share links point at the app's own origin on a default install. The compiled
-  `cors.origin` default was `http://localhost:5173` (the Vite dev server), so
-  the viewer's **Share** button copied a link that never connected on `:8080`.
-- Resource capture can be started only once per session, and the API now says
-  so: a retried start while recording returns the same archive (idempotent
-  `200`), a start after Stop returns `409 archive_exists` instead of a generic
-  `502`, and `GET .../capture` before a recording returns `recording:false`
-  instead of `404`. The viewer restores capture state on load and shows a
-  finished recording as saved rather than offering a start that cannot work.
-- The one-time archive key is repeated to the session owner while a recording is
-  live, so a viewer opened mid-recording (or after a REST/other-tab start) can
-  browse the saved files after Stop. The key is still never persisted.
-- Recon errors use the API's `{"error":{"code","message"}}` envelope instead of
-  forwarding the streamer's own `{error,detail}` body, and the panel shows the
-  actionable message rather than axios's "Request failed with status code 400".
-- Deleting an already-terminated session is idempotent (`200`) instead of
-  reporting `403 session_does_not_belong_to_you` after finalization dropped the
-  token.
-- `browser_theme`, `frame_rate` and `bandwidth_kbps` are validated at creation:
-  an unknown theme, a negative or over-120 frame rate, or a negative bitrate is
-  a `400` instead of being stored while the sandbox ran with a different value.
-- MCP `navigate` reports `document_seen` for that navigation only: a failed load
-  no longer inherits `true` from a document captured earlier in the session.
-- MCP `screenshot` retries through the CDP re-attach after a navigation for up
-  to four seconds instead of failing the first attempt with
-  `screenshot failed`.
-- `data:`, `blob:` and `file:` responses are no longer listed as domains or
-  drawn as graph hosts, and they no longer raise a bogus "random domain" flag.
-- `POST /api/sessions/{id}/audio` is in the OpenAPI document, and the automation
-  guide's stale "eleven tools" count is corrected to eighteen.
-
-- A malformed viewer deep link (`/session/<non-uuid>`) ends in the "Session
-  not found" state instead of polling a `400` five times a second forever.
-- A dropped launch request says "Failed to launch. Is the backend running?"
-  instead of surfacing the browser's raw "Failed to fetch".
-- The `#token=` deep link is honored by the viewer as well as by the captures
-  page, and both store it and scrub it from the address bar.
-- Closing **Custom data…** returns focus to the Session actions button instead
-  of dropping it on `<body>`.
-- Creating a share link while the session is still provisioning answers
-  `409 container_not_ready` (the same signal seed uses) instead of
-  `404 session_not_found`.
-
-### Removed
-
-- The **What's new** release-notes list (Record, Custom data, Locale & zone) is
-  gone from the landing page; the same features are documented in
-  [`docs/`](docs/README.md).
+- `GET /api/captures` reports archive usage and retention: `usage.used_bytes`,
+  `quota_bytes` and `retention_days`.
+- Double- and triple-click work: `mousedown`/`mouseup` accept `click_count`.
 
 ### Changed
 
-- The web UI is ~38% smaller on first load and is now served compressed on the
-  binary/LaunchAgent install path: hashed assets and the 419 KB brand font are
-  gzipped (initial JS 819 KB → ~519 KB raw / ~170 KB gzip, font → ~86 KB),
-  fonts/icons cache for a week, and the viewer/network/captures pages plus the
-  Analysis panel (105 KB) load on demand. The toolbar logo no longer runs a
-  perpetual filter animation: idle viewer task time measured 60 → ~10 ms/s,
-  layouts 60 → 1/s.
-- Filtering the network log no longer re-encodes every kept entry: the REST and
-  MCP `get_network` paths copy the original entry bytes and decode only the
-  filter fields (measured ~7× less backend CPU at 1000 entries).
-- `graph.png` allows one render per session instead of two; a maximum-frame
-  render peaks around 600 MB in the sandbox, so two left too little headroom.
-- Idle reaping now treats authenticated owner API calls as activity, so a
-  REST-only client is not terminated at five minutes while polling.
-- A finalized session keeps its control token (until its cache TTL), so the
-  owner can still read a terminal row; a failed launch shows its `error` status
-  instead of `403`.
-- `GET /api/captures` includes `usage` (`used_bytes`, `quota_bytes`,
-  `retention_days`); the empty capture panel explains that a page loaded before
-  Record has no bodies to save.
-- Share viewers stop when the link is revoked or the session ends (`404`/`410`
-  are terminal instead of ignored).
+- The UI loads ~38% less on first paint and ships compressed: the binary
+  install path serves gzip, fonts and icons cache for a week, and the viewer,
+  network, captures and Analysis chunks load on demand. The toolbar logo no
+  longer animates forever (idle viewer CPU ~6× lower).
+- Filtering the network log no longer re-encodes kept entries (REST and MCP
+  `get_network`).
+- Resource capture is one recording per session: a retry returns the same
+  archive, a start after Stop is `409 archive_exists`, and the status is
+  `recording:false` before a start. The live status repeats the one-time
+  `archive_key` to the owner, so a viewer opened mid-recording can browse the
+  files after Stop.
+- Authenticated owner API calls count as activity, and a finalized session
+  keeps its token until it expires, so a REST client is not idle-reaped and the
+  owner can still read a terminal row.
+- `graph.png` renders once per session, and recon waits up to 20 s upstream.
+- Share viewers stop when the link is revoked or the session ends.
+
+### Removed
+
+- The landing-page **What's new** list; the features are documented in
+  [`docs/`](docs/README.md).
 
 ### Fixed
 
-- A page's `alert()`/`confirm()`/`prompt()` no longer freezes the tab: the
-  runner disables native dialogs and stubs the three page entry points
-  (`prompt()` returns null), and the streamer also auto-accepts a CDP
-  `Page.javascriptDialogOpening` if one appears. A `beforeunload` handler no
-  longer traps navigation in the Electron runner.
-- IME composition works: the viewer hosts a hidden editable target, skips
-  chords while composing, and sends `compositionend` text as one `type` event.
-- Intel recon allows 20 s upstream (a DNS/ASN lookup that took >12 s surfaced a
-  spurious `504`).
+- Typing punctuation and symbols works: `!@#$%^&*()`, `,.;:'"[]{}<>/?\|` and a
+  literal `+` reach the page.
+- `GET /api/sessions/{id}` is owner-only again: a deep link without its token
+  says so instead of opening a share view.
+- Share links use the app's own origin on a default install (`cors.origin`
+  defaults to `:8080`).
+- `alert()`/`confirm()`/`prompt()` no longer freeze a tab, and a `beforeunload`
+  handler no longer traps navigation.
+- IME composition works in the viewer.
+- Recon errors use the standard `{error:{code,message}}` envelope, and the panel
+  shows the message.
+- Deleting an ended session is idempotent (`200`), and creating a share while
+  the sandbox is still starting answers `409 container_not_ready`.
+- `browser_theme`, `frame_rate` and `bandwidth_kbps` are validated at creation
+  (`400`).
+- MCP `navigate` reports `document_seen` for that navigation only, and
+  `screenshot` retries through the CDP re-attach after a navigation.
+- `data:`, `blob:` and `file:` URLs are no longer listed as hosts or flagged as
+  random domains.
+- Viewer deep links: `#token=` is honored and scrubbed, a malformed session id
+  ends in "Session not found", and a dropped launch request says the backend
+  may be down. Focus returns to Session actions after **Custom data…**.
+- The OpenAPI document includes `POST /api/sessions/{id}/audio`.
 
 ## [1.7.3] - 2026-11-22
 
@@ -706,7 +663,8 @@ publishes the section matching the tag.
 Initial release: a Go control plane that boots a disposable Docker sandbox
 running offscreen Chromium.
 
-[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.7.3...HEAD
+[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/dm0xa/isola-browser/compare/v1.7.3...v1.8.0
 [1.7.3]: https://github.com/dm0xa/isola-browser/compare/v1.7.2...v1.7.3
 [1.7.2]: https://github.com/dm0xa/isola-browser/compare/v1.7.1...v1.7.2
 [1.7.1]: https://github.com/dm0xa/isola-browser/compare/v1.7.0...v1.7.1
