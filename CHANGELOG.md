@@ -8,6 +8,10 @@ publishes the section matching the tag.
 
 ### Changed
 
+- The viewer tab strip now reads left to right: the address bar is a fixed
+  380px field on the left, then back/reload, then the tab chips, which take the
+  remaining width and scroll sideways, with `+` riding at the end of the row
+  right after the last tab.
 - A busy tab set stays readable in the viewer: chips no longer shrink below
   90px, the chip row scrolls sideways (wheel included) while `+`, back/reload
   and the address bar stay pinned, the address bar stops at 380px instead of

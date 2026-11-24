@@ -1010,14 +1010,17 @@ export function useIsolaStream(defaultTargetUrl?: string) {
           : tabs)
       : (seed ? [active!] : []);
     // Chip row: fixed-width chips in a horizontally scrolling row, so a busy
-    // tab set never shrinks a chip below legibility. `+`, back/reload and the
-    // address bar are pinned as siblings outside this row.
+    // tab set never shrinks a chip below legibility. The address bar is pinned
+    // to the left as a fixed-width sibling; back/reload/`+` and the chips take
+    // the remaining space to its right.
     const chips = document.createElement('div');
     chips.setAttribute('data-chips', '');
     chips.style.display = 'flex';
     chips.style.alignItems = 'center';
     chips.style.flex = '1 1 auto';
     chips.style.minWidth = '0';
+    chips.style.marginLeft = '6px';
+    chips.style.justifyContent = 'flex-start';
     chips.style.gap = external ? '6px' : '2px';
     const labels = tabLabels(tabsDisplay);
     let activeChip: HTMLElement | null = null;
@@ -1116,11 +1119,11 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       };
       chips.appendChild(chip);
     }
-    bar.appendChild(chips);
-
+    // New-tab button rides at the end of the tab row, right after the last chip.
     const plus = document.createElement('div');
     plus.textContent = '+';
     plus.style.flex = '0 0 auto';
+    plus.style.marginLeft = '2px';
     plus.style.padding = '3px 9px';
     plus.style.borderRadius = '6px';
     plus.style.cursor = 'pointer';
@@ -1135,7 +1138,6 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       e.stopPropagation();
       sendCtrl({ type: 'tab_new' });
     };
-    bar.appendChild(plus);
 
     // mousedown (not click) so the browser's drag/selection flow isn't disturbed.
     const back = document.createElement('div');
@@ -1161,7 +1163,6 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       e.stopPropagation();
       sendCtrl({ type: 'tab_back' });
     };
-    bar.appendChild(back);
 
     const reload = document.createElement('div');
     reload.setAttribute('title', 'Reload page');
@@ -1186,19 +1187,18 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       const id = active ? active.id : 1;
       sendCtrl({ type: 'tab_reload', id });
     };
-    bar.appendChild(reload);
 
     // URL field for the active tab
     const url = document.createElement('input');
     url.type = 'text';
     url.placeholder = 'Search or enter address';
     setAddressValue(url, active ? active.url : '');
-    // Capped: the address bar used to absorb every spare pixel (flex-basis 0,
-    // grow 1) while the chips were squeezed into unreadable stubs.
-    url.style.flex = '0 1 380px';
-    url.style.maxWidth = '380px';
-    url.style.minWidth = '120px';
-    url.style.marginLeft = '6px';
+    // Leading, fixed-width field: it never grows or shrinks, so the tab row
+    // keeps a stable starting edge. Capped to half the strip when narrow.
+    url.style.flex = '0 0 auto';
+    url.style.width = '350px';
+    url.style.maxWidth = '50%';
+    url.style.minWidth = '140px';
     url.style.padding = '4px 10px';
     url.style.borderRadius = '999px';
     url.style.border = `1px solid ${pal.inputBorder}`;
@@ -1256,7 +1256,15 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         setAddressValue(url, active ? active.url : '');
       }
     });
+
+    // Left-to-right order: address bar (fixed width) → history/reload → tabs
+    // (with `+` at the end of the row), which take the remaining width and
+    // scroll internally.
     bar.appendChild(url);
+    bar.appendChild(back);
+    bar.appendChild(reload);
+    chips.appendChild(plus);
+    bar.appendChild(chips);
 
     // Restore the previous scroll offset, then reveal the active chip only on a
     // real tab switch — a title-only broadcast must not yank the row back.
