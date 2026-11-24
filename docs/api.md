@@ -96,7 +96,6 @@ Response:
 | `session_token` | Owner token — required on every subsequent call and on the control WebSocket. |
 | `ws_url` | Relative WebSocket URL for video. |
 | `cdp_url` | Compatibility field; resolves to the input channel (`/ws/{id}?channel=input`). It carries Isola's JSON input protocol, not raw CDP — see [Automation](automation.md). |
-| `share_token`, `share_url` | Present when a share was created. |
 | `status` | `provisioning`, `running`, `terminated`, or `error`. |
 | `bandwidth_kbps`, `transport`, `expires_at`, `max_expires_at`, `remaining_min`, `extend_available` | Session state. |
 

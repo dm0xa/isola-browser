@@ -94,7 +94,6 @@ var openAPISpec = []byte(`{
               "session_token": { "type": "string", "description": "Control token (only returned for session owner)" },
               "ws_url": { "type": "string", "example": "/ws/550e8400-e29b-41d4-a716-446655440000" },
               "cdp_url": { "type": "string", "example": "/ws/550e8400-e29b-41d4-a716-446655440000?channel=input", "description": "Compatibility field: resolves to the Isola input channel, not raw CDP" },
-              "share_url": { "type": "string", "description": "Existing view-only share link, when one was created" },
               "remaining_min": { "type": "integer", "description": "Minutes until expiry (-1 = unlimited)" },
               "extend_available": { "type": "boolean", "description": "Whether session can be extended" },
               "max_expires_at": { "type": "string", "format": "date-time", "nullable": true },
@@ -437,7 +436,7 @@ var openAPISpec = []byte(`{
       "get": {
         "tags": ["Sessions"],
         "summary": "Get session details",
-        "description": "Returns the session row (including the container address and, for a running session, an existing share_url). Owner-only: X-Session-Token is required, and a share viewer uses GET /api/share/{token} instead.",
+        "description": "Returns the session row, including the container address. Owner-only: X-Session-Token is required, and a share viewer uses GET /api/share/{token} instead. Create a share link with POST /api/sessions/{id}/shares.",
         "operationId": "getSession",
         "security": [{ "sessionToken": [] }],
         "parameters": [

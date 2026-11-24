@@ -39,7 +39,7 @@ dns:
 #   exit_country: "se"
 
 cors:
-  origin: "http://localhost:5173"
+  origin: "http://localhost:8080"
 
 session:
   default_min: 10      # starting session duration in minutes (0 = unlimited)
