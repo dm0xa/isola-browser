@@ -81,17 +81,24 @@ session:
 # "running" in ~0.2-0.5 s versus ~2 s cold.
 #
 # A claim is only served when the request matches what the pool baked in
-# (isola transport, the resolution below, default theme/frame rate, no Tor,
-# watermark, or explicit bandwidth override); anything else falls back to the
-# cold path automatically. The session timer starts at entry either way — a
-# warm container has no session row, so no clock runs while it waits.
+# (isola transport, the resolution below, default theme/frame rate, the same
+# Tor mode, watermark, or explicit bandwidth override); anything else falls
+# back to the cold path automatically. Tor cannot be enabled after boot (the
+# entrypoint starts the daemon as its own UID and scopes direct egress away
+# from the browser), so Tor sessions come from their own slots. The session
+# timer starts at entry either way — a warm container has no session row, so
+# no clock runs while it waits.
 #
 #   enabled: false         # true keeps `size` containers pre-warmed
-#   size: 1                # how many to keep warm (>= 1)
-# Env overrides: ISOLA_WARM_POOL_ENABLED, ISOLA_WARM_POOL_SIZE
+#   size: 1                # how many plain ones to keep warm (>= 1)
+#   tor_size: 1            # Tor-baked ones, claimed only by tor_enabled sessions
+#                          # whose exit country equals tor.exit_country; 0 = off
+# Env overrides: ISOLA_WARM_POOL_ENABLED, ISOLA_WARM_POOL_SIZE,
+# ISOLA_WARM_POOL_TOR_SIZE
 warm_pool:
   enabled: false
   size: 1
+  tor_size: 1
 
 browser:
   type: "chromium"     # default; Isola always runs isola-browser:electron

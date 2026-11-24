@@ -121,7 +121,7 @@ Each session container is capped at **2 GB RAM, 3 CPUs, and 512 PIDs**. Size the
 
 - **Cores** — the CPU cap can never exceed the host's core count; the Docker daemon refuses `--cpus` above it. The default is 3, so a host with fewer than 3 cores gets its own core count automatically, and an explicit `ISOLA_SESSION_CPUS` above it fails every session with a Docker exit `125`.
 - **~2 GB per concurrent session** — plus memory for the OS, Docker, and the Isola process itself.
-- A **warm pool** of size *N* keeps *N* idle containers ready, each costing a full session's memory while it waits. A claimed container is no longer idle, so peak concurrency plus *N* idle containers is the memory to budget.
+- A **warm pool** of size *N* keeps *N* idle containers ready, each costing a full session's memory while it waits. A claimed container is no longer idle, so peak concurrency plus *N* idle containers is the memory to budget. `warm_pool.tor_size` (default 1) adds Tor-baked idle containers on top of that, for `tor_enabled` launches.
 - **Disk** — used by the images and by `/dev/shm` allocations; the browser images are the bulk of it.
 
 The control plane itself is capped separately at **1 GB RAM, 2 CPUs, and 512 PIDs** by the Compose stack, with a read-only rootfs and no capabilities. Those limits cover the Go process, the WebSocket relay and the graph proxy — not the sessions. Override them with `ISOLA_BACKEND_MEMORY` (e.g. `2g`) and `ISOLA_BACKEND_CPUS` if you serve many concurrent viewers or large resource graphs; the memory limit is also the swap limit, so swapping cannot hide a too-small value.

@@ -6,6 +6,15 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Added
+
+- `warm_pool.tor_size` (default `1`, `0` disables) keeps Tor-baked containers
+  pre-started, so a `tor_enabled` launch is served from the pool instead of
+  paying a cold start plus the circuit gate. A Tor request claims one only when
+  its resolved exit country equals `tor.exit_country`, since the proxy and the
+  egress scoping are fixed at container boot; a failed Tor fill backs off for
+  five minutes rather than booting a container every pool pass.
+
 ### Changed
 
 - The viewer tab strip now reads left to right: the address bar is a fixed

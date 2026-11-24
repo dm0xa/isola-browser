@@ -442,7 +442,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		if effectiveFPS <= 0 {
 			effectiveFPS = 30
 		}
-		info, warmed := h.claimWarmContainer(bgCtx, session.ID.String(), req.URL, req.Resolution, browserTheme, userID.String(), effectiveFPS, req.TorEnabled, req.BandwidthKbps, timezone, locale, validatedTarget)
+		info, warmed := h.claimWarmContainer(bgCtx, session.ID.String(), req.URL, req.Resolution, browserTheme, userID.String(), effectiveFPS, req.TorEnabled, req.TorCountry, req.BandwidthKbps, timezone, locale, validatedTarget)
 		if !warmed {
 			var err error
 			info, err = h.orch.CreateSession(bgCtx, orchestrator.CreateSessionParams{
@@ -595,15 +595,17 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // claimWarmContainer serves a session from the warm pool when the request is
-// eligible (exact resolution/fps/theme/tz/locale match, no Tor/bandwidth
-// override — env is baked). Warm claims lose the --add-host DNS pin; the
-// container egress firewall remains the primary SSRF control. false = fall
-// back to cold.
+// eligible (exact resolution/fps/theme/tz/locale match, no bandwidth override —
+// env is baked). Tor is not a refusal: the pool keeps Tor-baked slots, because
+// a running container's Tor wiring (proxy + egress scoping) cannot be changed
+// after boot. Warm claims lose the --add-host DNS pin; the container egress
+// firewall remains the primary SSRF control. false = fall back to cold.
 func (h *Handler) claimWarmContainer(
 	ctx context.Context,
 	sessionID, targetURL, resolution, theme, userID string,
 	effectiveFPS int,
 	torEnabled bool,
+	torCountry string,
 	bandwidthKbps int,
 	timezone, locale string,
 	target *validatedSessionTarget,
@@ -611,16 +613,16 @@ func (h *Handler) claimWarmContainer(
 	if h.warm == nil || h.warm.Disabled() {
 		return nil, false
 	}
-	// Guards for settings baked at container creation that this request
-	// cannot override. Timezone/locale are not in this set: they are re-applied
-	// over CDP below, so a random per-launch identity still gets a warm claim.
-	if torEnabled || bandwidthKbps > 0 {
+	// Guard for settings baked at container creation that this request cannot
+	// override. Timezone/locale are not in this set: they are re-applied over
+	// CDP below, so a random per-launch identity still gets a warm claim.
+	if bandwidthKbps > 0 {
 		return nil, false
 	}
 
-	// Claim only returns a container whose resolution, theme and frame rate
-	// match the request exactly, so no reshape is needed here.
-	info, _ := h.warm.Claim(ctx, resolution, theme, effectiveFPS)
+	// Claim only returns a container whose resolution, theme, frame rate and
+	// Tor mode match the request exactly, so no reshape is needed here.
+	info, _ := h.warm.Claim(ctx, resolution, theme, effectiveFPS, torEnabled, torCountry)
 	if info == nil {
 		return nil, false
 	}

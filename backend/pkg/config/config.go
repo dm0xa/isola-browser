@@ -315,6 +315,7 @@ type Config struct {
 	ResolutionMax        string                  `yaml:"-"` // hard cap for requested resolutions (WxH)
 	WarmPoolEnabled      bool                    `yaml:"-"` // keep pre-started containers so sessions start instantly
 	WarmPoolSize         int                     `yaml:"-"` // number of containers kept warm when enabled
+	WarmPoolTorSize      int                     `yaml:"-"` // Tor-baked warm containers (Tor cannot be enabled after boot)
 	BrowserType          string                  `yaml:"-"` // default browser type
 	BrowserTheme         string                  `yaml:"-"`
 	BrowserImage         string                  `yaml:"-"` // session container image; empty = DefaultBrowserImage
@@ -443,6 +444,10 @@ type configFile struct {
 	WarmPool struct {
 		Enabled bool `yaml:"enabled"`
 		Size    int  `yaml:"size"`
+		// TorSize is the number of Tor-baked warm containers. Pointer so an
+		// explicit `tor_size: 0` (never pre-warm Tor) is distinguishable from
+		// "unset" (one, because a Tor cold start pays the circuit gate).
+		TorSize *int `yaml:"tor_size"`
 	} `yaml:"warm_pool"`
 	Browser struct {
 		Type     string       `yaml:"type"`
@@ -679,6 +684,19 @@ func LoadFrom(path string) (*Config, error) {
 			sz := envOrDefaultInt("WARM_POOL_SIZE", cfg.WarmPool.Size)
 			if sz < 1 {
 				sz = 1
+			}
+			return sz
+		}(),
+		WarmPoolTorSize: func() int {
+			// Unset means one: a Tor claim cannot disable the proxy after boot, so
+			// without a Tor-baked box every Tor launch pays the circuit gate.
+			sz := 1
+			if cfg.WarmPool.TorSize != nil {
+				sz = *cfg.WarmPool.TorSize
+			}
+			sz = envOrDefaultInt("WARM_POOL_TOR_SIZE", sz)
+			if sz < 0 {
+				sz = 0
 			}
 			return sz
 		}(),

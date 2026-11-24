@@ -92,6 +92,7 @@ Pre-started containers, so a session is live the moment a user hits enter rather
 | :--- | :--- | :--- | :--- |
 | `warm_pool.enabled` | `false` | `WARM_POOL_ENABLED` | Keep containers pre-warmed. |
 | `warm_pool.size` | `1` | `WARM_POOL_SIZE` | Idle containers kept ready (minimum 1). |
+| `warm_pool.tor_size` | `1` | `WARM_POOL_TOR_SIZE` | Idle **Tor-baked** containers kept ready (`0` = Tor launches cold-start). |
 
 `size` counts **idle** containers only. A claimed container leaves the pool and
 serves a session, and its replacement is provisioned immediately in the
@@ -114,8 +115,19 @@ preset that equals `session.resolution` (both default to `1920x1080`) is served
 warm; the viewer then reshapes the capture to the window's aspect with
 `POST /api/sessions/{id}/resize`, the same path a window drag uses. Requests
 the pool was not built for — another resolution ("My screen", an API caller's
-own size), a different theme or frame rate, a Tor or bandwidth override —
-fall back to a cold start. The session timer starts at entry either way.
+own size), a different theme or frame rate, a Tor exit-country pin other than
+`tor.exit_country`, or a bandwidth override — fall back to a cold start. The
+session timer starts at entry either way.
+
+Tor sessions are pre-warmed too, from their own slots: the container entrypoint
+starts the Tor daemon as a separate UID and scopes direct egress away from the
+browser, so neither the proxy nor the firewall can be enabled after boot. A
+Tor-baked container is only claimed by a Tor request whose resolved exit country
+equals `tor.exit_country` (a per-request pin that differs cold-starts), and its
+fill budget includes the circuit gate. `tor_size` counts idle Tor containers in
+addition to `size`; `0` turns the Tor slots off, and a failed Tor fill (a
+network that blocks Tor) backs off for five minutes instead of retrying each
+pool pass.
 
 ### `browser`
 
@@ -292,12 +304,15 @@ In `tls`/`https` mode the backend runs a small forwarder on the browser network 
 warm_pool:
   enabled: true
   size: 2
+  tor_size: 1   # one idle Tor-baked container for tor_enabled launches
 ```
 
-Or without editing the file: `WARM_POOL_ENABLED=true WARM_POOL_SIZE=2`.
+Or without editing the file: `WARM_POOL_ENABLED=true WARM_POOL_SIZE=2 WARM_POOL_TOR_SIZE=1`.
 
 With `size: 2`, a claim consumes one container and the second stays idle, so
-back-to-back launches both skip the container boot.
+back-to-back launches both skip the container boot. `tor_size` is counted
+separately: with the snippet above the host idles 2 plain + 1 Tor container, and
+`tor_size: 0` makes Tor launches pay the cold start (circuit gate included).
 
 ### Require a token to create sessions
 

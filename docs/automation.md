@@ -65,7 +65,14 @@ Every request must send `Authorization: Bearer <token>`. Session ownership is ke
 | `screenshot`     | `format` `png` or `jpeg`; `quality` 1–100 for JPEG (default 85). Returns an image block plus a text block with `format`, `mime`, `width`, `height` and `bytes`; the base64 payload is not repeated in the text. |
 | `click` / `type` | `ref` from the **latest** `snapshot` (call `snapshot` again after navigation).                                                                                    |
 
-A `tor` session always cold-starts — the SOCKS proxy is wired at container creation, so it is never served from the [warm pool](configuration.md#warm_pool). Pinning an exit country (`tor_country`) is a strict guarantee: if no reachable exit exists in the country, the session fails to start rather than egressing elsewhere.
+A `tor` session is served from a Tor-baked warm container when the pool keeps
+one (`warm_pool.tor_size`, one by default) and the request's resolved exit
+country equals `tor.exit_country`; otherwise it cold-starts, because the SOCKS
+proxy and the egress scoping are wired at container creation and cannot be
+applied to a running sandbox. Pinning an exit country (`tor_country`) is a
+strict guarantee: if no reachable exit exists in the country, the session fails
+to start rather than egressing elsewhere. See
+[warm pool](configuration.md#warm_pool).
 
 Network data comes from the same capture as the in-viewer Network panel, but `get_network` returns the streamer's full in-memory window with fields the UI omits or clips. The window holds the most recent `session.network_log_max_entries` requests (default 1000; see [Configuration → `session`](configuration.md#session)). An unfiltered read of a heavy page can be large: the tool refuses anything over 8 MiB and tells you to pass `limit` or a filter rather than truncating silently. The same document and filters are available without MCP at `GET /api/sessions/{id}/network` ([API → Network log](api.md#network-log)).
 

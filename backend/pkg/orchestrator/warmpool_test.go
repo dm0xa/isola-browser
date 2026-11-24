@@ -66,7 +66,7 @@ func TestWarmPoolDisabledByDefault(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{WarmPoolEnabled: false, WarmPoolSize: 1, Resolution: "1920x1080", BrowserTheme: "dark"}
 	p := NewWarmPool(nil, cfg)
-	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30, false, ""); got != nil {
 		t.Fatalf("Claim on disabled pool = %+v, want nil", got)
 	}
 }
@@ -75,21 +75,21 @@ func TestWarmPoolClaimMatchesExactParams(t *testing.T) {
 	t.Parallel()
 	p, created, terminated := newTestPool(t, 1)
 
-	p.fillOne(context.Background())
+	p.fillOne(context.Background(), warmMode{})
 	if len(*created) != 1 {
 		t.Fatalf("provisioner calls = %d, want 1", len(*created))
 	}
 
 	// Wrong theme must not claim and must not kill the container.
-	if got, _ := p.Claim(context.Background(), "1920x1080", "light", 30); got != nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "light", 30, false, ""); got != nil {
 		t.Fatalf("Claim with mismatched theme = %+v, want nil", got)
 	}
 	// A box larger than the pooled one cannot be served by this container.
-	if got, _ := p.Claim(context.Background(), "2560x1440", "dark", 30); got != nil {
+	if got, _ := p.Claim(context.Background(), "2560x1440", "dark", 30, false, ""); got != nil {
 		t.Fatalf("Claim for a larger resolution = %+v, want nil", got)
 	}
 	// Matching params claim the container.
-	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got == nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30, false, ""); got == nil {
 		t.Fatal("Claim with matching params = nil, want container")
 	}
 	if len(*terminated) != 0 {
@@ -121,17 +121,127 @@ func waitForPoolSize(t *testing.T, p *WarmPool, want int, timeout time.Duration)
 	}
 }
 
+// countForTest reads the pool's idle count for a mode under the pool lock.
+func (p *WarmPool) countForTest(mode warmMode) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.warmCountLocked(mode)
+}
+
+// TestWarmPoolClaimMatchesTorMode pins the baked-mode contract: a Tor session
+// can only be served by a container created with Tor on (the proxy and the
+// egress scoping are set at boot), and a plain request must never take the
+// Tor-baked box.
+func TestWarmPoolClaimMatchesTorMode(t *testing.T) {
+	t.Parallel()
+	p, created, _ := newTestPool(t, 1)
+	p.torSize = 1
+	p.torCountry = "se"
+
+	if !p.fillOne(context.Background(), warmMode{}) {
+		t.Fatal("plain fillOne failed")
+	}
+	if !p.fillOne(context.Background(), warmMode{tor: true, country: "se"}) {
+		t.Fatal("tor fillOne failed")
+	}
+	if len(*created) != 2 {
+		t.Fatalf("provisioner calls = %d, want one per mode", len(*created))
+	}
+
+	ctx := context.Background()
+	// A pinned exit country the pool was not built for must not borrow the box.
+	if got, _ := p.Claim(ctx, "1920x1080", "dark", 30, true, "no"); got != nil {
+		t.Fatalf("Claim with a different Tor exit country = %+v, want nil", got)
+	}
+	// The plain container must not serve a Tor session (it has no proxy).
+	if got, _ := p.Claim(ctx, "1920x1080", "dark", 30, false, ""); got == nil {
+		t.Fatal("Claim for the plain mode = nil, want the plain container")
+	}
+	if got, _ := p.Claim(ctx, "1920x1080", "dark", 30, true, "se"); got == nil {
+		t.Fatal("Claim for the Tor mode = nil, want the Tor-baked container")
+	}
+	// Both are now claimed; a further claim of either mode must miss.
+	if got, _ := p.Claim(ctx, "1920x1080", "dark", 30, true, "se"); got != nil {
+		t.Fatalf("Claim with an empty pool = %+v, want nil", got)
+	}
+}
+
+// TestWarmPoolFillsPlainAndTorSlots checks the fill worker keeps one slot per
+// enabled mode, and that a failed Tor fill does not stop the plain slot.
+func TestWarmPoolFillsPlainAndTorSlots(t *testing.T) {
+	t.Parallel()
+	p, _, _ := newTestPool(t, 1)
+	p.torSize = 1
+	p.torCountry = ""
+
+	p.replenish(context.Background()).Wait()
+
+	if got := p.countForTest(warmMode{}); got != 1 {
+		t.Fatalf("plain containers = %d, want 1", got)
+	}
+	if got := p.countForTest(warmMode{tor: true}); got != 1 {
+		t.Fatalf("tor containers = %d, want 1", got)
+	}
+}
+
+// TestWarmPoolTorFailureBacksOff: a network that cannot bootstrap Tor must not
+// boot and kill a container every reconcile tick, and the plain slot must not
+// be starved by the Tor attempt's budget.
+func TestWarmPoolTorFailureBacksOff(t *testing.T) {
+	t.Parallel()
+	p, _, _ := newTestPool(t, 1)
+	p.torSize = 1
+
+	failTor := true
+	p.provisioner = func(ctx context.Context, params WarmPoolParams) (*SessionInfo, error) {
+		if params.Mode.tor && failTor {
+			return nil, errors.New("tor bootstrap failed")
+		}
+		return &SessionInfo{SessionID: params.SessionID, ContainerID: "warm-" + params.Mode.String(), Host: "127.0.0.1", Port: 5900}, nil
+	}
+
+	p.replenish(context.Background()).Wait()
+
+	p.mu.Lock()
+	blockedUntil := p.torFillsBlockedUntil
+	p.mu.Unlock()
+	if !blockedUntil.After(p.nower()) {
+		t.Fatalf("torFillsBlockedUntil = %v, want a future backoff", blockedUntil)
+	}
+	if got := p.countForTest(warmMode{}); got != 1 {
+		t.Fatalf("plain containers = %d, want 1 (a Tor failure must not starve the plain slot)", got)
+	}
+
+	// Within the backoff window Tor fills are skipped entirely.
+	p.mu.Lock()
+	fillMode, ok := p.nextFillLocked()
+	p.mu.Unlock()
+	if ok && fillMode.tor {
+		t.Fatal("nextFillLocked picked a Tor fill inside the backoff window")
+	}
+
+	// After the backoff a Tor fill is attempted again (and can succeed).
+	p.mu.Lock()
+	p.torFillsBlockedUntil = time.Time{}
+	p.mu.Unlock()
+	failTor = false
+	p.replenish(context.Background()).Wait()
+	if got := p.countForTest(warmMode{tor: true}); got != 1 {
+		t.Fatalf("tor containers after backoff = %d, want 1", got)
+	}
+}
+
 func TestWarmPoolClaimRequiresExactResolution(t *testing.T) {
 	t.Parallel()
 	p, _, terminated := newTestPool(t, 1)
 
-	p.fillOne(context.Background())
+	p.fillOne(context.Background(), warmMode{})
 
 	// A claim must need no reshape. Reshaping an idle offscreen window before a
 	// viewer attaches costs seconds (Chromium applies the resize lazily), which
 	// measured worse than the cold start it was meant to save — so a smaller
 	// request cold-starts instead of claiming.
-	if info, _ := p.Claim(context.Background(), "1728x1080", "dark", 30); info != nil {
+	if info, _ := p.Claim(context.Background(), "1728x1080", "dark", 30, false, ""); info != nil {
 		t.Fatalf("Claim for a smaller resolution = %+v, want nil (must not reshape)", info)
 	}
 	if len(*terminated) != 0 {
@@ -141,7 +251,7 @@ func TestWarmPoolClaimRequiresExactResolution(t *testing.T) {
 		t.Fatalf("pool = %d, want the container kept", len(p.warm))
 	}
 
-	info, baked := p.Claim(context.Background(), "1920x1080", "dark", 30)
+	info, baked := p.Claim(context.Background(), "1920x1080", "dark", 30, false, "")
 	if info == nil {
 		t.Fatal("Claim at the baked resolution = nil, want the pooled container")
 	}
@@ -154,12 +264,12 @@ func TestWarmPoolClaimRejectsResolutionsItCannotServe(t *testing.T) {
 	t.Parallel()
 	p, _, terminated := newTestPool(t, 1)
 
-	p.fillOne(context.Background())
+	p.fillOne(context.Background(), warmMode{})
 
 	// Wider, taller, or unparsable: none of these can be clamped inside the
 	// baked box, so they must cold-start and leave the container pooled.
 	for _, res := range []string{"1920x1200", "2560x1440", "nonsense", ""} {
-		if got, _ := p.Claim(context.Background(), res, "dark", 30); got != nil {
+		if got, _ := p.Claim(context.Background(), res, "dark", 30, false, ""); got != nil {
 			t.Fatalf("Claim for %q = %+v, want nil", res, got)
 		}
 	}
@@ -182,7 +292,7 @@ func TestWarmPoolEmptyPoolClaimMisses(t *testing.T) {
 
 	p.reconcile(context.Background())
 
-	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30, false, ""); got != nil {
 		t.Fatalf("Claim on empty pool = %+v, want nil", got)
 	}
 	if len(*terminated) != 0 {
@@ -194,13 +304,13 @@ func TestWarmPoolClaimDropsDeadContainer(t *testing.T) {
 	t.Parallel()
 	p, _, terminated := newTestPool(t, 1)
 
-	p.fillOne(context.Background())
+	p.fillOne(context.Background(), warmMode{})
 	// The fake prober treats the container as dead once it appears in the
 	// terminated list, so kill it manually and observe the claim probe.
 	claimID := p.warm[0].info.ContainerID
 	*terminated = append(*terminated, claimID)
 
-	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30, false, ""); got != nil {
 		t.Fatalf("Claim of dead container = %+v, want nil", got)
 	}
 	// The claim probe retries once, then tears the container down.
@@ -222,7 +332,7 @@ func TestWarmPoolTeardownWithoutStopHookDoesNotPanic(t *testing.T) {
 	p.prober = func(ctx context.Context, info *SessionInfo) error {
 		return errors.New("container dead")
 	}
-	if !p.fillOne(context.Background()) {
+	if !p.fillOne(context.Background(), warmMode{}) {
 		t.Fatal("fillOne failed")
 	}
 	p.mu.Lock()
@@ -231,7 +341,7 @@ func TestWarmPoolTeardownWithoutStopHookDoesNotPanic(t *testing.T) {
 
 	// Claim path: the last-mile probe fails, so the claimed container is
 	// discarded and the pool refills.
-	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30, false, ""); got != nil {
 		t.Fatalf("Claim of dead container = %+v, want nil", got)
 	}
 
@@ -314,7 +424,7 @@ func TestWarmPoolDisableOnUnsupportedNavigate(t *testing.T) {
 	if !p.Disabled() {
 		t.Fatal("pool should be disabled after NotifyNavigateDisabled")
 	}
-	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30, false, ""); got != nil {
 		t.Fatalf("Claim on disabled pool = %+v, want nil", got)
 	}
 }
@@ -328,7 +438,7 @@ func TestWarmPoolFillDisablesOnOldImage(t *testing.T) {
 		return ErrNavigateUnsupported
 	}
 
-	p.fillOne(context.Background())
+	p.fillOne(context.Background(), warmMode{})
 
 	if !p.Disabled() {
 		t.Fatal("pool should disable itself when the image cannot navigate")
@@ -344,8 +454,8 @@ func TestWarmPoolFillDisablesOnOldImage(t *testing.T) {
 func TestWarmPoolDrainStopsAll(t *testing.T) {
 	t.Parallel()
 	p, _, terminated := newTestPool(t, 2)
-	p.fillOne(context.Background())
-	p.fillOne(context.Background())
+	p.fillOne(context.Background(), warmMode{})
+	p.fillOne(context.Background(), warmMode{})
 	p.Drain(context.Background())
 	if len(*terminated) != 2 {
 		t.Fatalf("terminated = %v, want both warm containers stopped", *terminated)
@@ -357,7 +467,7 @@ func TestWarmPoolDrainStopsAll(t *testing.T) {
 	if !p.Disabled() {
 		t.Fatal("pool should be disabled after Drain")
 	}
-	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30); got != nil {
+	if got, _ := p.Claim(context.Background(), "1920x1080", "dark", 30, false, ""); got != nil {
 		t.Fatalf("Claim after Drain = %+v, want nil", got)
 	}
 	// A second Drain is a no-op, not a double-stop of the same container.
@@ -410,7 +520,7 @@ func TestWarmPoolOrphanCollectorKeepsPooledContainers(t *testing.T) {
 	t.Parallel()
 	p, _, terminated := newTestPool(t, 1)
 
-	p.fillOne(context.Background())
+	p.fillOne(context.Background(), warmMode{})
 	pooled := p.warm[0].info.ContainerID
 	p.sweepLister = func(ctx context.Context) []string { return []string{pooled, "warm-orphan"} }
 
@@ -425,7 +535,7 @@ func TestWarmPoolOrphanCollectorMatchesTruncatedIDs(t *testing.T) {
 	t.Parallel()
 	p, _, terminated := newTestPool(t, 1)
 
-	p.fillOne(context.Background())
+	p.fillOne(context.Background(), warmMode{})
 	pooled := p.warm[0].info.ContainerID
 	// `docker ps --format '{{.ID}}'` reports a 12-character prefix while the
 	// create reported the full ID; the pool's own container must survive.
@@ -541,7 +651,7 @@ func TestWarmPoolOrphanCollectorSkipsWhileFilling(t *testing.T) {
 	p, _, terminated := newTestPool(t, 1)
 	// A fill is in flight: the container it just created is legitimately
 	// untracked until CreateSession returns, so nothing may be collected.
-	p.filling = 1
+	p.filling = map[warmMode]int{{}: 1}
 	p.sweepLister = func(ctx context.Context) []string { return []string{"warm-mid-boot"} }
 
 	p.collectOrphans(context.Background())

@@ -22,8 +22,13 @@ import (
 // and no session label (the sweep never sees them); no DB row ticks while idle;
 // Claim only accepts exact parameter matches; every failure falls back to cold.
 type WarmPool struct {
-	orch       *Orchestrator
+	orch *Orchestrator
+	// size / torSize are the idle counts per mode. Tor cannot be enabled after
+	// boot (the entrypoint starts the daemon as its own UID and scopes direct
+	// egress away from the browser), so Tor sessions need their own slots.
 	size       int
+	torSize    int
+	torCountry string        // exit pin baked into every Tor-baked container
 	fillGap    time.Duration // pause between consecutive fills (see warmFillGap)
 	image      string
 	resolution string
@@ -63,12 +68,17 @@ type WarmPool struct {
 
 	mu         sync.Mutex
 	warm       []*warmContainer
-	filling    int             // fills in flight (guards against over-provisioning)
-	fillWorker bool            // one worker walks the empty slots, one at a time
-	pending    map[string]bool // containers created by an in-flight fill, not yet in warm
-	misses     map[string]int  // consecutive probe failures per container id
+	filling    map[warmMode]int // fills in flight per mode (guards against over-provisioning)
+	fillWorker bool             // one worker walks the empty slots, one at a time
+	pending    map[string]bool  // containers created by an in-flight fill, not yet in warm
+	misses     map[string]int   // consecutive probe failures per container id
 	started    bool
 	disabled   bool
+	// torFillsBlockedUntil suppresses Tor fills after a failed one: a network
+	// that cannot bootstrap Tor would otherwise boot and destroy a container
+	// every reconcile tick, and each attempt holds the shared fill worker for
+	// its whole budget, starving the plain slots.
+	torFillsBlockedUntil time.Time
 
 	// fillCtx bounds every fill and is cancelled by Drain, so a shutdown stops
 	// a browser boot in progress instead of orphaning its container (the
@@ -129,6 +139,24 @@ type warmContainer struct {
 	startedAt time.Time
 }
 
+// warmMode is the baked session mode a container can serve. mode.tor is the
+// part a running container cannot change: a Tor session's egress is pinned to
+// the tor UID at boot, and a plain session has no proxy at all.
+type warmMode struct {
+	tor     bool
+	country string // Tor exit pin (only meaningful when tor)
+}
+
+func (m warmMode) String() string {
+	if !m.tor {
+		return "plain"
+	}
+	if m.country == "" {
+		return "tor"
+	}
+	return "tor:" + m.country
+}
+
 // warmContainerInfo mirrors SessionInfo plus the exact claim parameters the
 // container was created with, so mismatched requests can be rejected.
 type warmContainerInfo struct {
@@ -136,6 +164,7 @@ type warmContainerInfo struct {
 	Resolution string
 	Theme      string
 	FPS        int
+	Mode       warmMode
 }
 
 // WarmPoolParams describes how a warm container is provisioned.
@@ -146,6 +175,7 @@ type WarmPoolParams struct {
 	Theme      string
 	FPS        int
 	StreamMode string
+	Mode       warmMode
 }
 
 // NewWarmPool creates the pool; call Start to begin filling it.
@@ -157,12 +187,15 @@ func NewWarmPool(orch *Orchestrator, cfg *config.Config) *WarmPool {
 	p := &WarmPool{
 		orch:                 orch,
 		size:                 cfg.WarmPoolSize,
+		torSize:              cfg.WarmPoolTorSize,
+		torCountry:           cfg.TorExitCountry,
 		fillGap:              warmFillGap,
 		image:                cfg.SessionImage(),
 		resolution:           cfg.Resolution,
 		theme:                theme,
 		fps:                  30, // handler's isola default; entrypoint caps at 25
 		streamMode:           "isola",
+		filling:              map[warmMode]int{},
 		dnsServers:           cfg.DNSServers,
 		dnsMode:              cfg.DNSMode,
 		networkLogMaxEntries: cfg.NetworkLogMaxEntries,
@@ -223,7 +256,12 @@ func (p *WarmPool) Start(ctx context.Context, interval time.Duration) {
 
 // Claim pops a matching warm container (nil = cold fallback). Resolution/theme/fps
 // must match exactly — a lazy reshape measured 3.2-3.7 s to first frame, worse than cold.
-func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int) (*SessionInfo, string) {
+// tor/torCountry select the baked mode: a container's Tor wiring is fixed at boot.
+func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int, tor bool, torCountry string) (*SessionInfo, string) {
+	mode := warmMode{tor: tor, country: torCountry}
+	if !tor {
+		mode.country = ""
+	}
 	p.mu.Lock()
 	if p.disabled {
 		p.mu.Unlock()
@@ -232,7 +270,7 @@ func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int)
 	var claimed *warmContainer
 	baked := ""
 	for i, wc := range p.warm {
-		if wc.info.Theme != theme || wc.info.FPS != fps {
+		if wc.info.Theme != theme || wc.info.FPS != fps || wc.info.Mode != mode {
 			continue
 		}
 		if wc.info.Resolution != resolution {
@@ -280,6 +318,7 @@ func (p *WarmPool) Claim(ctx context.Context, resolution, theme string, fps int)
 	log.Info().
 		Str("container_id", claimed.info.ContainerID).
 		Str("warm_age", p.nower().Sub(claimed.startedAt).Round(time.Millisecond).String()).
+		Str("mode", mode.String()).
 		Str("baked_resolution", baked).
 		Str("requested_resolution", resolution).
 		Msg("warm pool: claimed")
@@ -388,7 +427,7 @@ func containerIDIn(set map[string]bool, id string) bool {
 // Skipped while a fill is in flight.
 func (p *WarmPool) collectOrphans(ctx context.Context) {
 	p.mu.Lock()
-	if p.disabled || p.filling > 0 || p.sweepLister == nil {
+	if p.disabled || p.fillsInFlightLocked() > 0 || p.sweepLister == nil {
 		p.mu.Unlock()
 		return
 	}
@@ -482,7 +521,7 @@ func (p *WarmPool) replenish(ctx context.Context) *sync.WaitGroup {
 	wg := &sync.WaitGroup{}
 
 	p.mu.Lock()
-	if p.disabled || p.fillWorker || p.size-len(p.warm)-p.filling <= 0 {
+	if p.disabled || p.fillWorker || !p.hasEmptySlotLocked() {
 		p.mu.Unlock()
 		return wg
 	}
@@ -505,24 +544,94 @@ func (p *WarmPool) replenish(ctx context.Context) *sync.WaitGroup {
 	return wg
 }
 
+// warmTorFillBudget covers the Tor circuit gate on top of the browser boot;
+// warmFillBudget is the plain (no gate) budget.
+const (
+	warmFillBudget    = 90 * time.Second
+	warmTorFillBudget = 150 * time.Second
+	// warmTorFillRetryGap: after a failed Tor fill, wait this long before the
+	// next attempt, so a network that blocks Tor cannot churn boots.
+	warmTorFillRetryGap = 5 * time.Minute
+)
+
+// warmModesLocked lists the modes the pool keeps slots for, plain first.
+func (p *WarmPool) warmModesLocked() []warmMode {
+	modes := []warmMode{{}}
+	if p.torSize > 0 && !p.nower().Before(p.torFillsBlockedUntil) {
+		modes = append(modes, warmMode{tor: true, country: p.torCountry})
+	}
+	return modes
+}
+
+// modeTarget is how many idle containers a mode keeps.
+func (p *WarmPool) modeTarget(mode warmMode) int {
+	if mode.tor {
+		return p.torSize
+	}
+	return p.size
+}
+
+// warmCountLocked counts the containers the pool holds for a mode.
+func (p *WarmPool) warmCountLocked(mode warmMode) int {
+	n := 0
+	for _, wc := range p.warm {
+		if wc.info.Mode == mode {
+			n++
+		}
+	}
+	return n
+}
+
+// fillsInFlightLocked is the total number of fills in flight.
+func (p *WarmPool) fillsInFlightLocked() int {
+	n := 0
+	for _, c := range p.filling {
+		n += c
+	}
+	return n
+}
+
+// hasEmptySlotLocked reports whether any enabled mode still has a free slot.
+func (p *WarmPool) hasEmptySlotLocked() bool {
+	_, ok := p.nextFillLocked()
+	return ok
+}
+
+// nextFillLocked picks the mode with an empty slot, counting fills in flight.
+func (p *WarmPool) nextFillLocked() (warmMode, bool) {
+	if p.disabled {
+		return warmMode{}, false
+	}
+	for _, mode := range p.warmModesLocked() {
+		if p.warmCountLocked(mode)+p.filling[mode] < p.modeTarget(mode) {
+			return mode, true
+		}
+	}
+	return warmMode{}, false
+}
+
 // fillSlots provisions empty slots one at a time until the pool is full, a fill
 // fails, or the pool shuts down. A failure ends the pass instead of retrying
 // immediately: the next reconcile tick picks the slot up again.
 func (p *WarmPool) fillSlots(ctx context.Context) {
 	for {
 		p.mu.Lock()
-		if p.disabled || len(p.warm)+p.filling >= p.size {
+		mode, ok := p.nextFillLocked()
+		if !ok {
 			p.fillWorker = false
 			p.mu.Unlock()
 			return
 		}
-		p.filling++
+		if p.filling == nil {
+			p.filling = map[warmMode]int{}
+		}
+		p.filling[mode]++
 		p.mu.Unlock()
 
-		ok := p.fillOne(ctx)
+		ok = p.fillOne(ctx, mode)
 
 		p.mu.Lock()
-		p.filling--
+		p.filling[mode]--
 		p.mu.Unlock()
 
 		if !ok {
@@ -545,9 +654,13 @@ func (p *WarmPool) fillSlots(ctx context.Context) {
 	}
 }
 
-// fillOne provisions one warm container and adds it to the pool.
-func (p *WarmPool) fillOne(ctx context.Context) bool {
-	createCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+// fillOne provisions one warm container for a mode and adds it to the pool.
+func (p *WarmPool) fillOne(ctx context.Context, mode warmMode) bool {
+	budget := warmFillBudget
+	if mode.tor {
+		budget = warmTorFillBudget
+	}
+	createCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	info, err := p.provisioner(createCtx, WarmPoolParams{
 		SessionID:  "warm-" + uuid.NewString(),
@@ -556,9 +669,11 @@ func (p *WarmPool) fillOne(ctx context.Context) bool {
 		Theme:      p.theme,
 		FPS:        p.fps,
 		StreamMode: p.streamMode,
+		Mode:       mode,
 	})
 	if err != nil {
-		log.Warn().Err(err).Msg("warm pool: provision")
+		log.Warn().Err(err).Str("mode", mode.String()).Msg("warm pool: provision")
+		p.blockTorFills(mode)
 		return false
 	}
 	// A warm container is only useful once the in-container stream answers,
@@ -572,11 +687,12 @@ func (p *WarmPool) fillOne(ctx context.Context) bool {
 		log.Warn().Err(err).Str("container_id", info.ContainerID).
 			Msg("warm pool: navigate probe")
 		p.terminate(ctx, info.ContainerID)
+		p.blockTorFills(mode)
 		return false
 	}
 	p.mu.Lock()
 	poolSize := 0
-	if p.disabled || len(p.warm) >= p.size {
+	if p.disabled || p.warmCountLocked(mode) >= p.modeTarget(mode) {
 		// Shrink raced with a config change or disable: give it back.
 		p.mu.Unlock()
 		p.terminate(ctx, info.ContainerID)
@@ -587,12 +703,28 @@ func (p *WarmPool) fillOne(ctx context.Context) bool {
 		Resolution:  p.resolution,
 		Theme:       p.theme,
 		FPS:         p.fps,
+		Mode:        mode,
 	}, startedAt: p.nower()})
 	poolSize = len(p.warm)
 	p.mu.Unlock()
 	log.Info().Str("container_id", info.ContainerID).
+		Str("mode", mode.String()).
 		Int("pool_size", poolSize).Msg("warm pool: container ready")
 	return true
+}
+
+// blockTorFills pauses Tor fills after a failed one. A blocked Tor network
+// would otherwise create and destroy a container every reconcile tick, and each
+// attempt occupies the shared fill worker for its whole budget.
+func (p *WarmPool) blockTorFills(mode warmMode) {
+	if !mode.tor {
+		return
+	}
+	p.mu.Lock()
+	p.torFillsBlockedUntil = p.nower().Add(warmTorFillRetryGap)
+	p.mu.Unlock()
+	log.Warn().Str("retry_after", warmTorFillRetryGap.String()).
+		Msg("warm pool: tor fill blocked, backing off")
 }
 
 // Drain stops every warm container, bounded by ctx; safe concurrently with Start/Claim.
@@ -691,8 +823,13 @@ func (p *WarmPool) provisionWarm(ctx context.Context, params WarmPoolParams) (*S
 		DockerImage:          params.Image,
 		DNSMode:              p.dnsMode,
 		DNSServers:           p.dnsServers,
+		// Tor is baked at creation: the entrypoint starts the daemon as its own
+		// UID and scopes direct egress away from the browser, so a Tor session
+		// can only ever be served by a container created for it.
+		TorEnabled: params.Mode.tor,
+		TorCountry: params.Mode.country,
 		// Label swap: CreateSession stamps isola.session_id; warm containers
-		// must carry isola.warm instead so the orphan sweep ignores them.
+		// must carry isola.warm instead so the orphan sweep ignores it.
 		warmLabel: true,
 	})
 	if err != nil {
@@ -707,8 +844,16 @@ func (p *WarmPool) provisionWarm(ctx context.Context, params WarmPoolParams) (*S
 	defer p.clearPending(info.ContainerID)
 	// Inside the pool's fill budget, not on a user's request path: the browser
 	// boot (streamer, Xvfb, Electron, first paint) has to finish before the
-	// container is worth claiming.
-	if err := p.orch.WaitForStream(ctx, info.Host, info.Port, params.StreamMode, "chromium", 30*time.Second); err != nil {
+	// container is worth claiming. A Tor container also blocks on its circuit
+	// gate, so it gets the same extra budget a cold Tor launch gets.
+	streamBudget := 30 * time.Second
+	if params.Mode.tor {
+		streamBudget = 60 * time.Second
+		if params.Mode.country != "" {
+			streamBudget = 90 * time.Second
+		}
+	}
+	if err := p.orch.WaitForStream(ctx, info.Host, info.Port, params.StreamMode, "chromium", streamBudget); err != nil {
 		_ = p.orch.TerminateSession(context.Background(), info.ContainerID)
 		return nil, fmt.Errorf("warm container stream not ready: %w", err)
 	}
