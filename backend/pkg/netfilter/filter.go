@@ -27,27 +27,44 @@ type EntryMeta struct {
 	Host string `json:"-"`
 }
 
-// FilterEntries selects entries while preserving their exact JSON. Callers may
-// mutate `fields` to drop parts of an accepted entry.
-func FilterEntries(body []byte, limit int, keep func(EntryMeta, map[string]json.RawMessage) bool) ([]byte, error) {
+// scanEntries decodes the metadata of every captured entry once and returns it
+// beside the untouched entry bytes, so a caller can filter without decoding a
+// body it may never keep. Entries whose metadata does not decode are skipped.
+func scanEntries(body []byte) ([]EntryMeta, []json.RawMessage, error) {
 	var parsed struct {
 		Entries []json.RawMessage `json:"entries"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return body, err
+		return nil, nil, err
 	}
-	out := make([]json.RawMessage, 0, len(parsed.Entries))
+	metas := make([]EntryMeta, 0, len(parsed.Entries))
+	raws := make([]json.RawMessage, 0, len(parsed.Entries))
 	for _, raw := range parsed.Entries {
 		var meta EntryMeta
 		if err := json.Unmarshal(raw, &meta); err != nil {
 			continue
 		}
 		meta.Host = HostOf(meta.URL)
+		metas = append(metas, meta)
+		raws = append(raws, raw)
+	}
+	return metas, raws, nil
+}
+
+// FilterEntries selects entries while preserving their exact JSON. Callers may
+// mutate `fields` to drop parts of an accepted entry.
+func FilterEntries(body []byte, limit int, keep func(EntryMeta, map[string]json.RawMessage) bool) ([]byte, error) {
+	metas, raws, err := scanEntries(body)
+	if err != nil {
+		return body, err
+	}
+	out := make([]json.RawMessage, 0, len(raws))
+	for i, raw := range raws {
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &fields); err != nil {
 			continue
 		}
-		if !keep(meta, fields) {
+		if !keep(metas[i], fields) {
 			continue
 		}
 		// Field values stay json.RawMessage, so re-encoding preserves every
@@ -65,25 +82,17 @@ func FilterEntries(body []byte, limit int, keep func(EntryMeta, map[string]json.
 }
 
 // FilterEntriesRaw is FilterEntries for callers that never edit an accepted
-// entry. It decodes only the small metadata struct per entry and copies the
-// original raw bytes into the result, so a filtered read does no per-entry map
-// decode or re-encode. The output keeps the input's key order, number spelling
-// and string escapes.
+// entry. It copies the original raw bytes into the result, so a filtered read
+// does no per-entry map decode or re-encode. The output keeps the input's key
+// order, number spelling and string escapes.
 func FilterEntriesRaw(body []byte, limit int, keep func(EntryMeta) bool) ([]byte, error) {
-	var parsed struct {
-		Entries []json.RawMessage `json:"entries"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	metas, raws, err := scanEntries(body)
+	if err != nil {
 		return body, err
 	}
-	kept := make([]json.RawMessage, 0, len(parsed.Entries))
-	for _, raw := range parsed.Entries {
-		var meta EntryMeta
-		if err := json.Unmarshal(raw, &meta); err != nil {
-			continue
-		}
-		meta.Host = HostOf(meta.URL)
-		if !keep(meta) {
+	kept := make([]json.RawMessage, 0, len(raws))
+	for i, raw := range raws {
+		if !keep(metas[i]) {
 			continue
 		}
 		kept = append(kept, raw)

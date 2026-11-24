@@ -724,7 +724,6 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 	type sessionWithMeta struct {
 		models.Session
 		SessionToken    string `json:"session_token,omitempty"`
-		ShareURL        string `json:"share_url,omitempty"`
 		WsURL           string `json:"ws_url"`
 		CdpURL          string `json:"cdp_url,omitempty"`
 		RemainingMin    int    `json:"remaining_min"`
@@ -764,7 +763,6 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionToken := ""
-	shareURL := ""
 	if ownerAuthorized {
 		sessionToken, err = h.getControlToken(r.Context(), session.ID.String())
 		if err != nil {
@@ -795,7 +793,6 @@ func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, sessionWithMeta{
 		Session:         *session,
 		SessionToken:    sessionToken,
-		ShareURL:        shareURL,
 		WsURL:           fmt.Sprintf("/ws/%s", session.ID.String()),
 		CdpURL:          fmt.Sprintf("/ws/%s?channel=input", session.ID.String()),
 		RemainingMin:    remainingMin,
@@ -1938,7 +1935,7 @@ func errorMessageForCode(code string) string {
 	case "invalid_browser_theme":
 		return "Browser theme must be dark, light or auto"
 	case "invalid_frame_rate":
-		return "Frame rate must be between 1 and 120"
+		return "Frame rate must be between 0 and 120"
 	case "invalid_bandwidth":
 		return "Bandwidth must be zero (automatic) or a positive number of kbps"
 	case "session_unlimited":

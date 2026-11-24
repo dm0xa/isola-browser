@@ -141,12 +141,6 @@ func mapKey(k string) string {
 	case "Clear":
 		return "Clear"
 	}
-	if mapped, ok := asciiPunctKeys[k]; ok {
-		return mapped.code
-	}
-	if len(k) == 1 {
-		return k
-	}
 	return ""
 }
 
