@@ -160,51 +160,52 @@ Rebuilding replaces the images; the `isola-data` volume and your `.env` are pres
 
 ## Troubleshooting: sessions fail to start
 
-Start with [`scripts/doctor.sh`](../scripts/doctor.sh) — it is read-only (it never creates, starts, stops, removes or restarts a container) and prints one `VERDICT` line, exiting non-zero when unhealthy:
+Start with [`scripts/doctor.sh`](../scripts/doctor.sh). It is read-only and ends
+with one `VERDICT` line, exiting non-zero when unhealthy:
 
 ```bash
 scripts/doctor.sh
 ```
 
-It reports the Docker runtime (and `colima status` when Colima is installed), lists every `isola-*` container, resolves each running container's published `5900/tcp` mapping, probes that address from the host, probes the streamer's `/healthz` from *inside* the same container, and checks the backend at `${ISOLA_URL:-http://localhost:8080}/api/config` (`ISOLA_PORT` sets the port when `ISOLA_URL` is unset).
+It checks the Docker runtime (and `colima status`), every `isola-*` container,
+each container's published `5900/tcp` mapping from the host, the streamer's
+`/healthz` from *inside* that container, and the backend at
+`${ISOLA_URL:-http://localhost:8080}/api/config` (`ISOLA_PORT` when `ISOLA_URL`
+is unset).
 
 ### The signature
 
-The UI only says *"The sandbox could not start. If it fails again, check the isola log for the reason."* The backend log carries the actual reason:
+The container is healthy but the host cannot reach it: `docker port` lists the
+mapping, yet `curl http://127.0.0.1:<port>/healthz` is refused. The log shows
+`published port unreachable, browser-net` (launch) or
+`warm pool: claim probe, discarded` (pooled container). The viewer shows
+`error_code: sandbox_publish_unreachable`.
 
-- `published port unreachable, browser-net` — the container is running and its published port is listed by `docker port`, but a connection from the host is refused. The control plane then falls back to the container IP on `browser-net`; when the backend itself runs on the host, that fallback has no route, so the session fails.
-- `warm pool: claim probe, discarded` — a pooled container was discarded during the claim probe for the same reason: its streamer was not reachable from the backend.
-- `connection refused` on a host `127.0.0.1:<port>` — the same fault seen from outside isola, for example `curl http://127.0.0.1:32772/healthz`.
-
-### Is it the container or the publish path?
-
-Ask the streamer inside the container directly:
+Ask the container itself to confirm it is alive:
 
 ```bash
 docker exec <container> bash -c \
   'exec 3<>/dev/tcp/127.0.0.1/5900 && printf "GET /healthz HTTP/1.0\r\n\r\n" >&3 && head -1 <&3'
 ```
 
-`HTTP/1.0 200 OK` means the streamer is healthy and the fault is in the host port path. A refusal or empty answer means the container itself is unhealthy — read that container's log instead (`docker logs <container>`).
+`HTTP/1.0 200 OK` means the streamer is fine and the fault is host port
+publishing. A refusal means the container is the problem — read
+`docker logs <container>`.
 
 ### Verdicts
 
-`scripts/doctor.sh` ends with exactly one of these:
+| Verdict | What to do |
+| :--- | :--- |
+| `ok` | Nothing. |
+| `host port publishing is broken (containers healthy)` | Restart the container runtime: `colima restart`, `sudo systemctl restart docker`, or Docker Desktop. Sessions already running cannot be repaired; launch new ones. |
+| `containers are up but the streamer is not answering inside them` | `docker logs <container>` — the image or entrypoint, not networking. |
+| `no isola containers running` | Start isola, or check `warm_pool.size`. |
+| `backend not reachable` | Start isola, or point `ISOLA_URL` / `ISOLA_PORT` at it. |
+| `docker daemon is not reachable` | Start the Docker runtime. |
 
-| Verdict | Meaning | What to do |
-| :--- | :--- | :--- |
-| `VERDICT: ok` | Backend answers, containers run, published ports reachable from the host. | Nothing. |
-| `VERDICT: host port publishing is broken (containers healthy) — run: colima restart` | `/healthz` answers inside the container but the published `127.0.0.1:<port>` refuses from the host. | `colima restart` (Colima), or restart the container runtime otherwise. |
-| `VERDICT: no isola containers running (warm pool disabled or backend stopped)` | No `isola-*` container is up — usually the warm pool is disabled or the backend was stopped. | Start isola, or check `warm_pool.size`. |
-| `VERDICT: backend not reachable — start isola or check the port (…)` | Nothing answered `GET /api/config` at the probed URL. | Start isola, or set `ISOLA_URL` / `ISOLA_PORT` to the port it actually listens on. |
-| `VERDICT: containers are up but the streamer is not answering inside them` | The container's own `/healthz` failed. | Read `docker logs <container>`; the image or entrypoint is the problem, not Docker's networking. |
-| `VERDICT: docker daemon is not reachable` | `docker info` failed. | Start the Docker runtime. |
-
-### Fix and what to expect
-
-For Colima, `colima restart` restores the port-forwarding process that had stopped forwarding published ports. On Docker Desktop or a Linux daemon, restart that runtime (`sudo systemctl restart docker`, or restart Docker Desktop). Sessions already started cannot be repaired in place; close them and launch new ones.
-
-After the runtime is back, re-run `scripts/doctor.sh` until it prints `VERDICT: ok`. The warm pool rebuilds its idle containers within about a minute, so the first launches after the restart may cold-start while the pool refills.
+After a runtime restart, re-run `scripts/doctor.sh` until it prints
+`VERDICT: ok`; the warm pool refills within about a minute, so the first
+launches may cold-start.
 
 ## Production Checklist
 

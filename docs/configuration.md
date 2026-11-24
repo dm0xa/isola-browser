@@ -119,15 +119,13 @@ own size), a different theme or frame rate, a Tor exit-country pin other than
 `tor.exit_country`, or a bandwidth override — fall back to a cold start. The
 session timer starts at entry either way.
 
-Tor sessions are pre-warmed too, from their own slots: the container entrypoint
-starts the Tor daemon as a separate UID and scopes direct egress away from the
-browser, so neither the proxy nor the firewall can be enabled after boot. A
-Tor-baked container is only claimed by a Tor request whose resolved exit country
-equals `tor.exit_country` (a per-request pin that differs cold-starts), and its
-fill budget includes the circuit gate. `tor_size` counts idle Tor containers in
-addition to `size`; `0` turns the Tor slots off, and a failed Tor fill (a
-network that blocks Tor) backs off for five minutes instead of retrying each
-pool pass.
+Tor sessions are pre-warmed too, from their own slots: the entrypoint starts
+Tor as a separate UID and scopes direct egress away from the browser, so neither
+the proxy nor the firewall can be enabled after boot. A Tor-baked container is
+claimed only by a Tor request whose resolved exit country equals
+`tor.exit_country`. `tor_size` counts idle Tor containers on top of `size`;
+`0` disables them, and a failed fill (a network that blocks Tor) backs off five
+minutes instead of retrying each pass.
 
 ### `browser`
 

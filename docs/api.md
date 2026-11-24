@@ -101,12 +101,12 @@ Response:
 
 A session is usable once `status` is `running`.
 
-A launch failure leaves the session in `status: "error"`; `GET /api/sessions/{id}` then carries a stable `error_code`:
+A launch failure leaves the session in `status: "error"` with a stable `error_code`:
 
 | `error_code` | Meaning |
 | :--- | :--- |
-| `sandbox_publish_unreachable` | The container runtime stopped forwarding published ports, so the backend cannot dial the sandbox. The container itself may be alive; restarting the runtime (e.g. `colima restart`) is the fix. The warm pool keeps such containers instead of tearing them down. |
-| `stream_not_ready` | The container started but its streamer never answered before the readiness deadline. |
+| `sandbox_publish_unreachable` | The runtime stopped forwarding published ports, so the backend cannot dial the sandbox. The container itself may be alive; restarting the runtime (e.g. `colima restart`) is the fix. |
+| `stream_not_ready` | The container started but its streamer never answered before the deadline. |
 | `create_failed` | Any other launch error. |
 
 `error_code` is absent on healthy sessions.
