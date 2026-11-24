@@ -419,15 +419,21 @@ canvas.addEventListener('mousedown', (e) => send({ type: 'mousedown', ...toPage(
 canvas.addEventListener('mouseup', (e) => send({ type: 'mouseup', ...toPage(e), button: 'left' }));
 canvas.addEventListener('wheel', (e) => send({ type: 'mousewheel', deltaX: e.deltaX, deltaY: e.deltaY, ...toPage(e) }), { passive: true });
 canvas.addEventListener('keydown', (e) => {
+  // Single printable characters (including Shift-typed symbols such as `!`
+  // and `@`) ride `type`, so the layout's character is what lands in the page.
+  if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    send({ type: 'type', text: e.key });
+    return;
+  }
   const mods = [
     e.ctrlKey || e.metaKey ? 'ctrl' : '',
     e.shiftKey ? 'shift' : '',
     e.altKey ? 'alt' : '',
   ].filter(Boolean);
-  // Single printable characters ride `type` (so IME and autocorrect stay out of it);
-  // everything else is a chord: 'ctrl+a', 'shift+Tab', 'Enter', 'ArrowLeft'.
-  if (e.key.length === 1 && mods.length === 0) send({ type: 'type', text: e.key });
-  else send({ type: 'chord', combo: [...mods, e.key].join('+') });
+  // Everything else is a chord: 'ctrl+a', 'shift+Tab', 'Enter', 'ArrowLeft'.
+  // A literal plus key is the one token that needs the chord's own separator:
+  // send it as `shift++` (or `+` for a plain plus) rather than `shift+`.
+  send({ type: 'chord', combo: [...mods, e.key].join('+') });
 });
 canvas.tabIndex = 0;   // focusable, or keydown never fires
 ```

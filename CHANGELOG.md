@@ -6,6 +6,15 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- Typing symbols in the sandbox works again: `!@#$%^&*()`, punctuation such as
+  `,.;:'"[]{}<>/?\|` and a literal `+` all reach the page. The streamer was
+  translating a punctuation key into a key name it could not resolve back, so
+  the event was dropped before Chromium saw it; it now dispatches the
+  character with the physical key's `code`/virtual key code, and a `+` key no
+  longer collides with the chord separator.
+
 ## [1.7.3] - 2026-11-22
 
 ### Fixed

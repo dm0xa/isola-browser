@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -107,23 +108,28 @@ func cdpKeyDefForToken(token string) (cdpKeyDef, bool) {
 	case "alt":
 		return cdpKeyDefs["Alt"], true
 	}
-	if len(token) == 1 {
-		ch := token[0]
-		code := "Digit" + token
-		if ch >= 'a' && ch <= 'z' {
-			code = "Key" + strings.ToUpper(token)
-		} else if ch >= 'A' && ch <= 'Z' {
-			code = "Key" + token
-		} else if ch >= '0' && ch <= '9' {
-			code = "Digit" + token
-		} else if mapped, ok := asciiPunctKeysyms[token]; ok {
-			return cdpKeyDef{key: token, code: mapped, vk: int(ch)}, true
+	if runes := []rune(token); len(runes) == 1 {
+		ch := runes[0]
+		switch {
+		case ch >= 'a' && ch <= 'z':
+			return cdpKeyDef{key: token, code: "Key" + strings.ToUpper(token), vk: int(unicode.ToUpper(ch))}, true
+		case ch >= 'A' && ch <= 'Z':
+			return cdpKeyDef{key: token, code: "Key" + token, vk: int(ch)}, true
+		case ch >= '0' && ch <= '9':
+			return cdpKeyDef{key: token, code: "Digit" + token, vk: int(ch)}, true
 		}
-		// Windows virtual key codes are the UPPERCASE ASCII of the letter
-		// ('A' = 65, not 'a' = 97). Lowercase VKs silently break browser
-		// shortcuts like Ctrl+A — the key events dispatch without effect.
-		vk := int(unicode.ToUpper(rune(ch)))
-		return cdpKeyDef{key: token, code: code, vk: vk}, true
+		if def, ok := asciiPunctKeys[token]; ok {
+			// Punctuation maps to the PHYSICAL key ("!" is Shift+Digit1),
+			// not the character: Chromium resolves insertion from `text`,
+			// while code/vk decide which key the page sees held down.
+			return cdpKeyDef{key: token, code: def.code, vk: def.vk}, true
+		}
+		if ch < utf8.RuneSelf {
+			return cdpKeyDef{key: token, code: "", vk: int(ch)}, true
+		}
+		// Non-ASCII printable (é, ß, €): no physical code to report; the
+		// character rides insertText instead of a key event.
+		return cdpKeyDef{key: token, code: "", vk: 0}, true
 	}
 	if mapped := mapKey(token); mapped != "" {
 		if def, ok := cdpKeyDefs[mapped]; ok {
@@ -189,10 +195,12 @@ func (c *CDPClient) dispatchKeyEvent(eventType string, def cdpKeyDef, modifiers 
 	params := map[string]interface{}{
 		"type":                  eventType,
 		"key":                   def.key,
-		"code":                  def.code,
 		"windowsVirtualKeyCode": def.vk,
 		"nativeVirtualKeyCode":  def.vk,
 		"modifiers":             modifiers,
+	}
+	if def.code != "" {
+		params["code"] = def.code
 	}
 	if text != "" && eventType == "keyDown" {
 		params["text"] = text
@@ -201,8 +209,24 @@ func (c *CDPClient) dispatchKeyEvent(eventType string, def cdpKeyDef, modifiers 
 	return c.sendKeys("Input.dispatchKeyEvent", params)
 }
 
+// chordKeyText is the character a chord's key token types, if any. Tokens
+// arrive as KeyboardEvent.key, so a single rune already reflects Shift
+// ("!" for Shift+1, "A" for Shift+a).
+func chordKeyText(token string) string {
+	switch token {
+	case "Return", "Enter":
+		return "\r"
+	case "space", " ":
+		return " "
+	}
+	if utf8.RuneCountInString(token) == 1 {
+		return token
+	}
+	return ""
+}
+
 func (c *CDPClient) dispatchChord(combo string) error {
-	parts := strings.Split(combo, "+")
+	parts := splitChord(combo)
 	mods, keyToken := parseChordModifiers(parts)
 	if keyToken == "" {
 		if len(parts) == 1 {
@@ -221,21 +245,12 @@ func (c *CDPClient) dispatchChord(combo string) error {
 		return nil
 	}
 	// Printable keys carry their character as `text` — this is what makes
-	// Chromium actually insert it. keyToken is the TRANSLATED name, so map
-	// back to the character: "Return" → "\r", "space" → " ", any single
-	// char is its own text (the client sends e.key, which reflects Shift).
-	text := ""
-	switch keyToken {
-	case "Return", "Enter":
-		text = "\r"
-	case "space":
-		text = " "
-	}
-	if text == "" && len(keyToken) == 1 && keyToken != " " {
-		text = keyToken
-	}
-	if keyToken == " " {
-		text = " "
+	// Chromium actually insert it.
+	text := chordKeyText(keyToken)
+	// A non-ASCII character has no physical key code; insert its text
+	// directly. AltGr/Option symbols (€, ß) arrive this way.
+	if def.vk == 0 && text != "" {
+		return c.insertText(text)
 	}
 	if err := c.dispatchKeyEvent("keyDown", def, mods, text); err != nil {
 		return err
