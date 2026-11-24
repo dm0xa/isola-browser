@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isPlaceholderUrl, seedForActiveTab, shouldCarryUrlEdit, shouldSkipTabBarRebuild } from './addressBar';
+import { isPlaceholderUrl, seedForActiveTab, shouldCarryUrlEdit, shouldSkipTabBarRebuild, tabLabels } from './addressBar';
 
 describe('isPlaceholderUrl', () => {
   it('treats blank and new-tab URLs as placeholders', () => {
@@ -100,5 +100,65 @@ describe('shouldSkipTabBarRebuild', () => {
     expect(shouldSkipTabBarRebuild({
       urlFocused: false, urlEdited: false, structureChanged: false, hostChanged: false,
     })).toBe(false);
+  });
+});
+
+describe('tabLabels', () => {
+  const tab = (id: number, url: string, title = '') => ({ id, url, title, active: false });
+
+  it('names each tab by its title', () => {
+    const labels = tabLabels([
+      tab(1, 'https://ipinfo.io/', 'ipinfo at DuckDuckGo'),
+      tab(2, 'https://ntfy.sh/app', 'ntfy'),
+    ]);
+    expect(labels.get(1)).toBe('ipinfo at DuckDuckGo');
+    expect(labels.get(2)).toBe('ntfy');
+  });
+
+  it('falls back to the host when a page has no title', () => {
+    const labels = tabLabels([tab(1, 'https://www.example.com/a/b')]);
+    expect(labels.get(1)).toBe('example.com');
+  });
+
+  it('gives tabs that share a title the distinguishing end of their URL', () => {
+    // Nine file-preview tabs all titled "ntfy": the ellipsis cut everything
+    // that told them apart, so the chip showed the same word nine times.
+    const labels = tabLabels([
+      tab(1, 'https://ntfy.sh/file/AAAA1111', 'ntfy'),
+      tab(2, 'https://ntfy.sh/file/BBBB2222', 'ntfy'),
+    ]);
+    expect(labels.get(1)).toBe('…AAAA1111');
+    expect(labels.get(2)).toBe('…BBBB2222');
+  });
+
+  it('keeps untitled tabs of the same host distinct', () => {
+    const labels = tabLabels([
+      tab(1, 'https://ntfy.sh/file/AAAA1111'),
+      tab(2, 'https://ntfy.sh/file/BBBB2222'),
+    ]);
+    expect(labels.get(1)).toBe('…AAAA1111');
+    expect(labels.get(2)).toBe('…BBBB2222');
+  });
+
+  it('falls back to the runner id when even the URL matches', () => {
+    const labels = tabLabels([
+      tab(7, 'https://ntfy.sh/file/AAAA1111', 'ntfy'),
+      tab(8, 'https://ntfy.sh/file/AAAA1111', 'ntfy'),
+    ]);
+    expect(labels.get(7)).toBe('Tab 7');
+    expect(labels.get(8)).toBe('Tab 8');
+  });
+
+  it('numbers a tab that has neither a title nor a URL path', () => {
+    expect(tabLabels([tab(3, 'about:blank')]).get(3)).toBe('Tab 3');
+  });
+
+  it('caps a long path segment to its last ten characters', () => {
+    const labels = tabLabels([
+      tab(1, 'https://ntfy.sh/file/0123456789abcdef', 'ntfy'),
+      tab(2, 'https://ntfy.sh/file/fedcba9876543210', 'ntfy'),
+    ]);
+    expect(labels.get(1)).toBe('…6789abcdef');
+    expect(labels.get(2)).toBe('…9876543210');
   });
 });

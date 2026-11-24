@@ -32,7 +32,7 @@ import {
   resetWcDecoder,
   setupWebCodecsVideoPath,
 } from './isola/webCodecsVideoPath';
-import { isPlaceholderUrl, seedForActiveTab, shouldCarryUrlEdit, shouldSkipTabBarRebuild } from './isola/addressBar';
+import { isPlaceholderUrl, seedForActiveTab, shouldCarryUrlEdit, shouldSkipTabBarRebuild, tabLabels } from './isola/addressBar';
 import { isSessionTerminated } from './isola/sessionLiveness';
 import type { IsolaStreamMetrics } from './isola/streamMetrics';
 import {
@@ -95,6 +95,24 @@ const TABBAR_PALETTE = {
 
 // Letterbox fill behind the contain-fitted frame; must match the viewer root background or the padding reads as dark bars.
 const CAPTURE_LETTERBOX_BG = { dark: '#030712', light: '#e4e4e7' } as const;
+
+// Tab-strip overflow chrome. The chip row scrolls sideways; its scrollbar is
+// hidden because the in-container strip is a 36px overlay with no room for one,
+// so the affordance is an edge fade on whichever side still holds tabs.
+const TABBAR_CSS = `
+#isola-tabbar [data-chips]{overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-ms-overflow-style:none;}
+#isola-tabbar [data-chips]::-webkit-scrollbar{width:0;height:0;}
+#isola-tabbar [data-chips][data-fade="r"]{mask-image:linear-gradient(to right,#000 calc(100% - 16px),transparent);-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 16px),transparent);}
+#isola-tabbar [data-chips][data-fade="l"]{mask-image:linear-gradient(to right,transparent,#000 16px);-webkit-mask-image:linear-gradient(to right,transparent,#000 16px);}
+#isola-tabbar [data-chips][data-fade="lr"]{mask-image:linear-gradient(to right,transparent,#000 16px,#000 calc(100% - 16px),transparent);-webkit-mask-image:linear-gradient(to right,transparent,#000 16px,#000 calc(100% - 16px),transparent);}
+`;
+function ensureTabBarStyles() {
+  if (document.getElementById('isola-tabbar-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'isola-tabbar-styles';
+  style.textContent = TABBAR_CSS;
+  document.head.appendChild(style);
+}
 
 
 // Input backlog (see sendEvent): events buffered while no socket is
@@ -963,6 +981,12 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     if (bar.parentElement !== host) host.appendChild(bar);
     // In-container strip overlays the top 36px; toolbar-hosted does not.
     setIsolaTopOffset(external ? 0 : 36);
+    ensureTabBarStyles();
+    // Every broadcast rebuilds the strip (a tab's title alone triggers one), so
+    // the chip row's scroll position has to survive the wipe — otherwise the
+    // strip snaps back to the first tab while the user is reading the last one.
+    const prevChips = bar.querySelector<HTMLElement>('[data-chips]');
+    const prevScrollLeft = prevChips ? prevChips.scrollLeft : 0;
     bar.innerHTML = '';
 
     // Seed URL only for the tab the session started with, while it still reports a placeholder.
@@ -985,37 +1009,74 @@ export function useIsolaStream(defaultTargetUrl?: string) {
           ? tabs.map((t) => t.active && isPlaceholderUrl(t.url) ? { ...t, url: seed } : t)
           : tabs)
       : (seed ? [active!] : []);
+    // Chip row: fixed-width chips in a horizontally scrolling row, so a busy
+    // tab set never shrinks a chip below legibility. `+`, back/reload and the
+    // address bar are pinned as siblings outside this row.
+    const chips = document.createElement('div');
+    chips.setAttribute('data-chips', '');
+    chips.style.display = 'flex';
+    chips.style.alignItems = 'center';
+    chips.style.flex = '1 1 auto';
+    chips.style.minWidth = '0';
+    chips.style.gap = external ? '6px' : '2px';
+    const labels = tabLabels(tabsDisplay);
+    let activeChip: HTMLElement | null = null;
     for (const t of tabsDisplay) {
+      const label = labels.get(t.id) || `Tab ${t.id}`;
       const chip = document.createElement('div');
+      chip.setAttribute('role', 'tab');
+      chip.setAttribute('aria-selected', t.active ? 'true' : 'false');
+      // Roving tabindex: Tab reaches the current tab, arrows walk the rest.
+      chip.tabIndex = t.active ? 0 : -1;
       chip.style.display = 'flex';
       chip.style.alignItems = 'center';
-      chip.style.gap = '6px';
-      chip.style.padding = '4px 8px';
+      chip.style.gap = '2px';
+      chip.style.padding = '4px 4px 4px 8px';
       chip.style.borderRadius = '6px';
       chip.style.cursor = 'pointer';
-      chip.style.maxWidth = '180px';
+      chip.style.flex = '0 0 auto';
+      chip.style.minWidth = '90px';
+      chip.style.maxWidth = '200px';
       chip.style.background = t.active ? pal.chipActiveBg : 'transparent';
       chip.style.color = t.active ? pal.chipActiveText : pal.barText;
       chip.style.transition = 'background 120ms ease, color 120ms ease';
-      chip.title = t.url;
+      chip.title = t.title && t.title !== label ? `${t.title}\n${t.url}` : (t.url || label);
+      if (t.active) activeChip = chip;
 
-      const label = document.createElement('span');
-      label.textContent = t.title || t.url.replace(/^https?:\/\//, '').split('/')[0] || `Tab ${t.id}`;
-      label.style.overflow = 'hidden';
-      label.style.textOverflow = 'ellipsis';
-      label.style.whiteSpace = 'nowrap';
-      chip.appendChild(label);
+      const text = document.createElement('span');
+      text.textContent = label;
+      text.style.flex = '1 1 auto';
+      text.style.minWidth = '0';
+      text.style.overflow = 'hidden';
+      text.style.textOverflow = 'ellipsis';
+      text.style.whiteSpace = 'nowrap';
+      chip.appendChild(text);
 
-      const x = document.createElement('span');
+      // Close is a fixed 16px slot in every chip, shown on the active tab and
+      // on hover — reserving the space keeps the strip from reflowing as the
+      // pointer moves. A real button so Enter/Space work when it is focused.
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.setAttribute('aria-label', `Close ${label}`);
       x.textContent = '✕';
-      x.style.opacity = '0.6';
-      x.style.padding = '0 2px';
+      x.style.flex = '0 0 16px';
+      x.style.width = '16px';
+      x.style.height = '16px';
+      x.style.display = 'grid';
+      x.style.placeItems = 'center';
+      x.style.padding = '0';
+      x.style.border = '0';
       x.style.borderRadius = '4px';
+      x.style.background = 'transparent';
+      x.style.color = 'inherit';
+      x.style.cursor = 'pointer';
+      x.style.font = 'inherit';
+      x.style.lineHeight = '1';
+      x.style.opacity = t.active ? '0.55' : '0';
       x.style.transition = 'opacity 120ms ease, background 120ms ease';
       x.onmouseenter = () => { x.style.opacity = '1'; x.style.background = pal.buttonBgHover; };
-      x.onmouseleave = () => { x.style.opacity = '0.6'; x.style.background = 'transparent'; };
-      x.onmousedown = (e) => {
-        e.preventDefault();
+      x.onmouseleave = () => { x.style.opacity = t.active ? '0.55' : '0'; x.style.background = 'transparent'; };
+      x.onclick = (e) => {
         e.stopPropagation();
         sendCtrl({ type: 'tab_close', id: t.id });
       };
@@ -1026,17 +1087,40 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         e.stopPropagation();
         if (e.target !== x) sendCtrl({ type: 'tab_switch', id: t.id });
       };
+      chip.onkeydown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          sendCtrl({ type: 'tab_switch', id: t.id });
+          return;
+        }
+        if (e.key === 'Delete') {
+          e.preventDefault();
+          sendCtrl({ type: 'tab_close', id: t.id });
+          return;
+        }
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        e.preventDefault();
+        const all = Array.from(chips.querySelectorAll<HTMLElement>('[role="tab"]'));
+        const next = all[all.indexOf(chip) + (e.key === 'ArrowRight' ? 1 : -1)];
+        next?.focus({ preventScroll: true });
+        next?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+      };
       // Hover highlight only for background tabs — the active tab already
       // wears chipActiveBg and must not visually react to the pointer.
-      if (!t.active) {
-        chip.onmouseenter = () => { chip.style.background = pal.buttonBg; };
-        chip.onmouseleave = () => { chip.style.background = 'transparent'; };
-      }
-      bar.appendChild(chip);
+      chip.onmouseenter = () => {
+        x.style.opacity = '0.55';
+        if (!t.active) chip.style.background = pal.buttonBg;
+      };
+      chip.onmouseleave = () => {
+        if (!t.active) { chip.style.background = 'transparent'; x.style.opacity = '0'; }
+      };
+      chips.appendChild(chip);
     }
+    bar.appendChild(chips);
 
     const plus = document.createElement('div');
     plus.textContent = '+';
+    plus.style.flex = '0 0 auto';
     plus.style.padding = '3px 9px';
     plus.style.borderRadius = '6px';
     plus.style.cursor = 'pointer';
@@ -1058,6 +1142,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     back.setAttribute('title', 'Back');
     back.setAttribute('role', 'button');
     back.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/></svg>`;
+    back.style.flex = '0 0 auto';
     back.style.padding = '3px 7px';
     back.style.marginLeft = '6px';
     back.style.borderRadius = '6px';
@@ -1081,6 +1166,7 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     const reload = document.createElement('div');
     reload.setAttribute('title', 'Reload page');
     reload.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/></svg>`;
+    reload.style.flex = '0 0 auto';
     reload.style.padding = '3px 7px';
     reload.style.marginLeft = '2px';
     reload.style.borderRadius = '6px';
@@ -1107,7 +1193,10 @@ export function useIsolaStream(defaultTargetUrl?: string) {
     url.type = 'text';
     url.placeholder = 'Search or enter address';
     setAddressValue(url, active ? active.url : '');
-    url.style.flex = '1';
+    // Capped: the address bar used to absorb every spare pixel (flex-basis 0,
+    // grow 1) while the chips were squeezed into unreadable stubs.
+    url.style.flex = '0 1 380px';
+    url.style.maxWidth = '380px';
     url.style.minWidth = '120px';
     url.style.marginLeft = '6px';
     url.style.padding = '4px 10px';
@@ -1168,6 +1257,40 @@ export function useIsolaStream(defaultTargetUrl?: string) {
       }
     });
     bar.appendChild(url);
+
+    // Restore the previous scroll offset, then reveal the active chip only on a
+    // real tab switch — a title-only broadcast must not yank the row back.
+    const updateFade = () => {
+      const max = chips.scrollWidth - chips.clientWidth;
+      if (max <= 1) {
+        chips.removeAttribute('data-fade');
+        return;
+      }
+      const atStart = chips.scrollLeft <= 1;
+      const atEnd = chips.scrollLeft >= max - 1;
+      chips.dataset.fade = atStart ? 'r' : atEnd ? 'l' : 'lr';
+    };
+    chips.addEventListener('scroll', updateFade, { passive: true });
+    chips.addEventListener('wheel', (e) => {
+      // No overflow: leave the wheel to the page, as before.
+      if (chips.scrollWidth <= chips.clientWidth) return;
+      const delta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+      if (!delta) return;
+      e.preventDefault();
+      e.stopPropagation();
+      chips.scrollLeft += delta;
+    }, { passive: false });
+    chips.scrollLeft = prevScrollLeft;
+    if (activeChip && (activeTabChanged || prevTabs.length === 0)) {
+      const chipRect = activeChip.getBoundingClientRect();
+      const viewRect = chips.getBoundingClientRect();
+      if (chipRect.left < viewRect.left) {
+        chips.scrollLeft -= viewRect.left - chipRect.left + 8;
+      } else if (chipRect.right > viewRect.right) {
+        chips.scrollLeft += chipRect.right - viewRect.right + 8;
+      }
+    }
+    updateFade();
 
     // Restore an in-flight edit into the fresh input so keystrokes never leak to <body>.
     if (keepEdit) {
@@ -2303,6 +2426,9 @@ export function useIsolaStream(defaultTargetUrl?: string) {
         // like a canvas key, and prevented from inserting locally.
         const t = e.target as HTMLElement | null;
         const onIme = t === ime;
+        // The strip is local chrome: its chips are focusable (role=tab), and a
+        // key aimed at a chip must never be relayed into the remote page.
+        if (t && t.closest('#isola-tabbar')) return;
         if (t && !onIme && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
           return;
         }

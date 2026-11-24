@@ -6,6 +6,16 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Changed
+
+- A busy tab set stays readable in the viewer: chips no longer shrink below
+  90px, the chip row scrolls sideways (wheel included) while `+`, back/reload
+  and the address bar stay pinned, the address bar stops at 380px instead of
+  absorbing the strip, the close ✕ shows on the active tab and on hover, and
+  tabs that report the same title are named by the end of their URL instead of
+  repeating one word. Chips are keyboard-reachable: Tab focuses the current
+  tab, arrow keys walk the strip, Enter switches and Delete closes.
+
 ## [1.8.0] - 2026-11-24
 
 ### Added
