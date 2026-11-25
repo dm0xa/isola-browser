@@ -344,8 +344,12 @@ if [ "$(id -u)" = "0" ]; then
         TOR_PID=$!
 
         # A country-pinned bootstrap can take longer (fewer candidate exits), so
-        # the gate gets more time — but it still fails closed.
-        TOR_BOOTSTRAP_SECS=30
+        # the gate gets more time — but it still fails closed. 45s unpinned: a
+        # plain bootstrap normally finishes in 9-25s (measured), and a 30s gate
+        # expired mid-bootstrap often enough to kill sessions that would have
+        # succeeded one second later. Keep the backend's streamer deadline
+        # ahead of this (streamReadyTimeout in pkg/api/handler.go).
+        TOR_BOOTSTRAP_SECS=45
         if [ "${#TOR_EXIT_COUNTRY_ARGS[@]}" -gt 0 ]; then
             TOR_BOOTSTRAP_SECS=60
         fi

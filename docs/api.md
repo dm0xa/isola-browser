@@ -106,7 +106,8 @@ A launch failure leaves the session in `status: "error"` with a stable `error_co
 | `error_code` | Meaning |
 | :--- | :--- |
 | `sandbox_publish_unreachable` | The runtime stopped forwarding published ports, so the backend cannot dial the sandbox. The container itself may be alive; restarting the runtime (e.g. `colima restart`) is the fix. |
-| `stream_not_ready` | The container started but its streamer never answered before the deadline. |
+| `sandbox_exited` | The sandbox stopped on its own before its streamer answered — a Tor circuit that missed the bootstrap deadline, or a browser process that died. |
+| `stream_not_ready` | The container stayed alive but its streamer never answered before the deadline. |
 | `create_failed` | Any other launch error. |
 
 `error_code` is absent on healthy sessions.

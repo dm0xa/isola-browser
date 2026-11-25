@@ -35,6 +35,8 @@ function launchFailureDetail(errorCode?: string): string {
       return 'The sandbox started but this host could not reach it: Docker port publishing is down. Run scripts/doctor.sh, then restart the container runtime (colima restart).';
     case 'stream_not_ready':
       return 'The sandbox started but its video stream never became ready. Try again; if it repeats, run scripts/doctor.sh.';
+    case 'sandbox_exited':
+      return 'The sandbox shut itself down before its video stream started. A Tor session does that when it cannot build a circuit in time, so retry, or turn Tor off to skip the circuit wait.';
     case 'create_failed':
       return 'Docker could not create the sandbox container. Run scripts/doctor.sh to check that the container runtime is reachable.';
     default:

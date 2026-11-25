@@ -34,6 +34,8 @@ Optional Tor exit-node pinning for sessions created with `tor_enabled` (see the 
 
 Pinning is strict (`StrictNodes`): if no reachable exit exists in the chosen country, the session fails to start rather than egressing from another country, and a country with few exits can also slow the bootstrap. Restricting exits shrinks the anonymity set, so treat this as a routing control, not a privacy upgrade.
 
+The sandbox fails closed: it waits 45s for a circuit (60s when an exit country is pinned) and exits rather than browse without Tor. The backend keeps its streamer deadline ahead of that gate (75s, 90s pinned); a session that misses it ends with `error_code: sandbox_exited` and the container's last log line, typically `FATAL: Tor bootstrap failed`.
+
 ### `cors`
 
 | Key | Default | Env | Meaning |

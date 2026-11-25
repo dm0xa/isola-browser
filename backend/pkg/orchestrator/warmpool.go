@@ -923,12 +923,14 @@ func (p *WarmPool) provisionWarm(ctx context.Context, params WarmPoolParams) (*S
 	// gate, so it gets the same extra budget a cold Tor launch gets.
 	streamBudget := 30 * time.Second
 	if params.Mode.tor {
-		streamBudget = 60 * time.Second
+		// Same order as streamReadyTimeout: the circuit gate (45s unpinned,
+		// 60s pinned) runs before the streamer starts.
+		streamBudget = 75 * time.Second
 		if params.Mode.country != "" {
 			streamBudget = 90 * time.Second
 		}
 	}
-	if err := p.orch.WaitForStream(ctx, info.Host, info.Port, params.StreamMode, "chromium", streamBudget); err != nil {
+	if err := p.orch.WaitForStream(ctx, info.ContainerID, info.Host, info.Port, params.StreamMode, "chromium", streamBudget); err != nil {
 		_ = p.orch.TerminateSession(context.Background(), info.ContainerID)
 		return nil, fmt.Errorf("warm container stream not ready: %w", err)
 	}

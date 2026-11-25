@@ -255,11 +255,13 @@ func TestCreateSessionFailurePersistsErrorCode(t *testing.T) {
 	}
 }
 
-// The reason mapping is the contract clients key off: a publish-path failure is
-// its own code, every other orchestrator failure is create_failed.
+// The reason mapping is the contract clients key off: a publish-path failure, a
+// sandbox that exited mid-launch and a streamer that stayed silent are their own
+// codes, every other orchestrator failure is create_failed.
 func TestSessionCreateErrorCode(t *testing.T) {
 	t.Parallel()
 	publishErr := &orchestrator.PublishUnreachableError{ContainerID: "c1", PublishedAddr: "127.0.0.1:5900", InternalAlive: true}
+	exitedErr := &orchestrator.SandboxExitedError{ContainerID: "c1", Elapsed: 31 * time.Second, LastLog: "FATAL: Tor bootstrap failed"}
 	cases := []struct {
 		name string
 		err  error
@@ -267,6 +269,8 @@ func TestSessionCreateErrorCode(t *testing.T) {
 	}{
 		{"publish unreachable", publishErr, "sandbox_publish_unreachable"},
 		{"wrapped publish unreachable", fmt.Errorf("create: %w", publishErr), "sandbox_publish_unreachable"},
+		{"sandbox exited", exitedErr, "sandbox_exited"},
+		{"wrapped sandbox exited", fmt.Errorf("warm container stream not ready: %w", exitedErr), "sandbox_exited"},
 		{"other", errors.New("docker run failed"), "create_failed"},
 		{"nil", nil, ""},
 	}

@@ -119,9 +119,10 @@ func TestGetConfigExposesTorExitCountry(t *testing.T) {
 
 // TestStreamReadyTimeoutCoversTorBootstrap: the container's Tor gate runs
 // before isola-streamer is launched, so the readiness budget must cover the
-// gate (30s, or 60s when an exit country is pinned) on top of the streamer's
-// own start budget. A flat 30s fails closed on any circuit build that takes
-// most of the gate.
+// gate (45s, or 60s when an exit country is pinned) on top of the streamer's
+// own start budget and must never be the shorter of the two. A gate at the
+// streamer's own budget fails closed on any circuit build that takes most of
+// the gate.
 func TestStreamReadyTimeoutCoversTorBootstrap(t *testing.T) {
 	t.Parallel()
 
@@ -132,7 +133,7 @@ func TestStreamReadyTimeoutCoversTorBootstrap(t *testing.T) {
 		want    time.Duration
 	}{
 		{name: "no tor keeps the streamer budget", want: 30 * time.Second},
-		{name: "tor adds the 30s bootstrap gate", tor: true, want: 60 * time.Second},
+		{name: "tor adds the 45s bootstrap gate", tor: true, want: 75 * time.Second},
 		{name: "pinned country adds the 60s gate", tor: true, country: "se", want: 90 * time.Second},
 		{name: "country without tor is ignored", country: "se", want: 30 * time.Second},
 	}

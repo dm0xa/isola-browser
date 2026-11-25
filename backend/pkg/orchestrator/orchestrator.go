@@ -667,19 +667,38 @@ func (o *Orchestrator) ResizeSessionDisplay(ctx context.Context, containerHost s
 	return nil
 }
 
-// WaitForStream waits until the isola-streamer health endpoint is ready.
-func (o *Orchestrator) WaitForStream(ctx context.Context, host string, port int, streamMode string, browserType string, timeout time.Duration) error {
+// WaitForStream waits until the isola-streamer health endpoint is ready. A
+// non-empty containerID turns the wait into a liveness check as well: the
+// sandbox entrypoint can exit on its own (Tor bootstrap gate, browser crash),
+// and a --rm container is then gone long before the deadline, so polling the
+// published port would only burn the rest of the budget and report the wrong
+// cause.
+func (o *Orchestrator) WaitForStream(ctx context.Context, containerID, host string, port int, streamMode string, browserType string, timeout time.Duration) error {
 	_ = streamMode
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	deadline := time.Now().Add(timeout)
+	start := time.Now()
+	deadline := start.Add(timeout)
 	// A fixed 100 ms poll: the streamer binds its health endpoint in ~10 ms once
 	// it starts, so the old 200ms→1s backoff only added quantization delay
 	// (measured median 140 ms per launch) to the create path.
 	const retryInterval = 100 * time.Millisecond
+	// One docker inspect per second (plus the first iteration) is enough to
+	// notice an exited sandbox without competing with the health poll for the
+	// launch window. The first iteration is included because a sandbox whose
+	// entrypoint rejects its own config is already gone by then.
+	const livenessEvery = 10
 
 	for attempt := 1; ; attempt++ {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("stream not ready at %s after %v (%d attempts)", addr, timeout, attempt)
+		}
+
+		if (attempt == 1 || attempt%livenessEvery == 0) && o.containerExited(ctx, containerID) {
+			return &SandboxExitedError{
+				ContainerID: containerID,
+				Elapsed:     time.Since(start),
+				LastLog:     o.containerLastLog(ctx, containerID),
+			}
 		}
 
 		ready, err := o.waitForIsolaReady(host, port)

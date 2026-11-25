@@ -207,6 +207,15 @@ After a runtime restart, re-run `scripts/doctor.sh` until it prints
 `VERDICT: ok`; the warm pool refills within about a minute, so the first
 launches may cold-start.
 
+### A sandbox that exits by itself
+
+`error_code: sandbox_exited` means the container shut itself down while the
+backend was waiting for its video stream; the failure carries the entrypoint's
+last log line (`docker logs` is empty afterwards: session containers run with
+`--rm`). The usual cause is a Tor circuit that missed the 45s bootstrap gate —
+a retry usually succeeds. Any other last line points at the sandbox's own
+startup, not networking.
+
 ## Production Checklist
 
 - [ ] TLS terminated in front of Isola; container bound to `127.0.0.1`.

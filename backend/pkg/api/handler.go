@@ -422,7 +422,7 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 
-		// Tor sessions wait on a circuit first (up to 60s, 90s pinned): budget must cover it.
+		// Tor sessions wait on a circuit first (up to 45s, 60s pinned): budget must cover it.
 		bgCtx, cancel := context.WithTimeout(
 			context.Background(),
 			streamReadyTimeout(req.TorEnabled, req.TorCountry)+30*time.Second,
@@ -502,14 +502,14 @@ func (h *Handler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		// container over.
 		streamMode := "isola"
 		if !warmed {
-			if err := h.orch.WaitForStream(bgCtx, info.Host, info.Port, streamMode, req.BrowserType, streamReadyTimeout(req.TorEnabled, req.TorCountry)); err != nil {
-				log.Printf("create session: stream not ready: %v", err)
+			if err := h.orch.WaitForStream(bgCtx, info.ContainerID, info.Host, info.Port, streamMode, req.BrowserType, streamReadyTimeout(req.TorEnabled, req.TorCountry)); err != nil {
+				log.Printf("create session: %v", err)
 				failSess := *session
 				failSess.ContainerID = info.ContainerID
 				failSess.ContainerHost = info.Host
 				failSess.ContainerPort = info.Port
 				h.orch.FinalizeRunningSession(bgCtx, h.store, h.cache, &failSess)
-				h.markSessionFailed(bgCtx, session.ID, "stream_not_ready")
+				h.markSessionFailed(bgCtx, session.ID, sessionCreateErrorCode(err))
 				return
 			}
 		}
@@ -609,6 +609,8 @@ func sessionCreateErrorCode(err error) string {
 		return ""
 	case errors.Is(err, orchestrator.ErrPublishUnreachable):
 		return "sandbox_publish_unreachable"
+	case errors.Is(err, orchestrator.ErrSandboxExited):
+		return "sandbox_exited"
 	default:
 		return "create_failed"
 	}
@@ -691,16 +693,26 @@ func (h *Handler) claimWarmContainer(
 	return info, true
 }
 
-// streamReadyTimeout adds the Tor circuit gate's budget (30s/60s pinned) to the streamer wait.
+// torBootstrapBudget mirrors TOR_BOOTSTRAP_SECS in
+// browsers/browser-node-electron/entrypoint.sh for a session with no exit
+// country pinned; the pinned gate is 60s. Change both together.
+const torBootstrapBudget = 45 * time.Second
+
+// streamReadyTimeout adds the Tor circuit gate's budget (45s, 60s when pinned
+// to an exit country) to the streamer's own start budget. The two must stay in
+// that order: the gate runs before the streamer starts, so a streamer deadline
+// shorter than gate+start would cut off a Tor bootstrap the gate would still
+// have accepted. Measured bootstraps on this host: 9s, 10s, 24s — the old 30s
+// gate expired mid-bootstrap and killed the container.
 func streamReadyTimeout(torEnabled bool, torCountry string) time.Duration {
 	const streamerStart = 30 * time.Second
 	if !torEnabled {
 		return streamerStart
 	}
 	if torCountry != "" {
-		return 90 * time.Second
+		return 60*time.Second + streamerStart
 	}
-	return 60 * time.Second
+	return torBootstrapBudget + streamerStart
 }
 
 func (h *Handler) GetSession(w http.ResponseWriter, r *http.Request) {

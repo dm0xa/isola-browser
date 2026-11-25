@@ -35,6 +35,12 @@ describe('sessionErrorDetail', () => {
     expect(sessionErrorDetail('Session encountered an error', 'create_failed')).toContain('could not create');
   });
 
+  it('names Tor as the usual reason a sandbox exits on its own', () => {
+    const detail = sessionErrorDetail('Session encountered an error', 'sandbox_exited');
+    expect(detail).toContain('Tor');
+    expect(detail).not.toContain('doctor.sh');
+  });
+
   it('points at the doctor script when the reason is unknown or absent', () => {
     expect(sessionErrorDetail('Session encountered an error')).toContain('scripts/doctor.sh');
     expect(sessionErrorDetail('Session encountered an error', 'some_future_code')).toContain('scripts/doctor.sh');
