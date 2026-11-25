@@ -154,15 +154,20 @@ func TestWarmPoolClaimMatchesTorMode(t *testing.T) {
 		t.Fatalf("Claim with a different Tor exit country = %+v, want nil", got)
 	}
 	// The plain container must not serve a Tor session (it has no proxy).
-	if got, _ := p.Claim(ctx, "1920x1080", "dark", 30, false, ""); got == nil {
+	plain, _ := p.Claim(ctx, "1920x1080", "dark", 30, false, "")
+	if plain == nil {
 		t.Fatal("Claim for the plain mode = nil, want the plain container")
 	}
-	if got, _ := p.Claim(ctx, "1920x1080", "dark", 30, true, "se"); got == nil {
+	tor, _ := p.Claim(ctx, "1920x1080", "dark", 30, true, "se")
+	if tor == nil {
 		t.Fatal("Claim for the Tor mode = nil, want the Tor-baked container")
 	}
-	// Both are now claimed; a further claim of either mode must miss.
-	if got, _ := p.Claim(ctx, "1920x1080", "dark", 30, true, "se"); got != nil {
-		t.Fatalf("Claim with an empty pool = %+v, want nil", got)
+	// Both are now claimed and must never be handed out twice. A replacement a
+	// claim's own refill lands is legitimate, so only the identity is asserted.
+	if again, _ := p.Claim(ctx, "1920x1080", "dark", 30, true, "se"); again != nil {
+		if again.ContainerID == plain.ContainerID || again.ContainerID == tor.ContainerID {
+			t.Fatalf("Claim returned the already-claimed container %s", again.ContainerID)
+		}
 	}
 }
 
