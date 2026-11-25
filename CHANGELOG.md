@@ -11,8 +11,8 @@ publishes the section matching the tag.
 ### Fixed
 
 - A sandbox that shuts itself down no longer looks like a stream timeout: the
-  launch ends with `error_code: sandbox_exited` and the container's last log
-  line as soon as it stops.
+  launch ends with `error_code: sandbox_exited` and the backend log names the
+  exit, instead of dialing a removed container until the deadline.
 - Tor sessions no longer die mid-bootstrap: the circuit gate is 45s (was 30s),
   and the streamer deadline follows it (75s, 90s with a pinned exit country).
 

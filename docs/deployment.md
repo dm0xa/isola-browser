@@ -210,11 +210,12 @@ launches may cold-start.
 ### A sandbox that exits by itself
 
 `error_code: sandbox_exited` means the container shut itself down while the
-backend was waiting for its video stream; the failure carries the entrypoint's
-last log line (`docker logs` is empty afterwards: session containers run with
-`--rm`). The usual cause is a Tor circuit that missed the 45s bootstrap gate —
-a retry usually succeeds. Any other last line points at the sandbox's own
-startup, not networking.
+backend was waiting for its video stream. The backend log records the exit (and
+the entrypoint's last log line when docker still has the container); `docker
+logs` itself is empty afterwards, because session containers run with `--rm`.
+The usual cause is a Tor circuit that missed the 45s bootstrap gate (60s when
+an exit is pinned) — a retry usually succeeds. Any other logged reason points
+at the sandbox's own startup, not networking.
 
 ## Production Checklist
 

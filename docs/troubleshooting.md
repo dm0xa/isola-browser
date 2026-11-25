@@ -78,11 +78,11 @@ The orchestrator logs the `docker` error verbatim. These have a specific cause:
 ### A session container exits immediately
 
 A session that provisions but never reaches `running` ends with `error_code:
-sandbox_exited` and the entrypoint's last log line (see
-[API](api.md#create-a-session)) when the container died at startup, or with
-`stream_not_ready` when it stayed up but its streamer never answered. The
-container runs with `--rm`, so `docker logs` is empty afterwards — re-run the
-image by hand to read the reason.
+sandbox_exited` when the container died at startup — the backend log records the
+exit — or with `stream_not_ready` when it stayed up but its streamer never
+answered (see [API](api.md#create-a-session)). The container runs with `--rm`,
+so `docker logs` is empty afterwards: re-run the image by hand to read the
+reason.
 
 ```bash
 # Re-run the image with the same entrypoint and read why it exited
