@@ -48,7 +48,7 @@
       extraTargets: ['#session-menu'],
       menu: true,
       title: 'Session actions',
-      body: 'Audio, the session menu and End. Only fullscreen and restart work here; in the real product the menu also has network capture, debug and share links, and End destroys the container.',
+      body: 'Audio, the session menu and End. Only fullscreen and restart work here; the real menu also captures network traffic, records and docks downloaded resources, injects cookies, headers and storage (Custom data) and shares the session. End destroys the container.',
     },
   ];
   const SESSION_SECONDS = 10 * 60; // session.default_min

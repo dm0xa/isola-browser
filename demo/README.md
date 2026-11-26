@@ -52,7 +52,9 @@ Consequences worth knowing:
 - **The page content is hand-drawn**, copied from the IANA example page (the
   book icon and six languages). It makes no request for `example.com` itself.
 - **The session menu is drawn in full; Enter fullscreen and Restart session
-  work.** Debug overlay, network panel, quality and share are disabled.
+  work.** Debug overlay, network panel, record/saved resources, Custom data,
+  quality and share are disabled. In the real viewer Custom data docks as a
+  slide-in panel on the right, not a popup.
 - **The +5m control disappears** at the 30:00 cap (and when the clock reaches
   0), mirroring the real viewer's extend availability.
 - **It needs network access** for the Tailwind Play CDN. The page content,

@@ -16,7 +16,6 @@ import { useCaptureRecording } from '../hooks/useCaptureRecording';
 import { getArchiveKey } from '../lib/captureApi';
 import { useIsolaMonitorEvents } from './viewer/useIsolaMonitorEvents';
 import { ViewerToolbar } from './viewer/ViewerToolbar';
-import { SessionDataDialog } from '../components/SessionDataDialog';
 import { ViewerStreamShell } from './viewer/ViewerStreamShell';
 import { ViewerDebugOverlay } from './viewer/ViewerDebugOverlay';
 import { buildDebugInfo, copyTextToClipboard, formatDebugInfo } from './viewer/debugInfo';
@@ -86,9 +85,10 @@ export default function ViewerPage() {
   // panel still shows the full history. Capped for long sessions.
   const [netEntries, setNetEntries] = useState<NetEntry[]>([]);
   const [netPanel, setNetPanel] = useState<PanelLayout | 'off'>('off');
-  // Live custom-data dialog (cookies/headers/storage for the running page).
+  // Live custom-data panel (cookies/headers/storage for the running page).
   const [sessionDataOpen, setSessionDataOpen] = useState(false);
-  // Return focus to the menu trigger after the Custom data dialog closes; the
+  const closeSessionData = useCallback(() => setSessionDataOpen(false), []);
+  // Return focus to the menu trigger after the Custom data panel closes; the
   // dialog lives inside the menu, so without this focus falls to <body> and the
   // next Tab restarts at the top of the page.
   const sessionDataWasOpen = useRef(false);
@@ -1107,14 +1107,13 @@ export default function ViewerPage() {
         savedHashes={capture.savedHashes}
         browserTabs={isola.browserTabs}
         theme={theme}
+        // The dock lives inside the stream shell so it clears the toolbar and
+        // the tab strip like the other overlays. '' = not shown (view-only
+        // shares have no session token, so seeding is not offered at all).
+        sessionDataSessionId={sessionDataOpen && id && !viewOnly ? id : ''}
+        sessionDataToken={sessionTokenRef.current}
+        onCloseSessionData={closeSessionData}
       />
-      {sessionDataOpen && id && !viewOnly && (
-        <SessionDataDialog
-          sessionId={id}
-          token={sessionTokenRef.current}
-          onClose={() => setSessionDataOpen(false)}
-        />
-      )}
       <ViewerDebugOverlay
         enabled={debugEnabled}
         transport={transport}

@@ -8,6 +8,9 @@ publishes the section matching the tag.
 
 ### Changed
 
+- **Custom data** docks to the right of the stream instead of covering it with a
+  modal: the live page stays visible and clickable while you paste cookies,
+  headers or storage. Escape and ✕ close it; the payload and counts are the same.
 - **Resource graph: one card per site.** A page's own subdomains fold into its
   card instead of taking one each; a host on another domain keeps its own. The
   Graph tab, the hi-res PNG and `resource_graph` draw the same tree.

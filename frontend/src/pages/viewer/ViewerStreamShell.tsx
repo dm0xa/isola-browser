@@ -1,5 +1,6 @@
 import React from 'react';
 import { CapturePanel } from '../../components/CapturePanel';
+import { SessionDataPanel } from '../../components/SessionDataPanel';
 import type { ConsoleEntry, CookieEntry, NetEntry, PanelLayout, PanelTab } from '../../components/IsolaNetworkPanel';
 
 // The panel (and ResourceGraph) is ~100 kB raw that most sessions never open;
@@ -38,6 +39,13 @@ export type ViewerStreamShellProps = {
   savedHashes?: ReadonlySet<string>;
   browserTabs: ReturnType<typeof useIsolaStream>['browserTabs'];
   theme: 'dark' | 'light';
+  /**
+   * Live custom-data panel, docked to the right of the stream. Empty id hides
+   * it (closed, or a view-only share with no session token to seed with).
+   */
+  sessionDataSessionId: string;
+  sessionDataToken: string;
+  onCloseSessionData: () => void;
 };
 
 // Memoised: the shell renders the canvas host, the panel and the logo styles,
@@ -49,6 +57,7 @@ export const ViewerStreamShell = React.memo(function ViewerStreamShell(props: Vi
     consoleEntries, cookieEntries, docHeaders, onIntel, intelDisabled, netTab, setNetTab, setNetPanel, openNetworkPopOut,
     capturePanel, setCapturePanel, captureArchiveId, captureStatus, openCaptures,
     savedHashes, browserTabs, theme,
+    sessionDataSessionId, sessionDataToken, onCloseSessionData,
   } = props;
   return (
     <>
@@ -87,6 +96,13 @@ export const ViewerStreamShell = React.memo(function ViewerStreamShell(props: Vi
             onLayout={setCapturePanel}
             onClose={() => setCapturePanel('off')}
             onPopOut={openCaptures}
+          />
+        )}
+        {sessionDataSessionId && (
+          <SessionDataPanel
+            sessionId={sessionDataSessionId}
+            token={sessionDataToken}
+            onClose={onCloseSessionData}
           />
         )}
         {/* Old inline "Network (N)" floating button removed — access via the
