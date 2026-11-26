@@ -98,14 +98,43 @@ func TestAcceptLanguageFor(t *testing.T) {
 		locale string
 		want   string
 	}{
-		{"sv-SE", "sv-SE,sv"},
+		{"sv-SE", "sv-SE,sv,en-US,en"},
+		{"de-DE", "de-DE,de,en-US,en"},
+		{"en-US", "en-US,en"},
 		{"en-GB", "en-GB,en"},
-		{"sv", "sv,sv"},
-		{"zh-Hant-TW", "zh-Hant-TW,zh"},
+		{"en", "en"},
+		{"sv", "sv,en-US,en"},
+		{"zh-Hant-TW", "zh-Hant-TW,zh,en-US,en"},
 	}
 	for _, tt := range tests {
 		if got := acceptLanguageFor(tt.locale); got != tt.want {
 			t.Fatalf("acceptLanguageFor(%q) = %q, want %q", tt.locale, got, tt.want)
+		}
+	}
+}
+
+// TestAcceptLanguageIsATagList pins the two properties a hand-written value
+// used to break: no q-values (Chromium appends its own, and a ";" in the input
+// goes out doubled) and no repeated tag (a bare locale used to emit "sv,sv",
+// which shows up verbatim in navigator.languages).
+func TestAcceptLanguageIsATagList(t *testing.T) {
+	for _, locale := range []string{"sv-SE", "sv", "de-DE", "en-GB", "en-US", "en", "zh-Hant-TW", "sr-Latn-RS"} {
+		got := acceptLanguageFor(locale)
+		if strings.Contains(got, ";") {
+			t.Fatalf("acceptLanguageFor(%q) = %q carries q-values", locale, got)
+		}
+		seen := map[string]bool{}
+		for _, tag := range strings.Split(got, ",") {
+			if tag == "" {
+				t.Fatalf("acceptLanguageFor(%q) = %q has an empty tag", locale, got)
+			}
+			if seen[tag] {
+				t.Fatalf("acceptLanguageFor(%q) = %q repeats %q", locale, got, tag)
+			}
+			seen[tag] = true
+		}
+		if got != locale && !strings.HasPrefix(got, locale+",") {
+			t.Fatalf("acceptLanguageFor(%q) = %q does not lead with the declared tag", locale, got)
 		}
 	}
 }
@@ -119,12 +148,12 @@ func TestIdentityOverridesFollowDeclaredIdentity(t *testing.T) {
 		t.Fatalf("default acceptLanguage = %q, want %q", got, uaAcceptLanguage)
 	}
 	c.locale = "sv-SE"
-	if got := c.acceptLanguage(); got != "sv-SE,sv" {
-		t.Fatalf("declared acceptLanguage = %q, want %q", got, "sv-SE,sv")
+	if got := c.acceptLanguage(); got != "sv-SE,sv,en-US,en" {
+		t.Fatalf("declared acceptLanguage = %q, want %q", got, "sv-SE,sv,en-US,en")
 	}
 
-	p := userAgentParams("156.0.8078.49", "sv-SE,sv")
-	if p["acceptLanguage"] != "sv-SE,sv" {
+	p := userAgentParams("156.0.8078.49", "sv-SE,sv,en-US,en")
+	if p["acceptLanguage"] != "sv-SE,sv,en-US,en" {
 		t.Fatalf("userAgentParams acceptLanguage = %v", p["acceptLanguage"])
 	}
 
@@ -252,8 +281,8 @@ func TestIdentityClientAppliesOverrideOnAttach(t *testing.T) {
 	if override.sessionID != "S1" {
 		t.Fatalf("override sessionId = %q, want S1", override.sessionID)
 	}
-	if override.params["acceptLanguage"] != "sv-SE,sv" {
-		t.Fatalf("acceptLanguage = %v, want sv-SE,sv", override.params["acceptLanguage"])
+	if override.params["acceptLanguage"] != "sv-SE,sv,en-US,en" {
+		t.Fatalf("acceptLanguage = %v, want sv-SE,sv,en-US,en", override.params["acceptLanguage"])
 	}
 	if tz := got["Emulation.setTimezoneOverride"]; tz.sessionID != "S1" || tz.params["timezoneId"] != "Europe/Stockholm" {
 		t.Fatalf("timezone override = %+v", tz)

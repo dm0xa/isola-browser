@@ -6,6 +6,14 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Fixed
+
+- A declared session locale now produces the `Accept-Language` list a stock
+  Chrome sends: `sv-SE` goes out as `sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7` with
+  four `navigator.languages` entries instead of a two-entry `sv-SE,sv`. A bare
+  language tag (`sv`) no longer repeats itself as `sv,sv` in
+  `navigator.languages`.
+
 ## [1.9.2] - 2026-11-26
 
 ### Changed

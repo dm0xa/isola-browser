@@ -370,15 +370,33 @@ func parseChromeVersion(s string) string {
 	return m[1]
 }
 
-// acceptLanguageFor derives the language list from a declared locale:
-// "<locale>,<primary subtag>" ("sv-SE" → "sv-SE,sv"). No q-values, for the same
-// reason as uaAcceptLanguage.
+// acceptLanguageFor derives the language list from a declared locale in the
+// form Chromium expects: tags joined by commas, no q-values, for the same
+// reason as uaAcceptLanguage. Chromium serializes the q-values itself and
+// appends the base language to the header when the list lacks it.
+//
+// A real install does not send the declared tag alone: the UI language is
+// followed by its base language and an English fallback, which Chromium turns
+// into "sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7" and a four-entry
+// navigator.languages. The declared tag stays first even where Chrome's own UI
+// locale would drop the region (ja-JP keeps ja-JP). English is already the
+// fallback language, so en-GB sends "en-GB,en" and en-US is uaAcceptLanguage.
 func acceptLanguageFor(locale string) string {
+	locale = strings.TrimSpace(locale)
 	primary := locale
 	if i := strings.IndexByte(locale, '-'); i > 0 {
 		primary = locale[:i]
 	}
-	return locale + "," + primary
+	if strings.EqualFold(primary, "en") {
+		if primary == locale {
+			return "en"
+		}
+		return locale + ",en"
+	}
+	if primary == locale {
+		return locale + "," + uaAcceptLanguage
+	}
+	return locale + "," + primary + "," + uaAcceptLanguage
 }
 
 // timezoneOverrideParams moves the page-visible clock (Date, Intl) to the
