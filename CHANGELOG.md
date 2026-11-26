@@ -6,6 +6,12 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+### Changed
+
+- **Resource graph: one card per site.** A page's own subdomains fold into its
+  card instead of taking one each; a host on another domain keeps its own. The
+  Graph tab, the hi-res PNG and `resource_graph` draw the same tree.
+
 ## [1.9.1] - 2026-11-25
 
 ### Fixed

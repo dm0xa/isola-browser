@@ -34,7 +34,7 @@ describe('buildGraph origin', () => {
   });
 
   it('still shows the opened page after its requests have left the window', () => {
-    const entries = [entry('https://api.weather.example.com/v2/forecast', 'Document')];
+    const entries = [entry('https://api.weather.example.net/v2/forecast', 'Document')];
 
     const graph = buildGraph(entries, 'example.com');
 
@@ -262,7 +262,7 @@ describe('applyExpansion', () => {
     entry('https://example.com/', 'Document'),
     entry('https://example.com/app.js', 'Script'),
     entry('https://example.com/vendor.js', 'Script'),
-    entry('https://cdn.example.com/logo.png', 'Image'),
+    entry('https://cdn.example.net/logo.png', 'Image'),
   ];
   const full = buildGraph(entries, 'example.com');
 
@@ -863,6 +863,118 @@ describe('buildGraph pages', () => {
       .filter((e) => e.from.startsWith('host:') && e.to.startsWith('host:'))
       .map((e) => `${e.from}->${e.to}`))
       .toEqual(['host:example.com->host:cdn.example.net']);
+  });
+});
+
+describe('buildGraph subdomain cards', () => {
+  const withPage = (url: string, t: string, oh: string): NetEntry => ({ ...entry(url, t), oh });
+
+  it("folds a page's subdomains into the page card instead of a card each", () => {
+    const g = buildGraph([
+      withPage('https://duckduckgo.com/', 'Document', 'duckduckgo.com'),
+      withPage('https://improving.duckduckgo.com/assets/app.js', 'Script', 'duckduckgo.com'),
+      withPage('https://external-content.duckduckgo.com/iu/hero.png', 'Image', 'duckduckgo.com'),
+      withPage('https://cdn.tracker.example/t.js', 'Script', 'duckduckgo.com'),
+    ], 'duckduckgo.com');
+
+    expect(g.nodes.filter((n) => n.kind === 'host').map((n) => n.host).sort())
+      .toEqual(['cdn.tracker.example', 'duckduckgo.com']);
+    const card = g.nodes.find((n) => n.id === 'host:duckduckgo.com')!;
+    expect(card.count).toBe(3);
+    expect(card.resourceCount).toBe(3);
+
+    // The rows still name the subdomain that served them.
+    const folded = g.nodes.find((n) => n.kind === 'resource' && n.label === 'app.js')!;
+    expect(folded.host).toBe('duckduckgo.com');
+    expect(folded.srcHost).toBe('improving.duckduckgo.com');
+    expect(g.nodes.some((n) => n.kind === 'resource' && n.label === 't.js' && n.srcHost !== undefined))
+      .toBe(false);
+  });
+
+  it('folds into the page that requested the host, not into the opened page', () => {
+    const g = buildGraph([
+      withPage('https://duckduckgo.com/', 'Document', 'duckduckgo.com'),
+      withPage('https://improving.duckduckgo.com/assets/app.js', 'Script', 'duckduckgo.com'),
+      withPage('https://en.wikipedia.org/wiki/Phishing', 'Document', 'en.wikipedia.org'),
+      withPage('https://upload.wikipedia.org/static/wiki.svg', 'Image', 'en.wikipedia.org'),
+      withPage('https://cdn.tracker.example/t.js', 'Script', 'en.wikipedia.org'),
+    ], 'en.wikipedia.org');
+
+    expect(g.nodes.filter((n) => n.kind === 'host').map((n) => n.host).sort())
+      .toEqual(['cdn.tracker.example', 'duckduckgo.com', 'en.wikipedia.org']);
+    expect(g.nodes.find((n) => n.id === 'host:duckduckgo.com')?.count).toBe(2);
+    expect(g.nodes.find((n) => n.id === 'host:en.wikipedia.org')?.count).toBe(2);
+  });
+
+  it('reads a multi-label suffix before grouping two sites', () => {
+    const g = buildGraph([
+      withPage('https://shop.example.co.uk/', 'Document', 'shop.example.co.uk'),
+      withPage('https://static.example.co.uk/app.js', 'Script', 'shop.example.co.uk'),
+      withPage('https://cdn.other.co.uk/t.js', 'Script', 'shop.example.co.uk'),
+    ], 'shop.example.co.uk');
+
+    expect(g.nodes.filter((n) => n.kind === 'host').map((n) => n.host).sort())
+      .toEqual(['cdn.other.co.uk', 'shop.example.co.uk']);
+  });
+
+  it('opens the folded rows under the page card', () => {
+    const g = buildGraph([
+      withPage('https://duckduckgo.com/', 'Document', 'duckduckgo.com'),
+      withPage('https://improving.duckduckgo.com/assets/app.js', 'Script', 'duckduckgo.com'),
+    ], 'duckduckgo.com');
+    const open = applyExpansion(g, {
+      hosts: new Set(['host:duckduckgo.com']),
+      groups: new Set<string>(),
+      all: new Set<string>(),
+    });
+
+    const groups = open.nodes.filter((n) => n.kind === 'group');
+    expect(groups.map((n) => [n.label, n.host])).toEqual([
+      ['Document', 'duckduckgo.com'],
+      ['Script', 'duckduckgo.com'],
+    ]);
+  });
+
+});
+
+describe('subdomain cards', () => {
+  beforeEach(() => {
+    // The graph measures its container; jsdom has no ResizeObserver.
+    vi.stubGlobal('ResizeObserver', class {
+      private cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) { this.cb = cb; }
+      observe() {
+        this.cb([
+          { contentRect: { width: 1200, height: 500 } } as ResizeObserverEntry,
+        ], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() {}
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('draws one card for the page and its subdomains', async () => {
+    const entries: NetEntry[] = [
+      { ...entry('https://duckduckgo.com/', 'Document'), oh: 'duckduckgo.com' },
+      { ...entry('https://improving.duckduckgo.com/assets/app.js', 'Script'), oh: 'duckduckgo.com' },
+      { ...entry('https://external-content.duckduckgo.com/iu/hero.png', 'Image'), oh: 'duckduckgo.com' },
+      { ...entry('https://cdn.tracker.example/t.js', 'Script'), oh: 'duckduckgo.com' },
+    ];
+    const view = render(createElement(ResourceGraph, { entries, originHost: 'duckduckgo.com' }));
+
+    await waitFor(() => {
+      if (!view.container.querySelector('[aria-label^="duckduckgo.com:"]')) {
+        throw new Error('page card not drawn');
+      }
+    });
+    expect(view.container.querySelector('[aria-label^="duckduckgo.com: 3 requests"]')).toBeTruthy();
+    expect(view.container.querySelector('[aria-label^="improving.duckduckgo.com:"]')).toBeNull();
+    expect(view.container.querySelector('[aria-label^="cdn.tracker.example: 1 requests"]')).toBeTruthy();
   });
 });
 

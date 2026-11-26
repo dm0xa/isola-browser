@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent a
 import type { NetEntry } from './IsolaNetworkPanel';
 import { analyze } from './IsolaNetworkPanel';
 import { copyToClipboard } from '../lib/clipboard';
+import { registrableDomain } from '../lib/domain';
 import {
   CLASS_ACCENT,
   CLASS_ACCENT_LIGHT,
@@ -48,6 +49,12 @@ export interface GraphNode {
   sha1?: string;
   /** The streamer clipped this URL to its wire budget; copy is incomplete. */
   ut?: boolean;
+  /**
+   * The host the request really went to when it is not the card it is drawn
+   * under: a page's own subdomain folds into the page's card, and the row still
+   * has to name the subdomain that served it.
+   */
+  srcHost?: string;
   /**
    * A top-level page the capture visited (a main-frame document host). Page
    * cards sit in the first column and keep visit order; every other host hangs
@@ -248,15 +255,84 @@ export function buildGraph(
     .map((_, i) => i)
     .filter((i) => facts[i].host && (!typeFilter || typeFilter.size === 0 || typeFilter.has(facts[i].cls)));
 
+
+  // The opened page is the one the user asked for (the tab URL), not simply the
+  // first document left in the capture window: a polling host would otherwise
+  // become the origin and the node would swap while the page sits idle.
+  const finalRootHost = (pinnedHost || '').trim() || rootDocHost || rootHost;
+
+  // Pages in the order the capture first saw them: a page is a document host
+  // the streamer attributed requests to (`oh`); navigation replaces the page, so
+  // this is the order the user visited them. A streamer that predates `oh` sends
+  // nothing and the capture then has exactly one page, the origin. Both the fold
+  // below and the host attribution need them, so pages come before host cards.
+  const pages: string[] = [];
+  const pageSeen = new Set<string>();
+  for (const idx of included) {
+    const page = facts[idx].page;
+    if (!page || pageSeen.has(page)) continue;
+    pageSeen.add(page);
+    pages.push(page);
+  }
+  if (finalRootHost && !pageSeen.has(finalRootHost)) {
+    pageSeen.add(finalRootHost);
+    pages.push(finalRootHost);
+  }
+
+  // Host → pages that requested it. Guessing a trigger chain from capture order
+  // instead stitched separate navigations into one fake chain: a page opened
+  // *before* the current one — or the search engine that led to it — appeared to
+  // be loaded by the current page, and hosts formed cycles no honest layering
+  // could untangle. The streamer already knows the page, so use it.
+  const pagesByHost = new Map<string, string[]>();
+  for (const idx of included) {
+    const page = facts[idx].page;
+    if (!page) continue;
+    const host = facts[idx].host;
+    const list = pagesByHost.get(host);
+    if (!list) pagesByHost.set(host, [page]);
+    else if (!list.includes(page)) list.push(page);
+  }
+
+  // The page a host hangs off. The page the user is watching keeps its tree
+  // complete even when an earlier page touched the same host.
+  const parentPageOf = (host: string): string => {
+    const parents = pagesByHost.get(host) || [];
+    const preferred = finalRootHost && parents.includes(finalRootHost)
+      ? finalRootHost
+      : parents.find((p) => pageSeen.has(p));
+    return preferred || finalRootHost || '';
+  };
+
+  // Subdomains belong to the page that loaded them: a request to
+  // improving.duckduckgo.com made by the duckduckgo.com page is part of that
+  // page's card, not a second card sitting next to it as if it were another
+  // site. The line is the registrable domain — the one the streamer already
+  // uses for its `tp` first/third-party flag, so the card and the flag can
+  // never disagree. Pages keep their own cards and a host on another site (a
+  // CDN, an analytics endpoint) keeps its own.
+  const cardOf = new Map<string, string>();
+  for (const idx of included) {
+    const host = facts[idx].host;
+    if (pageSeen.has(host)) continue;
+    const page = parentPageOf(host);
+    if (!page || page === host) continue;
+    if (registrableDomain(host) !== registrableDomain(page)) continue;
+    cardOf.set(host, page);
+  }
+
   for (const idx of included) {
     const e = entries[idx];
     const { host, cls: rClass, flagged: entryFlagged } = facts[idx];
     const entryFailed = !!e.f;
 
-    const hid = hostId(host);
+    // A folded host shares its page's card; the page keeps the label and the
+    // aggregate count, so the column reads one card per site.
+    const card = cardOf.get(host) || host;
+    const hid = hostId(card);
     if (!nodes.has(hid)) {
       nodes.set(hid, {
-        id: hid, kind: 'host', label: host, host,
+        id: hid, kind: 'host', label: card, host: card,
         count: 0, resourceCount: 0, failedCount: 0, flaggedCount: 0,
         flagged: false, failed: false,
       });
@@ -269,11 +345,12 @@ export function buildGraph(
     const rid = resourceId(e.url);
     if (!nodes.has(rid)) {
       const resource: GraphNode = {
-        id: rid, kind: 'resource', label: facts[idx].label, host, fullUrl: e.url, resourceClass: rClass,
+        id: rid, kind: 'resource', label: facts[idx].label, host: card, fullUrl: e.url, resourceClass: rClass,
         count: 1, flagged: entryFlagged, failed: entryFailed,
         lastTs: e.ts,
         sha1: e.h,
         ut: e.ut,
+        srcHost: card === host ? undefined : host,
       };
       nodes.set(rid, resource);
       hNode.resourceCount = (hNode.resourceCount || 0) + 1;
@@ -302,27 +379,6 @@ export function buildGraph(
     }
   }
 
-  // Pinned host is the page the user opened (the tab URL). The first document
-  // in `entries` is not that page once the capture window has dropped it:
-  // a polling host then becomes the origin and the node swaps while idle.
-  const finalRootHost = (pinnedHost || '').trim() || rootDocHost || rootHost;
-
-  // Pages, in the order the capture first saw them. A page is a document host
-  // the streamer attributed requests to (`oh`); navigation replaces the page,
-  // so this is the order the user visited them. A streamer that predates `oh`
-  // sends nothing, and the capture then has exactly one page: the origin.
-  const pages: string[] = [];
-  const pageSeen = new Set<string>();
-  for (const idx of included) {
-    const page = facts[idx].page;
-    if (!page || pageSeen.has(page)) continue;
-    pageSeen.add(page);
-    pages.push(page);
-  }
-  if (finalRootHost && !pageSeen.has(finalRootHost)) {
-    pageSeen.add(finalRootHost);
-    pages.push(finalRootHost);
-  }
   for (const [seq, page] of pages.entries()) {
     const hid = hostId(page);
     const existing = nodes.get(hid);
@@ -359,31 +415,12 @@ export function buildGraph(
     }
   }
 
-  // Which page asked for each host, in capture order. Guessing a trigger chain
-  // from capture order instead stitched separate navigations into one fake
-  // chain: a page opened *before* the current one — or the search engine that
-  // led to it — appeared to be loaded by the current page, and hosts formed
-  // cycles that no honest layering could untangle. The streamer already knows
-  // the page, so use it.
-  const pagesByHost = new Map<string, string[]>();
-  for (const idx of included) {
-    const page = facts[idx].page;
-    if (!page) continue;
-    const host = facts[idx].host;
-    const list = pagesByHost.get(host);
-    if (!list) pagesByHost.set(host, [page]);
-    else if (!list.includes(page)) list.push(page);
-  }
-
   for (const n of nodes.values()) {
     // A page is placed by the spine above; its own requests belong to it.
     if (n.kind !== 'host' || pageSeen.has(n.host)) continue;
-    const parents = pagesByHost.get(n.host) || [];
-    // The page the user is watching keeps its tree complete even when an
-    // earlier page touched the same host.
-    const parent = (finalRootHost && parents.includes(finalRootHost) ? finalRootHost : parents.find((p) => pageSeen.has(p)))
-      || finalRootHost
-      || '';
+    // A folded host has no card of its own: its requests already sit on the
+    // page's card, and `parentPageOf` would place the page under itself.
+    const parent = parentPageOf(n.host);
     if (!parent) continue;
     const from = hostId(parent);
     if (from === n.id) continue;
@@ -2116,7 +2153,7 @@ export function ResourceGraph({ entries, originHost, onSelect }: Props) {
             {isGroup ? `${node.count} resources on ${node.host}` : `on ${node.host}`}
           </div>
         ) : (
-          !isHost && <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-slate-500">{node.host}</div>
+          !isHost && <div className="mt-0.5 text-[10px] text-zinc-500 dark:text-slate-500">{node.srcHost || node.host}</div>
         )}
         {url && (
           <div className="mt-1 flex items-center gap-1.5">

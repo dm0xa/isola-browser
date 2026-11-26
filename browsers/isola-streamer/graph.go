@@ -229,16 +229,101 @@ func buildGraphModel(entries []netDumpEntry, pinnedOrigin string, types []resCla
 	hostID := func(h string) string { return "host:" + h }
 	resID := func(u string) string { return "res:" + u }
 
+	// Pages in visit order (OriginHost = main-frame document host). A streamer
+	// that predates OriginHost yields one page: the origin. Built before any
+	// host card, because the subdomain fold below needs them.
+	pages := []string{}
+	pageSeen := map[string]bool{}
+	pageSeq := map[string]int{}
+	for _, idx := range included {
+		page := strings.TrimSpace(entries[idx].OriginHost)
+		if page == "" || pageSeen[page] {
+			continue
+		}
+		pageSeen[page] = true
+		pageSeq[page] = len(pages)
+		pages = append(pages, page)
+	}
+	if origin != "" && !pageSeen[origin] {
+		pageSeen[origin] = true
+		pageSeq[origin] = len(pages)
+		pages = append(pages, origin)
+	}
+
+	// Which page asked for each host — from OriginHost, never inferred from
+	// capture order, which stitched separate navigations into fake cyclic chains.
+	pagesByHost := map[string][]string{}
+	for _, idx := range included {
+		page := strings.TrimSpace(entries[idx].OriginHost)
+		if page == "" {
+			continue
+		}
+		host := facts[idx].Host
+		seen := false
+		for _, p := range pagesByHost[host] {
+			if p == page {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			pagesByHost[host] = append(pagesByHost[host], page)
+		}
+	}
+
+	// The page a host hangs off. The opened page keeps its tree complete even
+	// when an earlier page touched the same host.
+	parentPage := func(host string) string {
+		for _, p := range pagesByHost[host] {
+			if origin != "" && p == origin {
+				return origin
+			}
+		}
+		for _, p := range pagesByHost[host] {
+			if pageSeen[p] {
+				return p
+			}
+		}
+		return origin
+	}
+
+	// Subdomains belong to the page that loaded them: a request to
+	// improving.duckduckgo.com made by the duckduckgo.com page is part of that
+	// page's card, not a second card next to it as if it were another site. The
+	// line is the registrable domain — the same one third-party marking uses
+	// (netlog.go) — so a card and its `tp` flag can never disagree. Pages keep
+	// their own cards; a host on another site keeps its own. Mirrors cardOf() in
+	// frontend/src/components/ResourceGraph.tsx.
+	cardOf := map[string]string{}
+	for _, idx := range included {
+		host := facts[idx].Host
+		if pageSeen[host] {
+			continue
+		}
+		page := parentPage(host)
+		if page == "" || page == host {
+			continue
+		}
+		if !strings.EqualFold(registrableDomain(host), registrableDomain(page)) {
+			continue
+		}
+		cardOf[host] = page
+	}
+
 	for _, idx := range included {
 		e := entries[idx]
 		host := facts[idx].Host
 		class := classes[idx]
 		flagged := facts[idx].Flagged
 
-		hid := hostID(host)
+		card := host
+		if folded, ok := cardOf[host]; ok {
+			card = folded
+		}
+		hid := hostID(card)
 		h, ok := nodes[hid]
 		if !ok {
-			h = &graphNode{ID: hid, Kind: "host", Label: host, Host: host}
+			h = &graphNode{ID: hid, Kind: "host", Label: card, Host: card}
 			nodes[hid] = h
 			order = append(order, hid)
 		}
@@ -268,7 +353,7 @@ func buildGraphModel(entries []netDumpEntry, pinnedOrigin string, types []resCla
 			}
 		} else {
 			nodes[rid] = &graphNode{
-				ID: rid, Kind: "resource", Label: facts[idx].Label, Host: host,
+				ID: rid, Kind: "resource", Label: facts[idx].Label, Host: card,
 				Class: class, Count: 1, Failed: e.Failed, Flagged: flagged, TS: e.TS,
 			}
 			order = append(order, rid)
@@ -281,26 +366,6 @@ func buildGraphModel(entries []netDumpEntry, pinnedOrigin string, types []resCla
 			}
 		}
 		addEdge(hid, rid, true)
-	}
-
-	// Pages in visit order (OriginHost = main-frame document host). A streamer
-	// that predates OriginHost yields one page: the origin.
-	pages := []string{}
-	pageSeen := map[string]bool{}
-	pageSeq := map[string]int{}
-	for _, idx := range included {
-		page := strings.TrimSpace(entries[idx].OriginHost)
-		if page == "" || pageSeen[page] {
-			continue
-		}
-		pageSeen[page] = true
-		pageSeq[page] = len(pages)
-		pages = append(pages, page)
-	}
-	if origin != "" && !pageSeen[origin] {
-		pageSeen[origin] = true
-		pageSeq[origin] = len(pages)
-		pages = append(pages, origin)
 	}
 
 	// The opened page always gets a host card, even when its own requests have
@@ -346,50 +411,15 @@ func buildGraphModel(entries []netDumpEntry, pinnedOrigin string, types []resCla
 		}
 	}
 
-	// Which page asked for each host — from OriginHost, never inferred from
-	// capture order, which stitched separate navigations into fake cyclic chains.
-	pagesByHost := map[string][]string{}
-	for _, idx := range included {
-		page := strings.TrimSpace(entries[idx].OriginHost)
-		if page == "" {
-			continue
-		}
-		host := facts[idx].Host
-		seen := false
-		for _, p := range pagesByHost[host] {
-			if p == page {
-				seen = true
-				break
-			}
-		}
-		if !seen {
-			pagesByHost[host] = append(pagesByHost[host], page)
-		}
-	}
 	for _, id := range order {
 		n := nodes[id]
 		// A page is placed by the spine above; its own requests belong to it.
 		if n.Kind != "host" || pageSeen[n.Host] {
 			continue
 		}
-		parent := ""
-		for _, p := range pagesByHost[n.Host] {
-			if origin != "" && p == origin {
-				parent = origin
-				break
-			}
-		}
-		if parent == "" {
-			for _, p := range pagesByHost[n.Host] {
-				if pageSeen[p] {
-					parent = p
-					break
-				}
-			}
-		}
-		if parent == "" {
-			parent = origin
-		}
+		// A folded host has no card of its own: its requests already sit on the
+		// page's card, and parentPage would place the page under itself.
+		parent := parentPage(n.Host)
 		if parent == "" || hostID(parent) == n.ID {
 			continue
 		}

@@ -280,10 +280,12 @@ PNG: the entry block, the pages the capture visited in order, each page's hosts,
 their resource-type groups, and the files behind them — the same summary the
 viewer's **Graph** tab draws. Hosts are placed by the page that loaded them
 (`origin_host`), never by capture order, so a page visited earlier or the search
-engine that led to the current one never appears to have been loaded by it. It is rendered by the streamer
-from its own capture, not from a screenshot of the page, so it reflects the
-current window (`session.network_log_max_entries`, default 1000) even while the
-tab is loading or blank.
+engine that led to the current one never appears to have been loaded by it. A
+page's own subdomains fold into its card (one card per site); a host on another
+domain keeps its own. It is rendered by the streamer from its own capture, not
+from a screenshot of the page, so it reflects the current window
+(`session.network_log_max_entries`, default 1000) even while the tab is loading
+or blank.
 
 ```bash
 # Light theme, every host and group expanded, 3× raster

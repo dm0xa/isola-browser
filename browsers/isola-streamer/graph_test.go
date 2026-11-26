@@ -500,6 +500,81 @@ func TestGraphModelGroupsHostsByPage(t *testing.T) {
 	}
 }
 
+func TestGraphModelFoldsPageSubdomainsIntoThePageCard(t *testing.T) {
+	m := buildGraphModel([]netDumpEntry{
+		{URL: "https://duckduckgo.com/", Type: "Document", Status: 200, OriginHost: "duckduckgo.com"},
+		{URL: "https://improving.duckduckgo.com/assets/app.js", Type: "Script", Status: 200, OriginHost: "duckduckgo.com"},
+		{URL: "https://external-content.duckduckgo.com/iu/hero.png", Type: "Image", Status: 200, OriginHost: "duckduckgo.com"},
+		{URL: "https://cdn.tracker.example/t.js", Type: "Script", Status: 200, OriginHost: "duckduckgo.com"},
+	}, "duckduckgo.com", nil)
+
+	var hosts []string
+	counts := map[string]int{}
+	for _, n := range m.Nodes {
+		if n.Kind != "host" {
+			continue
+		}
+		hosts = append(hosts, n.Host)
+		counts[n.Host] = n.Count
+	}
+	sort.Strings(hosts)
+	if strings.Join(hosts, ",") != "cdn.tracker.example,duckduckgo.com" {
+		t.Fatalf("host cards = %v, want the page card and the third party only", hosts)
+	}
+	if counts["duckduckgo.com"] != 3 {
+		t.Fatalf("page card count = %d, want 3 (its own document plus two subdomains)", counts["duckduckgo.com"])
+	}
+	for _, n := range m.Nodes {
+		if n.Kind == "resource" && strings.Contains(n.ID, "improving.duckduckgo.com") && n.Host != "duckduckgo.com" {
+			t.Fatalf("folded resource host = %q, want the page card", n.Host)
+		}
+	}
+}
+
+func TestGraphModelFoldsIntoThePageThatRequestedTheHost(t *testing.T) {
+	m := buildGraphModel([]netDumpEntry{
+		{URL: "https://duckduckgo.com/", Type: "Document", Status: 200, OriginHost: "duckduckgo.com"},
+		{URL: "https://improving.duckduckgo.com/assets/app.js", Type: "Script", Status: 200, OriginHost: "duckduckgo.com"},
+		{URL: "https://en.wikipedia.org/wiki/Phishing", Type: "Document", Status: 200, OriginHost: "en.wikipedia.org"},
+		{URL: "https://upload.wikipedia.org/static/wiki.svg", Type: "Image", Status: 200, OriginHost: "en.wikipedia.org"},
+		// A different registrable domain: the streamer flags it third-party, so it
+		// keeps its own card.
+		{URL: "https://auth.wikimedia.org/oauth.js", Type: "Script", Status: 200, OriginHost: "en.wikipedia.org"},
+	}, "en.wikipedia.org", nil)
+
+	hosts := map[string]int{}
+	for _, n := range m.Nodes {
+		if n.Kind == "host" {
+			hosts[n.Host] = n.Count
+		}
+	}
+	if len(hosts) != 3 || hosts["duckduckgo.com"] != 2 || hosts["en.wikipedia.org"] != 2 {
+		t.Fatalf("host cards = %v, want duckduckgo.com=2, en.wikipedia.org=2, auth.wikimedia.org=1", hosts)
+	}
+	if hosts["auth.wikimedia.org"] != 1 {
+		t.Fatalf("third-party sibling was folded into the page: %v", hosts)
+	}
+}
+
+func TestGraphModelFoldsOnlyWithinAMultiLabelSuffix(t *testing.T) {
+	m := buildGraphModel([]netDumpEntry{
+		{URL: "https://shop.example.co.uk/", Type: "Document", Status: 200, OriginHost: "shop.example.co.uk"},
+		{URL: "https://static.example.co.uk/app.js", Type: "Script", Status: 200, OriginHost: "shop.example.co.uk"},
+		{URL: "https://cdn.other.co.uk/t.js", Type: "Script", Status: 200, OriginHost: "shop.example.co.uk"},
+	}, "shop.example.co.uk", nil)
+
+	var hosts []string
+	for _, n := range m.Nodes {
+		if n.Kind == "host" {
+			hosts = append(hosts, n.Host)
+		}
+	}
+	sort.Strings(hosts)
+	if strings.Join(hosts, ",") != "cdn.other.co.uk,shop.example.co.uk" {
+		t.Fatalf("host cards = %v", hosts)
+	}
+}
+
 func TestLayoutPlacesPagesInVisitOrder(t *testing.T) {
 	lay := layoutModel(buildGraphModel(pageEntries(), "www.unibet.se", nil), 1280, 720, dirHorizontal)
 	var pages []layoutNode
