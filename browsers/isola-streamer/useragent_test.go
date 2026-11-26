@@ -416,8 +416,8 @@ func TestSetIdentityReappliesToAttachedTargets(t *testing.T) {
 		t.Fatalf("targets = %d, want the one attached page", targets)
 	}
 	ua := nextIdentityCommand(t, commands, "Emulation.setUserAgentOverride", "S1")
-	if ua.params["acceptLanguage"] != "de-DE,de" {
-		t.Fatalf("acceptLanguage after change = %v, want de-DE,de", ua.params["acceptLanguage"])
+	if ua.params["acceptLanguage"] != "de-DE,de,en-US,en" {
+		t.Fatalf("acceptLanguage after change = %v, want de-DE,de,en-US,en", ua.params["acceptLanguage"])
 	}
 	tz := nextIdentityCommand(t, commands, "Emulation.setTimezoneOverride", "S1")
 	if tz.params["timezoneId"] != "Europe/Berlin" {
