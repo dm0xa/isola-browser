@@ -6,6 +6,8 @@ publishes the section matching the tag.
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-11-26
+
 ### Changed
 
 - **Custom data** docks to the right of the stream instead of covering it with a
@@ -712,7 +714,8 @@ publishes the section matching the tag.
 Initial release: a Go control plane that boots a disposable Docker sandbox
 running offscreen Chromium.
 
-[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.9.1...HEAD
+[Unreleased]: https://github.com/dm0xa/isola-browser/compare/v1.9.2...HEAD
+[1.9.2]: https://github.com/dm0xa/isola-browser/compare/v1.9.1...v1.9.2
 [1.9.1]: https://github.com/dm0xa/isola-browser/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/dm0xa/isola-browser/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/dm0xa/isola-browser/compare/v1.7.3...v1.8.0
